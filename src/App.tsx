@@ -14,6 +14,7 @@ import {
 import { clsx } from "clsx";
 import { useStore } from "./store";
 import { Pill } from "./components/Primitives";
+import SyncBadge from "./components/SyncBadge";
 import MasterDataTab from "./tabs/MasterDataTab";
 import ScheduleTab from "./tabs/ScheduleTab";
 import GanttTab from "./tabs/GanttTab";
@@ -150,6 +151,7 @@ export default function App() {
                 Recomputing…
               </span>
             )}
+            <SyncBadge />
           </div>
         </div>
 

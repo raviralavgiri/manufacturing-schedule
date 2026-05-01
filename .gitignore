@@ -5,3 +5,9 @@ dist
 .vite
 tsconfig.tsbuildinfo
 *.log
+
+# env files - never commit secrets
+.env
+.env.local
+.env.*.local
+!.env.example

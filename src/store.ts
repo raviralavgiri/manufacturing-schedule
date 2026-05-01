@@ -8,6 +8,16 @@ import {
   loadPersisted,
   savePersisted,
 } from "./utils/storage";
+import {
+  isSupabaseEnabled,
+  getWorkspaceId,
+} from "./services/supabase";
+import {
+  loadFromCloud,
+  queueCloudSave,
+  setIdleStatus,
+  setLoadingStatus,
+} from "./services/sync";
 
 export interface NewStageInput {
   apiId: string;
@@ -27,6 +37,8 @@ interface AppState {
   lastRecomputeMs: number;
   recentlyAddedStageId: string | null;
   hasPersistedChanges: boolean;
+  cloudEnabled: boolean;
+  workspaceId: string;
 
   updateStageField: (
     stageId: string,
@@ -36,6 +48,9 @@ interface AppState {
     >,
     value: number
   ) => void;
+  setStageOutput: (stageId: string, outputKg: number) => void;
+  setStageName: (stageId: string, name: string) => void;
+  setStageReactorPool: (stageId: string, pool: string[]) => void;
   setApiPriority: (apiId: string, priority: Priority) => void;
   addStage: (input: NewStageInput) => string;
   addAPI: () => string;
@@ -44,7 +59,7 @@ interface AppState {
   resetToSeed: () => void;
 }
 
-// ─── Initial hydration ──────────────────────────────────────────────────────────
+// ─── Initial hydration: seed → localStorage → cloud (async) ─────────────────────
 const seed = buildSeed();
 const persistedApis = loadPersisted();
 const initialApis = persistedApis ?? seed.apis;
@@ -52,8 +67,9 @@ const initialSchedule = runScheduler(initialApis, seed.reactors);
 
 let recomputeTimer: number | undefined;
 
-function persist(apis: API[]) {
+function persistAndSync(apis: API[]) {
   savePersisted(apis);
+  queueCloudSave(apis);
 }
 
 function scheduleRecompute(set: any, get: any, immediate = false) {
@@ -79,6 +95,8 @@ export const useStore = create<AppState>((set, get) => ({
   lastRecomputeMs: Date.now(),
   recentlyAddedStageId: null,
   hasPersistedChanges: isPersistedPresent(),
+  cloudEnabled: isSupabaseEnabled,
+  workspaceId: getWorkspaceId(),
 
   updateStageField: (stageId, field, value) => {
     const apis = get().apis.map((a) => ({
@@ -88,8 +106,49 @@ export const useStore = create<AppState>((set, get) => ({
       ),
     }));
     set({ apis, hasPersistedChanges: true });
-    persist(apis);
+    persistAndSync(apis);
     scheduleRecompute(set, get);
+  },
+
+  setStageOutput: (stageId, outputKg) => {
+    const target = Math.max(1, outputKg);
+    const apis = get().apis.map((a) => ({
+      ...a,
+      stages: a.stages.map((s) => {
+        if (s.id !== stageId) return s;
+        const planned = Math.max(1, Math.ceil(target / Math.max(1, s.batchSizeKg)));
+        return { ...s, plannedBatches: planned };
+      }),
+    }));
+    set({ apis, hasPersistedChanges: true });
+    persistAndSync(apis);
+    scheduleRecompute(set, get);
+  },
+
+  setStageName: (stageId, name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const apis = get().apis.map((a) => ({
+      ...a,
+      stages: a.stages.map((s) =>
+        s.id === stageId ? { ...s, stageName: trimmed } : s
+      ),
+    }));
+    set({ apis, hasPersistedChanges: true });
+    persistAndSync(apis);
+  },
+
+  setStageReactorPool: (stageId, pool) => {
+    if (pool.length === 0) return;
+    const apis = get().apis.map((a) => ({
+      ...a,
+      stages: a.stages.map((s) =>
+        s.id === stageId ? { ...s, reactorPool: pool.slice() } : s
+      ),
+    }));
+    set({ apis, hasPersistedChanges: true });
+    persistAndSync(apis);
+    scheduleRecompute(set, get, true);
   },
 
   setApiPriority: (apiId, priority) => {
@@ -97,7 +156,7 @@ export const useStore = create<AppState>((set, get) => ({
       a.id === apiId ? { ...a, priority } : a
     );
     set({ apis, hasPersistedChanges: true });
-    persist(apis);
+    persistAndSync(apis);
     scheduleRecompute(set, get, true);
   },
 
@@ -133,7 +192,7 @@ export const useStore = create<AppState>((set, get) => ({
       recentlyAddedStageId: newId,
       hasPersistedChanges: true,
     });
-    persist(updatedApis);
+    persistAndSync(updatedApis);
     scheduleRecompute(set, get, true);
     return newId;
   },
@@ -156,7 +215,7 @@ export const useStore = create<AppState>((set, get) => ({
     };
     const updated = [...apis, newApi];
     set({ apis: updated, hasPersistedChanges: true });
-    persist(updated);
+    persistAndSync(updated);
     scheduleRecompute(set, get, true);
     return newId;
   },
@@ -167,7 +226,7 @@ export const useStore = create<AppState>((set, get) => ({
       stages: a.stages.filter((s) => s.id !== stageId),
     }));
     set({ apis, hasPersistedChanges: true });
-    persist(apis);
+    persistAndSync(apis);
     scheduleRecompute(set, get, true);
   },
 
@@ -186,5 +245,40 @@ export const useStore = create<AppState>((set, get) => ({
       recentlyAddedStageId: null,
       hasPersistedChanges: false,
     });
+    // Push the reset state to cloud too so future loads don't restore stale data
+    queueCloudSave(fresh.apis);
   },
 }));
+
+// ─── Async cloud hydration on startup ──────────────────────────────────────────
+// If Supabase is enabled, attempt to fetch the user's saved workspace. If it
+// has data and is more recent / different from what we loaded from
+// localStorage, swap it in. This runs asynchronously so the app can paint
+// immediately with the local state.
+if (isSupabaseEnabled) {
+  setLoadingStatus();
+  void loadFromCloud()
+    .then((cloudApis) => {
+      if (!cloudApis) {
+        setIdleStatus();
+        return;
+      }
+      // Cloud wins on initial load. (Concurrency: if user has been editing
+      // already we don't clobber - hasPersistedChanges check.)
+      const state = useStore.getState();
+      if (!state.hasPersistedChanges) {
+        const sched = runScheduler(cloudApis, state.reactors);
+        useStore.setState({
+          apis: cloudApis,
+          schedule: sched,
+          hasPersistedChanges: true,
+        });
+        savePersisted(cloudApis);
+      }
+      setIdleStatus();
+    })
+    .catch((e) => {
+      console.error("[sync] hydrate failed:", e);
+      setIdleStatus();
+    });
+}
