@@ -15,6 +15,19 @@ interface BookedSlot {
 }
 
 /**
+ * Tie-break score for two reactors that can both start a batch at the same
+ * earliest time. Lower is better.
+ *
+ * Primary key  : cumulative busy hours so far (load balancing — keeps the
+ *                least-used reactor in the pool getting batches)
+ * Secondary key: total batches booked (stable when both are at zero hours)
+ * Tertiary key : pool index (deterministic fallback for full ties)
+ */
+function loadScore(busyHours: number, batchCount: number, poolIdx: number) {
+  return busyHours * 1000 + batchCount * 0.001 + poolIdx * 0.000001;
+}
+
+/**
  * Equipment-availability sequencer.
  *
  * Strategy:
@@ -29,7 +42,15 @@ interface BookedSlot {
  */
 export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
   const reactorBookings = new Map<string, BookedSlot[]>();
-  reactors.forEach((r) => reactorBookings.set(r.id, []));
+  // Cumulative load per reactor — used for tie-breaking when multiple reactors
+  // in a pool can start a batch at the same earliest time.
+  const reactorLoadHours = new Map<string, number>();
+  const reactorBatchCount = new Map<string, number>();
+  reactors.forEach((r) => {
+    reactorBookings.set(r.id, []);
+    reactorLoadHours.set(r.id, 0);
+    reactorBatchCount.set(r.id, 0);
+  });
 
   const HORIZON_MS = SCHEDULE_HORIZON_START.getTime();
   const INTER_STAGE_BUFFER_HOURS = 4;
@@ -79,19 +100,35 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
           sIdx === 0 ? HORIZON_MS : apiStageLastEnd.get(api.id)![sIdx - 1] + bufferMs;
         const earliestStart = Math.max(prevStageReady, HORIZON_MS);
 
-        // Pick reactor in pool that becomes free earliest >= earliestStart
+        // Pick reactor in pool that becomes free earliest >= earliestStart.
+        // Among reactors tied on earliest start, pick the LEAST-LOADED so the
+        // entire pool gets exercised instead of always defaulting to the first.
         let bestReactor: string | null = null;
         let bestStart = Infinity;
-        for (const rid of stage.reactorPool) {
+        let bestScore = Infinity;
+        stage.reactorPool.forEach((rid, poolIdx) => {
           const slots = reactorBookings.get(rid)!;
           const lastEnd = slots.length === 0 ? HORIZON_MS : slots[slots.length - 1].cycleEndMs;
           const candidateStart = Math.max(lastEnd, earliestStart);
+          const score = loadScore(
+            reactorLoadHours.get(rid) ?? 0,
+            reactorBatchCount.get(rid) ?? 0,
+            poolIdx
+          );
+          // Primary: earliest possible start time
           if (candidateStart < bestStart) {
             bestStart = candidateStart;
             bestReactor = rid;
+            bestScore = score;
+            return;
           }
-        }
-        if (!bestReactor) continue; // shouldn't happen
+          // Tied on start: prefer the lower load score
+          if (candidateStart === bestStart && score < bestScore) {
+            bestReactor = rid;
+            bestScore = score;
+          }
+        });
+        if (!bestReactor) continue;
 
         const startMs = bestStart;
         const cycleEndMs = startMs + cycleMs;
@@ -107,6 +144,15 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
         if (clash) clashCount++;
 
         slots.push({ startMs, endMs: analysisEndMs, cycleEndMs });
+        // Update tie-break stats for this reactor
+        reactorLoadHours.set(
+          bestReactor,
+          (reactorLoadHours.get(bestReactor) ?? 0) + stage.cycleHours
+        );
+        reactorBatchCount.set(
+          bestReactor,
+          (reactorBatchCount.get(bestReactor) ?? 0) + 1
+        );
 
         const stageEndForNext = analysisEndMs; // next stage waits for THIS stage's analysis to clear
         apiStageLastEnd.get(api.id)![sIdx] = Math.max(
