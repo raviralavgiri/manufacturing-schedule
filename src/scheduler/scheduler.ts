@@ -38,10 +38,15 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
   let clashCount = 0;
 
   // Round-robin through APIs by interleaving batches to spread load over the year.
-  // We compute, per API and per stage, all batches; then we run *campaign rounds*:
-  //   round 0: each API's stage1 batch1 + stage2 batch1 + ...
-  //   round 1: each API's stage1 batch2 + ...
-  // This keeps the Gantt chart visually distributed and respects stage ordering.
+  // Within each round, APIs are processed in PRIORITY ORDER (lowest number = highest
+  // priority) so P1 APIs always grab the earliest free reactor slots ahead of P5.
+  //
+  //   round 0: P1 APIs → P2 APIs → P3 → P4 → P5     (each: stage 1 batch 1, stage 2 batch 1, ...)
+  //   round 1: P1 APIs → P2 → P3 → P4 → P5          (stage 1 batch 2, ...)
+  // This keeps the Gantt visually distributed AND respects priority + stage ordering.
+  const apisInPriorityOrder = [...apis].sort(
+    (a, b) => a.priority - b.priority || a.id.localeCompare(b.id)
+  );
 
   // Find max batches across all stages
   let maxBatches = 0;
@@ -61,7 +66,7 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
   );
 
   for (let round = 0; round < maxBatches; round++) {
-    for (const api of apis) {
+    for (const api of apisInPriorityOrder) {
       for (let sIdx = 0; sIdx < api.stages.length; sIdx++) {
         const stage = api.stages[sIdx];
         if (round >= stage.plannedBatches) continue;

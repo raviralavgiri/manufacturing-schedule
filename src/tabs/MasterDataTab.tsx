@@ -1,28 +1,43 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Search, RotateCcw, Pencil, Beaker, Plus, Trash2 } from "lucide-react";
+import { Search, RotateCcw, Pencil, Beaker, Plus, Trash2, Save } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
 import { Card, SectionHeader, Tag } from "../components/Primitives";
 import AddStageForm from "../components/AddStageForm";
-import type { StageMaster } from "../types";
+import PriorityPill from "../components/PriorityPill";
+import type { Priority, StageMaster } from "../types";
 
 export default function MasterDataTab() {
   const apis = useStore((s) => s.apis);
   const updateStageField = useStore((s) => s.updateStageField);
+  const setApiPriority = useStore((s) => s.setApiPriority);
   const removeStage = useStore((s) => s.removeStage);
-  const resetSeed = useStore((s) => s.resetSeed);
+  const resetToSeed = useStore((s) => s.resetToSeed);
   const recentlyAddedStageId = useStore((s) => s.recentlyAddedStageId);
   const clearRecentlyAdded = useStore((s) => s.clearRecentlyAdded);
+  const hasPersistedChanges = useStore((s) => s.hasPersistedChanges);
 
   const [q, setQ] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
   const newRowRef = useRef<HTMLTableRowElement>(null);
 
+  // APIs sorted by priority (lowest number = highest priority), then by id.
+  const sortedApis = useMemo(
+    () =>
+      [...apis].sort(
+        (a, b) => a.priority - b.priority || a.id.localeCompare(b.id)
+      ),
+    [apis]
+  );
+
   const rows = useMemo(() => {
-    const all: (StageMaster & { color: string })[] = [];
-    apis.forEach((a) =>
-      a.stages.forEach((s) => all.push({ ...s, color: a.color }))
+    const all: (StageMaster & { color: string; priority: Priority })[] = [];
+    sortedApis.forEach((a) =>
+      a.stages.forEach((s) =>
+        all.push({ ...s, color: a.color, priority: a.priority })
+      )
     );
     if (!q) return all;
     const lower = q.toLowerCase();
@@ -32,7 +47,7 @@ export default function MasterDataTab() {
         r.stageName.toLowerCase().includes(lower) ||
         r.id.toLowerCase().includes(lower)
     );
-  }, [apis, q]);
+  }, [sortedApis, q]);
 
   const totalProjection = apis.reduce((acc, a) => acc + a.projectionKg, 0);
   const totalBatches = apis.reduce(
@@ -85,12 +100,42 @@ export default function MasterDataTab() {
             >
               <Plus size={13} /> {showForm ? "Close" : "Add Stage"}
             </button>
-            <button
-              onClick={resetSeed}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-ink-200 transition hover:border-cyan-300/30 hover:bg-cyan-300/10 hover:text-cyan-300"
-            >
-              <RotateCcw size={13} /> Reset
-            </button>
+            {confirmReset ? (
+              <div className="inline-flex items-center gap-1 rounded-lg border border-rose-300/40 bg-rose-400/10 px-2 py-1.5">
+                <span className="text-[10px] font-semibold text-rose-300">
+                  Discard local changes?
+                </span>
+                <button
+                  onClick={() => {
+                    resetToSeed();
+                    setConfirmReset(false);
+                  }}
+                  className="rounded-md bg-rose-400/20 px-2 py-0.5 text-[10px] font-bold text-rose-200 hover:bg-rose-400/40"
+                >
+                  Yes
+                </button>
+                <button
+                  onClick={() => setConfirmReset(false)}
+                  className="rounded-md bg-white/5 px-2 py-0.5 text-[10px] font-semibold text-ink-200 hover:bg-white/10"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() =>
+                  hasPersistedChanges ? setConfirmReset(true) : resetToSeed()
+                }
+                className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-ink-200 transition hover:border-cyan-300/30 hover:bg-cyan-300/10 hover:text-cyan-300"
+                title={
+                  hasPersistedChanges
+                    ? "Reset to seed - clears localStorage"
+                    : "Already at seed values"
+                }
+              >
+                <RotateCcw size={13} /> Reset
+              </button>
+            )}
           </div>
         }
       />
@@ -115,6 +160,18 @@ export default function MasterDataTab() {
           value={`${(totalProjection / 1000).toFixed(1)}t`}
         />
       </div>
+
+      {hasPersistedChanges && (
+        <div className="flex items-center gap-2 rounded-xl border border-cyan-300/20 bg-cyan-300/5 px-3 py-2 text-xs text-cyan-200">
+          <Save size={12} className="text-cyan-300" />
+          <span>
+            <span className="font-bold">Saved locally.</span> Your edits are
+            persisted in this browser's localStorage and will reload on
+            refresh. Click <span className="font-bold">Reset</span> above to
+            discard and return to the seed.
+          </span>
+        </div>
+      )}
 
       <Card className="overflow-hidden p-0">
         <div className="max-h-[68vh] overflow-auto">
@@ -165,7 +222,11 @@ export default function MasterDataTab() {
                             boxShadow: `0 0 8px 0 ${r.color}80`,
                           }}
                         />
-                        {r.apiId}
+                        <span>{r.apiId}</span>
+                        <PriorityPill
+                          value={r.priority}
+                          onChange={(p) => setApiPriority(r.apiId, p)}
+                        />
                       </div>
                     </td>
                     <td className="px-3 py-2.5 text-ink-100">

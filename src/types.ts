@@ -20,10 +20,13 @@ export interface StageMaster {
   plannedBatches: number;
 }
 
+export type Priority = 1 | 2 | 3 | 4 | 5;
+
 export interface API {
   id: string;
   name: string;
   color: string;
+  priority: Priority;
   projectionKg: number;
   stages: StageMaster[];
 }

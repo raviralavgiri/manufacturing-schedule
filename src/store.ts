@@ -1,7 +1,13 @@
 import { create } from "zustand";
 import { API_PALETTE, buildSeed } from "./data/seed";
 import { runScheduler } from "./scheduler/scheduler";
-import type { API, Reactor, ScheduleResult, StageMaster } from "./types";
+import type { API, Priority, Reactor, ScheduleResult, StageMaster } from "./types";
+import {
+  clearPersisted,
+  isPersistedPresent,
+  loadPersisted,
+  savePersisted,
+} from "./utils/storage";
 
 export interface NewStageInput {
   apiId: string;
@@ -20,6 +26,7 @@ interface AppState {
   isRecomputing: boolean;
   lastRecomputeMs: number;
   recentlyAddedStageId: string | null;
+  hasPersistedChanges: boolean;
 
   updateStageField: (
     stageId: string,
@@ -29,17 +36,25 @@ interface AppState {
     >,
     value: number
   ) => void;
-  addStage: (input: NewStageInput) => string; // returns new stage id
-  addAPI: () => string; // returns new api id
+  setApiPriority: (apiId: string, priority: Priority) => void;
+  addStage: (input: NewStageInput) => string;
+  addAPI: () => string;
   removeStage: (stageId: string) => void;
   clearRecentlyAdded: () => void;
-  resetSeed: () => void;
+  resetToSeed: () => void;
 }
 
+// ─── Initial hydration ──────────────────────────────────────────────────────────
 const seed = buildSeed();
-const initialSchedule = runScheduler(seed.apis, seed.reactors);
+const persistedApis = loadPersisted();
+const initialApis = persistedApis ?? seed.apis;
+const initialSchedule = runScheduler(initialApis, seed.reactors);
 
 let recomputeTimer: number | undefined;
+
+function persist(apis: API[]) {
+  savePersisted(apis);
+}
 
 function scheduleRecompute(set: any, get: any, immediate = false) {
   if (recomputeTimer) window.clearTimeout(recomputeTimer);
@@ -57,12 +72,13 @@ function scheduleRecompute(set: any, get: any, immediate = false) {
 }
 
 export const useStore = create<AppState>((set, get) => ({
-  apis: seed.apis,
+  apis: initialApis,
   reactors: seed.reactors,
   schedule: initialSchedule,
   isRecomputing: false,
   lastRecomputeMs: Date.now(),
   recentlyAddedStageId: null,
+  hasPersistedChanges: isPersistedPresent(),
 
   updateStageField: (stageId, field, value) => {
     const apis = get().apis.map((a) => ({
@@ -71,8 +87,18 @@ export const useStore = create<AppState>((set, get) => ({
         s.id === stageId ? { ...s, [field]: Math.max(1, value) } : s
       ),
     }));
-    set({ apis });
+    set({ apis, hasPersistedChanges: true });
+    persist(apis);
     scheduleRecompute(set, get);
+  },
+
+  setApiPriority: (apiId, priority) => {
+    const apis = get().apis.map((a) =>
+      a.id === apiId ? { ...a, priority } : a
+    );
+    set({ apis, hasPersistedChanges: true });
+    persist(apis);
+    scheduleRecompute(set, get, true);
   },
 
   addStage: (input) => {
@@ -102,14 +128,18 @@ export const useStore = create<AppState>((set, get) => ({
       a.id === api.id ? { ...a, stages: [...a.stages, newStage] } : a
     );
 
-    set({ apis: updatedApis, recentlyAddedStageId: newId });
+    set({
+      apis: updatedApis,
+      recentlyAddedStageId: newId,
+      hasPersistedChanges: true,
+    });
+    persist(updatedApis);
     scheduleRecompute(set, get, true);
     return newId;
   },
 
   addAPI: () => {
     const apis = get().apis;
-    // Determine next API number
     const nums = apis
       .map((a) => Number(a.id.replace(/^API-/, "")))
       .filter((n) => !Number.isNaN(n));
@@ -120,10 +150,13 @@ export const useStore = create<AppState>((set, get) => ({
       id: newId,
       name: newId,
       color,
+      priority: 3,
       projectionKg: 0,
       stages: [],
     };
-    set({ apis: [...apis, newApi] });
+    const updated = [...apis, newApi];
+    set({ apis: updated, hasPersistedChanges: true });
+    persist(updated);
     scheduleRecompute(set, get, true);
     return newId;
   },
@@ -133,13 +166,15 @@ export const useStore = create<AppState>((set, get) => ({
       ...a,
       stages: a.stages.filter((s) => s.id !== stageId),
     }));
-    set({ apis });
+    set({ apis, hasPersistedChanges: true });
+    persist(apis);
     scheduleRecompute(set, get, true);
   },
 
   clearRecentlyAdded: () => set({ recentlyAddedStageId: null }),
 
-  resetSeed: () => {
+  resetToSeed: () => {
+    clearPersisted();
     const fresh = buildSeed();
     const sched = runScheduler(fresh.apis, fresh.reactors);
     set({
@@ -149,6 +184,7 @@ export const useStore = create<AppState>((set, get) => ({
       isRecomputing: false,
       lastRecomputeMs: Date.now(),
       recentlyAddedStageId: null,
+      hasPersistedChanges: false,
     });
   },
 }));

@@ -3,15 +3,25 @@ import { ZoomIn, ZoomOut, Layers, ChevronDown, ChevronRight, Beaker, FlaskConica
 import { clsx } from "clsx";
 import { useStore } from "../store";
 import { Card, SectionHeader, Tag } from "../components/Primitives";
+import PriorityPill from "../components/PriorityPill";
 import { FY_WEEKS } from "../utils/dates";
 import type { BatchScheduleEntry, Reactor } from "../types";
 
 type Mode = "by-api" | "by-stage" | "by-reactor";
 
 export default function GanttTab() {
-  const apis = useStore((s) => s.apis);
+  const apisRaw = useStore((s) => s.apis);
   const reactors = useStore((s) => s.reactors);
   const schedule = useStore((s) => s.schedule);
+
+  // Sort by priority (1 = highest) for stable, priority-aware row ordering
+  const apis = useMemo(
+    () =>
+      [...apisRaw].sort(
+        (a, b) => a.priority - b.priority || a.id.localeCompare(b.id)
+      ),
+    [apisRaw]
+  );
   const [pxPerWeek, setPxPerWeek] = useState(28);
   const [mode, setMode] = useState<Mode>("by-stage");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -245,7 +255,10 @@ export default function GanttTab() {
                       boxShadow: `0 0 8px ${a.color}80`,
                     }}
                   />
-                  {a.id}
+                  <span>{a.id}</span>
+                  <span className="ml-auto">
+                    <PriorityPill value={a.priority} readOnly />
+                  </span>
                 </div>
               ))}
 

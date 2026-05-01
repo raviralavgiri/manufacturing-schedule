@@ -27,8 +27,21 @@ interface PivotRow {
 }
 
 export default function QuarterlyTab() {
-  const apis = useStore((s) => s.apis);
+  const apisRaw = useStore((s) => s.apis);
   const schedule = useStore((s) => s.schedule);
+  const apis = useMemo(
+    () =>
+      [...apisRaw].sort(
+        (a, b) => a.priority - b.priority || a.id.localeCompare(b.id)
+      ),
+    [apisRaw]
+  );
+
+  const apiOrder = useMemo(() => {
+    const m = new Map<string, number>();
+    apis.forEach((a, i) => m.set(a.id, i));
+    return m;
+  }, [apis]);
 
   const pivot: PivotRow[] = useMemo(() => {
     const map = new Map<string, PivotRow>();
@@ -59,10 +72,15 @@ export default function QuarterlyTab() {
       row.total.batches += 1;
       row.total.kg += b.outputKg;
     });
-    return Array.from(map.values()).sort((a, b) =>
-      a.apiId === b.apiId ? a.stageNo - b.stageNo : a.apiId.localeCompare(b.apiId)
-    );
-  }, [apis, schedule]);
+    return Array.from(map.values()).sort((a, b) => {
+      if (a.apiId !== b.apiId) {
+        return (
+          (apiOrder.get(a.apiId) ?? 0) - (apiOrder.get(b.apiId) ?? 0)
+        );
+      }
+      return a.stageNo - b.stageNo;
+    });
+  }, [apis, schedule, apiOrder]);
 
   const quarterTotals = useMemo(() => {
     const out = [

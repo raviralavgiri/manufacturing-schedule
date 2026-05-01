@@ -9,11 +9,18 @@ interface Props {
 }
 
 export default function AddStageForm({ onCancel, onAdded }: Props) {
-  const apis = useStore((s) => s.apis);
+  const apisRaw = useStore((s) => s.apis);
   const reactors = useStore((s) => s.reactors);
   const addStage = useStore((s) => s.addStage);
   const addAPI = useStore((s) => s.addAPI);
 
+  const apis = useMemo(
+    () =>
+      [...apisRaw].sort(
+        (a, b) => a.priority - b.priority || a.id.localeCompare(b.id)
+      ),
+    [apisRaw]
+  );
   const [apiId, setApiId] = useState<string>(apis[0]?.id ?? "");
   const [stageName, setStageName] = useState("");
   const [batchSizeKg, setBatchSizeKg] = useState(100);
@@ -130,7 +137,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
             >
               {apis.map((a) => (
                 <option key={a.id} value={a.id} className="bg-ink-900">
-                  {a.id} ({a.stages.length} st)
+                  P{a.priority} · {a.id} ({a.stages.length} st)
                 </option>
               ))}
             </select>

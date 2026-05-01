@@ -1,4 +1,4 @@
-import type { API, Reactor, StageMaster } from "../types";
+import type { API, Priority, Reactor, StageMaster } from "../types";
 
 // Deterministic PRNG (mulberry32) so the demo is reproducible
 function mulberry32(seed: number) {
@@ -153,10 +153,19 @@ export function buildSeed(): { apis: API[]; reactors: Reactor[] } {
     const projectionKg = stages
       .filter((st) => st.stageName === "Final API")
       .reduce((acc, st) => acc + st.batchSizeKg * st.plannedBatches, 0);
+    // Priority distribution: 2x P1, 4x P2, 8x P3, 4x P4, 2x P5  (total 20)
+    const priorityByIdx: Priority[] = [
+      1, 1,                      // 2 critical
+      2, 2, 2, 2,                // 4 high
+      3, 3, 3, 3, 3, 3, 3, 3,    // 8 medium
+      4, 4, 4, 4,                // 4 low
+      5, 5,                      // 2 lowest
+    ];
     return {
       id: apiId,
       name: apiName,
       color: API_PALETTE[apiIdx % API_PALETTE.length],
+      priority: priorityByIdx[apiIdx] ?? 3,
       projectionKg,
       stages,
     };

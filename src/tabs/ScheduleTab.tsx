@@ -9,8 +9,15 @@ const ROW_H = 40;
 
 export default function ScheduleTab() {
   const schedule = useStore((s) => s.schedule);
-  const apis = useStore((s) => s.apis);
+  const apisRaw = useStore((s) => s.apis);
   const reactors = useStore((s) => s.reactors);
+  const apis = useMemo(
+    () =>
+      [...apisRaw].sort(
+        (a, b) => a.priority - b.priority || a.id.localeCompare(b.id)
+      ),
+    [apisRaw]
+  );
   const [q, setQ] = useState("");
   const [apiFilter, setApiFilter] = useState<string>("ALL");
   const [reactorFilter, setReactorFilter] = useState<string>("ALL");
