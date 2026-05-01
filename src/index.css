@@ -1,0 +1,99 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html, body, #root { height: 100%; }
+body {
+  font-family: "Inter", system-ui, sans-serif;
+  background:
+    radial-gradient(1200px 800px at 80% -10%, rgba(167,139,250,0.18), transparent 60%),
+    radial-gradient(1000px 700px at -10% 20%, rgba(0,240,255,0.10), transparent 60%),
+    radial-gradient(900px 600px at 50% 110%, rgba(244,114,182,0.10), transparent 60%),
+    #04081a;
+  color: #e6ebf3;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Subtle grid overlay */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+  background-size: 36px 36px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+#root { position: relative; z-index: 1; }
+
+/* Glassmorphism card */
+.glass {
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+  border: 1px solid rgba(255,255,255,0.08);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+}
+.glass-strong {
+  background: linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.03));
+  border: 1px solid rgba(255,255,255,0.10);
+  backdrop-filter: blur(18px) saturate(160%);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(167,139,250,0.35), rgba(0,240,255,0.25));
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(167,139,250,0.55), rgba(0,240,255,0.45));
+  background-clip: padding-box;
+}
+
+/* Number input cleanup */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; }
+
+/* Utility: Excel-like yellow editable cell */
+.cell-yellow {
+  background: linear-gradient(180deg, rgba(251,191,36,0.18), rgba(251,191,36,0.08));
+  border: 1px solid rgba(251,191,36,0.45);
+  color: #fde68a;
+}
+.cell-yellow:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(251,191,36,0.5);
+  background: linear-gradient(180deg, rgba(251,191,36,0.28), rgba(251,191,36,0.14));
+}
+
+/* Animations */
+.shimmer-bg {
+  background: linear-gradient(90deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.10) 50%, rgba(255,255,255,0.04) 100%);
+  background-size: 1000px 100%;
+  animation: shimmer 2s linear infinite;
+}
+
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(0,240,255,0.4); }
+  50%      { box-shadow: 0 0 0 8px rgba(0,240,255,0.0); }
+}
+.pulse-glow { animation: pulseGlow 2s ease-in-out infinite; }
+
+@keyframes rowFlash {
+  0%   { background-color: rgba(0,240,255,0.30); box-shadow: inset 0 0 0 1px rgba(0,240,255,0.65); }
+  60%  { background-color: rgba(167,139,250,0.18); box-shadow: inset 0 0 0 1px rgba(167,139,250,0.45); }
+  100% { background-color: transparent; box-shadow: inset 0 0 0 0 transparent; }
+}
+.row-flash { animation: rowFlash 3s ease-out 1; }
