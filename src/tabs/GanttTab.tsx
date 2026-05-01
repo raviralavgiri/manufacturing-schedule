@@ -22,7 +22,7 @@ export default function GanttTab() {
       ),
     [apisRaw]
   );
-  const [pxPerWeek, setPxPerWeek] = useState(28);
+  const [pxPerWeek, setPxPerWeek] = useState(64); // default = "Quarter view": ~13 weeks visible per ~830px
   const [mode, setMode] = useState<Mode>("by-stage");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
@@ -93,7 +93,7 @@ export default function GanttTab() {
 
   const fyStartMs = FY_WEEKS[0].start.getTime();
   const totalWeeks = FY_WEEKS.length;
-  const rowH = mode === "by-api" ? 36 : mode === "by-reactor" ? 26 : 22;
+  const rowH = mode === "by-api" ? 40 : mode === "by-reactor" ? 30 : 28;
 
   // For collapse: by API
   const apiCollapsed = (apiId: string) => collapsed.has(apiId);
@@ -176,9 +176,39 @@ export default function GanttTab() {
                 <Beaker size={11} className="mr-1 inline" /> By Reactor
               </button>
             </div>
+            {/* Quick-zoom presets */}
+            <div className="inline-flex rounded-lg border border-white/10 bg-white/5 p-1 text-[10px]">
+              {(
+                [
+                  { label: "Year", px: 24, hint: "Whole FY at once" },
+                  { label: "Quarter", px: 64, hint: "About 13 weeks at once" },
+                  { label: "Month", px: 160, hint: "About 4 weeks at once" },
+                  { label: "Week", px: 240, hint: "Single week zoom" },
+                ] as const
+              ).map((p) => {
+                const isActive = pxPerWeek === p.px;
+                return (
+                  <button
+                    key={p.label}
+                    onClick={() => setPxPerWeek(p.px)}
+                    title={p.hint}
+                    className={clsx(
+                      "rounded-md px-2 py-1 font-bold uppercase tracking-wider transition",
+                      isActive
+                        ? "bg-cyan-300/20 text-cyan-200"
+                        : "text-ink-300 hover:text-white"
+                    )}
+                  >
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Fine-grained +/- */}
             <div className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 p-1">
               <button
-                onClick={() => setPxPerWeek((v) => Math.max(14, v - 6))}
+                onClick={() => setPxPerWeek((v) => Math.max(24, v - 8))}
                 className="rounded-md p-1.5 text-ink-300 hover:bg-white/10 hover:text-white"
                 title="Zoom out"
               >
@@ -188,7 +218,7 @@ export default function GanttTab() {
                 {pxPerWeek}px/wk
               </span>
               <button
-                onClick={() => setPxPerWeek((v) => Math.min(72, v + 6))}
+                onClick={() => setPxPerWeek((v) => Math.min(240, v + 8))}
                 className="rounded-md p-1.5 text-ink-300 hover:bg-white/10 hover:text-white"
                 title="Zoom in"
               >
@@ -214,20 +244,21 @@ export default function GanttTab() {
                     <button
                       onClick={() => toggleApi(a.id)}
                       className="flex w-full items-center gap-1.5 border-b border-white/5 bg-white/[0.02] px-3 py-1.5 text-left text-xs font-bold text-white hover:bg-white/[0.05]"
+                      title={`${a.name} (id: ${a.id})`}
                     >
                       {isCollapsed ? (
-                        <ChevronRight size={12} className="text-ink-400" />
+                        <ChevronRight size={12} className="shrink-0 text-ink-400" />
                       ) : (
-                        <ChevronDown size={12} className="text-ink-400" />
+                        <ChevronDown size={12} className="shrink-0 text-ink-400" />
                       )}
                       <span
-                        className="h-2.5 w-2.5 rounded-full"
+                        className="h-2.5 w-2.5 shrink-0 rounded-full"
                         style={{
                           background: a.color,
                           boxShadow: `0 0 8px ${a.color}80`,
                         }}
                       />
-                      {a.id}
+                      <span className="truncate">{a.name}</span>
                       <span className="ml-auto font-mono text-[10px] text-ink-400">
                         {a.stages.length}st
                       </span>
@@ -253,16 +284,17 @@ export default function GanttTab() {
                   key={a.id}
                   style={{ height: rowH }}
                   className="flex items-center gap-2 border-b border-white/5 px-3 text-xs font-bold text-white"
+                  title={`${a.name} (id: ${a.id})`}
                 >
                   <span
-                    className="h-2.5 w-2.5 rounded-full"
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
                     style={{
                       background: a.color,
                       boxShadow: `0 0 8px ${a.color}80`,
                     }}
                   />
-                  <span>{a.id}</span>
-                  <span className="ml-auto">
+                  <span className="truncate">{a.name}</span>
+                  <span className="ml-auto shrink-0">
                     <PriorityPill value={a.priority} readOnly />
                   </span>
                 </div>
@@ -324,26 +356,37 @@ export default function GanttTab() {
                     </div>
                   ))}
                 </div>
-                {/* Week ticks */}
-                <div
-                  className="relative flex h-7 border-b border-white/10"
-                  style={{ width: totalWeeks * pxPerWeek }}
-                >
-                  {FY_WEEKS.map((w, i) => (
+                {/* Week ticks - label density scales with zoom */}
+                {(() => {
+                  const labelEvery =
+                    pxPerWeek >= 64 ? 1 : pxPerWeek >= 36 ? 2 : 4;
+                  return (
                     <div
-                      key={i}
-                      style={{ width: pxPerWeek }}
-                      className={clsx(
-                        "shrink-0 border-r text-[9px]",
-                        i % 4 === 0
-                          ? "border-white/15 text-ink-300"
-                          : "border-white/5 text-transparent"
-                      )}
+                      className="relative flex h-7 border-b border-white/10"
+                      style={{ width: totalWeeks * pxPerWeek }}
                     >
-                      <span className="block px-1 leading-7">{w.label}</span>
+                      {FY_WEEKS.map((w, i) => {
+                        const showLabel = i % labelEvery === 0;
+                        return (
+                          <div
+                            key={i}
+                            style={{ width: pxPerWeek }}
+                            className={clsx(
+                              "shrink-0 border-r text-[10px]",
+                              showLabel
+                                ? "border-white/15 text-ink-300"
+                                : "border-white/5 text-transparent"
+                            )}
+                          >
+                            <span className="block px-1 leading-7">
+                              {w.label}
+                            </span>
+                          </div>
+                        );
+                      })}
                     </div>
-                  ))}
-                </div>
+                  );
+                })()}
               </div>
 
               {/* Body grid + bars */}
@@ -360,14 +403,16 @@ export default function GanttTab() {
                         idx % 2 === 0 ? "bg-white/[0.005]" : "bg-white/[0.015]"
                       )}
                     >
-                      {/* Week vertical guides */}
+                      {/* Week vertical guides - thicker every 4 weeks */}
                       {FY_WEEKS.map((_, i) => (
                         <div
                           key={i}
                           style={{ left: i * pxPerWeek, width: pxPerWeek }}
                           className={clsx(
                             "absolute top-0 h-full border-r",
-                            i % 4 === 0 ? "border-white/8" : "border-white/3"
+                            i % 4 === 0
+                              ? "border-white/10"
+                              : "border-white/[0.04]"
                           )}
                         />
                       ))}
@@ -425,11 +470,12 @@ export default function GanttTab() {
                             </div>
                             {/* Tooltip on hover */}
                             <div className="pointer-events-none absolute bottom-full left-0 z-30 mb-1 hidden whitespace-nowrap rounded-md border border-white/15 bg-ink-950/95 px-2 py-1.5 text-[10px] text-white shadow-xl group-hover:block">
-                              <div className="font-bold">
-                                {b.batchId} · {b.reactorId}
+                              <div className="font-bold">{b.apiName}</div>
+                              <div className="text-ink-300">
+                                {b.batchId} · S{b.stageNo} · #{b.batchNo}
                               </div>
                               <div className="text-ink-300">
-                                {b.apiName} · S{b.stageNo} · #{b.batchNo}
+                                Train: {b.reactorIds.join(" + ")}
                               </div>
                               <div className="text-ink-300">
                                 Start: {new Date(b.startMs).toLocaleString()}

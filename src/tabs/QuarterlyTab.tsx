@@ -16,6 +16,7 @@ import {
 
 interface PivotRow {
   apiId: string;
+  apiName: string;
   apiColor: string;
   stageNo: number;
   stageName: string;
@@ -49,6 +50,7 @@ export default function QuarterlyTab() {
       a.stages.forEach((s) => {
         map.set(`${a.id}__${s.stageNo}`, {
           apiId: a.id,
+          apiName: a.name,
           apiColor: a.color,
           stageNo: s.stageNo,
           stageName: s.stageName,
@@ -109,7 +111,7 @@ export default function QuarterlyTab() {
       if (cur) cur.size += r.total.kg;
       else
         byApi.set(r.apiId, {
-          name: r.apiId,
+          name: r.apiName,
           size: r.total.kg,
           fill: r.apiColor,
         });
@@ -229,7 +231,10 @@ export default function QuarterlyTab() {
                   className="border-b border-white/5 hover:bg-white/[0.04]"
                 >
                   <td className="px-3 py-1.5">
-                    <span className="inline-flex items-center gap-1.5 font-semibold text-white">
+                    <span
+                      className="inline-flex items-center gap-1.5 font-semibold text-white"
+                      title={`${r.apiName} (id: ${r.apiId})`}
+                    >
                       <span
                         className="h-2 w-2 rounded-full"
                         style={{
@@ -237,7 +242,7 @@ export default function QuarterlyTab() {
                           boxShadow: `0 0 6px ${r.apiColor}80`,
                         }}
                       />
-                      {r.apiId}
+                      {r.apiName}
                     </span>
                   </td>
                   <td className="px-3 py-1.5 text-ink-200">

@@ -137,7 +137,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
             >
               {apis.map((a) => (
                 <option key={a.id} value={a.id} className="bg-ink-900">
-                  P{a.priority} · {a.id} ({a.stages.length} st)
+                  P{a.priority} · {a.name === a.id ? a.id : `${a.name} (${a.id})`} · {a.stages.length}st
                 </option>
               ))}
             </select>

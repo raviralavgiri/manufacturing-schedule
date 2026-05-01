@@ -137,7 +137,10 @@ export default function ScheduleTab() {
             onChange={setApiFilter}
             options={[
               { v: "ALL", l: "All APIs" },
-              ...apis.map((a) => ({ v: a.id, l: a.id })),
+              ...apis.map((a) => ({
+                v: a.id,
+                l: a.name === a.id ? a.id : `${a.name} (${a.id})`,
+              })),
             ]}
           />
           <FilterDropdown
@@ -199,9 +202,12 @@ export default function ScheduleTab() {
                   <span className="font-mono text-[11px] text-ink-200 truncate">
                     {b.batchId}
                   </span>
-                  <span className="flex items-center gap-1.5 font-semibold text-white">
+                  <span
+                    className="flex items-center gap-1.5 font-semibold text-white truncate"
+                    title={`${b.apiName} (id: ${b.apiId})`}
+                  >
                     <span
-                      className="h-2 w-2 rounded-full"
+                      className="h-2 w-2 shrink-0 rounded-full"
                       style={{
                         background: b.apiColor,
                         boxShadow: `0 0 6px ${b.apiColor}80`,

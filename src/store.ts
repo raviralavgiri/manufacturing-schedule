@@ -52,6 +52,7 @@ interface AppState {
   setStageName: (stageId: string, name: string) => void;
   setStageReactorPool: (stageId: string, pool: string[]) => void;
   setApiPriority: (apiId: string, priority: Priority) => void;
+  setApiName: (apiId: string, name: string) => void;
   addStage: (input: NewStageInput) => string;
   addAPI: () => string;
   removeStage: (stageId: string) => void;
@@ -158,6 +159,24 @@ export const useStore = create<AppState>((set, get) => ({
     set({ apis, hasPersistedChanges: true });
     persistAndSync(apis);
     scheduleRecompute(set, get, true);
+  },
+
+  setApiName: (apiId, name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const apis = get().apis.map((a) =>
+      a.id === apiId
+        ? {
+            ...a,
+            name: trimmed,
+            stages: a.stages.map((s) => ({ ...s, apiName: trimmed })),
+          }
+        : a
+    );
+    set({ apis, hasPersistedChanges: true });
+    persistAndSync(apis);
+    // Schedule numbers don't change, just labels - recompute is still cheap
+    scheduleRecompute(set, get);
   },
 
   addStage: (input) => {

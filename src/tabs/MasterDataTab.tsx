@@ -16,6 +16,7 @@ export default function MasterDataTab() {
   const setStageName = useStore((s) => s.setStageName);
   const setStageReactorPool = useStore((s) => s.setStageReactorPool);
   const setApiPriority = useStore((s) => s.setApiPriority);
+  const setApiName = useStore((s) => s.setApiName);
   const removeStage = useStore((s) => s.removeStage);
   const resetToSeed = useStore((s) => s.resetToSeed);
   const recentlyAddedStageId = useStore((s) => s.recentlyAddedStageId);
@@ -37,10 +38,19 @@ export default function MasterDataTab() {
   );
 
   const rows = useMemo(() => {
-    const all: (StageMaster & { color: string; priority: Priority })[] = [];
+    const all: (StageMaster & {
+      color: string;
+      priority: Priority;
+      apiDisplayName: string;
+    })[] = [];
     sortedApis.forEach((a) =>
       a.stages.forEach((s) =>
-        all.push({ ...s, color: a.color, priority: a.priority })
+        all.push({
+          ...s,
+          color: a.color,
+          priority: a.priority,
+          apiDisplayName: a.name,
+        })
       )
     );
     if (!q) return all;
@@ -48,6 +58,7 @@ export default function MasterDataTab() {
     return all.filter(
       (r) =>
         r.apiId.toLowerCase().includes(lower) ||
+        r.apiDisplayName.toLowerCase().includes(lower) ||
         r.stageName.toLowerCase().includes(lower) ||
         r.id.toLowerCase().includes(lower)
     );
@@ -218,16 +229,28 @@ export default function MasterDataTab() {
                       isNew && "row-flash"
                     )}
                   >
-                    <td className="px-3 py-2.5 font-semibold text-white">
-                      <div className="flex items-center gap-2">
+                    <td className="px-3 py-2 font-semibold text-white">
+                      <div className="flex items-start gap-2">
                         <span
-                          className="h-2.5 w-2.5 rounded-full"
+                          className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full"
                           style={{
                             background: r.color,
                             boxShadow: `0 0 8px 0 ${r.color}80`,
                           }}
                         />
-                        <span>{r.apiId}</span>
+                        <div className="flex flex-1 flex-col gap-0.5">
+                          <EditableTextCell
+                            value={r.apiDisplayName}
+                            onCommit={(v) => setApiName(r.apiId, v)}
+                            placeholder={r.apiId}
+                          />
+                          <span
+                            className="font-mono text-[9px] uppercase tracking-wider text-ink-500"
+                            title="Stable internal ID (cannot be changed)"
+                          >
+                            id: {r.apiId}
+                          </span>
+                        </div>
                         <PriorityPill
                           value={r.priority}
                           onChange={(p) => setApiPriority(r.apiId, p)}
@@ -410,9 +433,11 @@ function EditableNumCell({
 function EditableTextCell({
   value,
   onCommit,
+  placeholder,
 }: {
   value: string;
   onCommit: (v: string) => void;
+  placeholder?: string;
 }) {
   const [local, setLocal] = useState(value);
   useEffect(() => setLocal(value), [value]);
@@ -420,6 +445,7 @@ function EditableTextCell({
     <input
       type="text"
       value={local}
+      placeholder={placeholder}
       onChange={(e) => setLocal(e.target.value)}
       onBlur={() => {
         if (local.trim() && local !== value) onCommit(local);
@@ -432,7 +458,7 @@ function EditableTextCell({
           (e.target as HTMLInputElement).blur();
         }
       }}
-      className="cell-yellow w-full max-w-[180px] rounded-md px-2 py-1 text-left font-mono text-xs transition"
+      className="cell-yellow w-full max-w-[200px] rounded-md px-2 py-1 text-left font-mono text-xs transition"
     />
   );
 }
