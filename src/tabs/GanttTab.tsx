@@ -1,9 +1,23 @@
 import { useMemo, useState } from "react";
-import { ZoomIn, ZoomOut, Layers, ChevronDown, ChevronRight, Beaker, FlaskConical } from "lucide-react";
+import {
+  ZoomIn,
+  ZoomOut,
+  Layers,
+  ChevronDown,
+  ChevronRight,
+  Beaker,
+  FlaskConical,
+  Filter,
+  Activity,
+} from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
 import { Card, SectionHeader, Tag } from "../components/Primitives";
 import PriorityPill from "../components/PriorityPill";
+import MultiSelectPopover, {
+  ClearFiltersButton,
+  type Option as MsOption,
+} from "../components/MultiSelectPopover";
 import { FY_WEEKS } from "../utils/dates";
 import type { BatchScheduleEntry, Reactor } from "../types";
 
@@ -26,13 +40,78 @@ export default function GanttTab() {
   const [mode, setMode] = useState<Mode>("by-stage");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
+  // Filter state - empty Set means "all" (no filter)
+  const [apiFilter, setApiFilter] = useState<Set<string>>(new Set());
+  const [stageFilter, setStageFilter] = useState<Set<string>>(new Set());
+  const [reactorFilter, setReactorFilter] = useState<Set<string>>(new Set());
+  const anyFilterActive =
+    apiFilter.size > 0 || stageFilter.size > 0 || reactorFilter.size > 0;
+
+  // Apply filters to the source batch list once
+  const filteredBatches = useMemo(() => {
+    if (!anyFilterActive) return schedule.batches;
+    return schedule.batches.filter((b) => {
+      if (apiFilter.size > 0 && !apiFilter.has(b.apiId)) return false;
+      if (stageFilter.size > 0 && !stageFilter.has(b.stageName)) return false;
+      if (
+        reactorFilter.size > 0 &&
+        !b.reactorIds.some((rid) => reactorFilter.has(rid))
+      )
+        return false;
+      return true;
+    });
+  }, [schedule.batches, apiFilter, stageFilter, reactorFilter, anyFilterActive]);
+
+  // Build filter option lists
+  const apiOptions: MsOption[] = useMemo(
+    () =>
+      apis.map((a) => ({
+        value: a.id,
+        label: a.name === a.id ? a.id : a.name,
+        color: a.color,
+        secondary: a.name === a.id ? undefined : `id: ${a.id}`,
+        group: `Priority P${a.priority}`,
+      })),
+    [apis]
+  );
+
+  const stageOptions: MsOption[] = useMemo(() => {
+    const seen = new Map<string, number>();
+    apis.forEach((a) =>
+      a.stages.forEach((s) =>
+        seen.set(s.stageName, (seen.get(s.stageName) ?? 0) + 1)
+      )
+    );
+    return Array.from(seen.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([name, count]) => ({
+        value: name,
+        label: name,
+        secondary: `${count} use${count === 1 ? "" : "s"}`,
+      }));
+  }, [apis]);
+
+  const reactorOptions: MsOption[] = useMemo(
+    () =>
+      reactors.map((r) => ({
+        value: r.id,
+        label: r.id,
+        group: r.reactorClass,
+        secondary: r.shared ? "shared ★" : undefined,
+      })),
+    [reactors]
+  );
+
   // Group batches by the active mode. In by-reactor mode each batch appears
   // in EVERY reactor row in its train (since trains lock all reactors together).
+  // Uses filteredBatches so the user's filter selections affect what's drawn.
   const grouped = useMemo(() => {
     const map = new Map<string, BatchScheduleEntry[]>();
-    schedule.batches.forEach((b) => {
+    filteredBatches.forEach((b) => {
       if (mode === "by-reactor") {
         b.reactorIds.forEach((rid) => {
+          // If reactor filter is active, only fan-out into selected reactors
+          if (reactorFilter.size > 0 && !reactorFilter.has(rid)) return;
           if (!map.has(rid)) map.set(rid, []);
           map.get(rid)!.push(b);
         });
@@ -44,7 +123,7 @@ export default function GanttTab() {
       map.get(key)!.push(b);
     });
     return map;
-  }, [schedule.batches, mode]);
+  }, [filteredBatches, mode, reactorFilter]);
 
   // Build row list
   const rows = useMemo(() => {
@@ -104,11 +183,20 @@ export default function GanttTab() {
     setCollapsed(c);
   };
 
-  // Filter rows according to collapsed APIs (only relevant for by-stage mode)
+  // Filter rows according to:
+  //   1. Collapsed APIs (only in by-stage mode)
+  //   2. Active filters - hide any row that has no batches after filtering
   const visibleRows = useMemo(() => {
-    if (mode !== "by-stage") return rows;
-    return rows.filter((r) => !r.apiId || !apiCollapsed(r.apiId));
-  }, [rows, mode, collapsed]);
+    let result = rows;
+    if (mode === "by-stage") {
+      result = result.filter((r) => !r.apiId || !apiCollapsed(r.apiId));
+    }
+    if (anyFilterActive) {
+      // Hide empty rows when filters are active so the Gantt is dense
+      result = result.filter((r) => (grouped.get(r.key)?.length ?? 0) > 0);
+    }
+    return result;
+  }, [rows, mode, collapsed, anyFilterActive, grouped]);
 
   // Determine quarter band positions
   const quarterBands = useMemo(() => {
@@ -138,7 +226,11 @@ export default function GanttTab() {
     <div className="space-y-4">
       <SectionHeader
         title="Gantt Chart · FY 2026 – 2027"
-        subtitle="Solid bar = reactor cycle, faded tail = analysis window. Color encodes the API."
+        subtitle={
+          anyFilterActive
+            ? `Showing ${filteredBatches.length} of ${schedule.batches.length} batches (filters active)`
+            : "Solid bar = reactor cycle, faded tail = analysis window. Color encodes the API."
+        }
         right={
           <div className="flex items-center gap-2">
             <div className="inline-flex rounded-lg border border-white/10 bg-white/5 p-1 text-xs">
@@ -229,6 +321,52 @@ export default function GanttTab() {
         }
       />
 
+      {/* Filter bar */}
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/5 bg-white/[0.02] p-2">
+        <span className="ml-1 inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-ink-400">
+          <Filter size={12} /> Filter
+        </span>
+        <MultiSelectPopover
+          label="APIs"
+          icon={<FlaskConical size={12} />}
+          options={apiOptions}
+          selected={apiFilter}
+          onChange={setApiFilter}
+          width={300}
+        />
+        <MultiSelectPopover
+          label="Stages"
+          icon={<Layers size={12} />}
+          options={stageOptions}
+          selected={stageFilter}
+          onChange={setStageFilter}
+          width={240}
+        />
+        <MultiSelectPopover
+          label="Reactors"
+          icon={<Beaker size={12} />}
+          options={reactorOptions}
+          selected={reactorFilter}
+          onChange={setReactorFilter}
+          width={260}
+        />
+        <ClearFiltersButton
+          active={anyFilterActive}
+          onClear={() => {
+            setApiFilter(new Set());
+            setStageFilter(new Set());
+            setReactorFilter(new Set());
+          }}
+        />
+        {anyFilterActive && (
+          <span className="ml-auto inline-flex items-center gap-1 rounded-md border border-cyan-300/30 bg-cyan-300/8 px-2 py-1 text-[11px] font-semibold text-cyan-200">
+            <Activity size={10} />
+            {filteredBatches.length.toLocaleString()} of{" "}
+            {schedule.batches.length.toLocaleString()} batches
+          </span>
+        )}
+      </div>
+
       <Card className="overflow-hidden p-0">
         <div className="flex">
           {/* Left labels column */}
@@ -238,7 +376,22 @@ export default function GanttTab() {
             {/* Rows */}
             {mode === "by-stage" &&
               apis.map((a) => {
+                if (anyFilterActive) {
+                  // Skip the whole API header if none of its stages have visible bars
+                  const hasAny = a.stages.some(
+                    (s) =>
+                      (grouped.get(`${a.id}__S${s.stageNo}`)?.length ?? 0) > 0
+                  );
+                  if (!hasAny) return null;
+                }
                 const isCollapsed = apiCollapsed(a.id);
+                const visibleStages = anyFilterActive
+                  ? a.stages.filter(
+                      (s) =>
+                        (grouped.get(`${a.id}__S${s.stageNo}`)?.length ?? 0) >
+                        0
+                    )
+                  : a.stages;
                 return (
                   <div key={a.id}>
                     <button
@@ -260,11 +413,11 @@ export default function GanttTab() {
                       />
                       <span className="truncate">{a.name}</span>
                       <span className="ml-auto font-mono text-[10px] text-ink-400">
-                        {a.stages.length}st
+                        {visibleStages.length}st
                       </span>
                     </button>
                     {!isCollapsed &&
-                      a.stages.map((s) => (
+                      visibleStages.map((s) => (
                         <div
                           key={s.id}
                           style={{ height: rowH }}
@@ -279,30 +432,38 @@ export default function GanttTab() {
               })}
 
             {mode === "by-api" &&
-              apis.map((a) => (
-                <div
-                  key={a.id}
-                  style={{ height: rowH }}
-                  className="flex items-center gap-2 border-b border-white/5 px-3 text-xs font-bold text-white"
-                  title={`${a.name} (id: ${a.id})`}
-                >
-                  <span
-                    className="h-2.5 w-2.5 shrink-0 rounded-full"
-                    style={{
-                      background: a.color,
-                      boxShadow: `0 0 8px ${a.color}80`,
-                    }}
-                  />
-                  <span className="truncate">{a.name}</span>
-                  <span className="ml-auto shrink-0">
-                    <PriorityPill value={a.priority} readOnly />
-                  </span>
-                </div>
-              ))}
+              apis.map((a) => {
+                if (
+                  anyFilterActive &&
+                  (grouped.get(a.id)?.length ?? 0) === 0
+                )
+                  return null;
+                return (
+                  <div
+                    key={a.id}
+                    style={{ height: rowH }}
+                    className="flex items-center gap-2 border-b border-white/5 px-3 text-xs font-bold text-white"
+                    title={`${a.name} (id: ${a.id})`}
+                  >
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{
+                        background: a.color,
+                        boxShadow: `0 0 8px ${a.color}80`,
+                      }}
+                    />
+                    <span className="truncate">{a.name}</span>
+                    <span className="ml-auto shrink-0">
+                      <PriorityPill value={a.priority} readOnly />
+                    </span>
+                  </div>
+                );
+              })}
 
             {mode === "by-reactor" &&
               reactors.map((r) => {
                 const batchCount = grouped.get(r.id)?.length ?? 0;
+                if (anyFilterActive && batchCount === 0) return null;
                 const cls = classColor(r.reactorClass);
                 return (
                   <div
