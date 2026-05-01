@@ -82,7 +82,13 @@ export default function PriorityPill({
         {!readOnly && <ChevronDown size={9} className="opacity-70" />}
       </button>
       {open && !readOnly && (
-        <div className="absolute right-0 top-full z-30 mt-1 min-w-[140px] overflow-hidden rounded-md border border-white/15 bg-ink-950/95 shadow-xl backdrop-blur-xl">
+        <div
+          className="absolute right-0 top-full z-50 mt-1 min-w-[160px] overflow-hidden rounded-md border border-white/20 shadow-2xl shadow-black/60 ring-1 ring-white/10"
+          style={{
+            background:
+              "linear-gradient(180deg, #0b1130 0%, #04081a 100%), #04081a",
+          }}
+        >
           {([1, 2, 3, 4, 5] as Priority[]).map((p) => {
             const m = META[p];
             const active = p === value;
