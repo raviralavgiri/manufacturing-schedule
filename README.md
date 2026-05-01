@@ -1,5 +1,7 @@
 # API Manufacturing Schedule · FY 2026-27
 
+🔗 **Live demo:** https://raviralavgiri.github.io/manufacturing-schedule/
+
 A modern, glassmorphic React webapp that replaces an Excel-based pharmaceutical manufacturing scheduler.
 
 ## What it does

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+    <title>API Manufacturing Schedule</title>
+    <script>
+      // GitHub Pages SPA fallback: rewrite the path so the SPA can boot.
+      var l = window.location;
+      l.replace(
+        l.protocol +
+          "//" +
+          l.hostname +
+          (l.port ? ":" + l.port : "") +
+          l.pathname
+            .split("/")
+            .slice(0, 2)
+            .join("/") +
+          "/?p=" +
+          encodeURIComponent(l.pathname.slice(1)) +
+          (l.search ? "&q=" + encodeURIComponent(l.search.slice(1)) : "") +
+          l.hash
+      );
+    </script>
+  </head>
+  <body>Redirecting…</body>
+</html>
