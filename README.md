@@ -233,31 +233,65 @@ Then the loop moves to API-04 (P1) → … → API-20 (P5) → back to **API-03 
 
 Even though S1's train has 2 reactors, you cannot run S1 batch 1 and S1 batch 2 in parallel — they need **the same** R104 AND R105 simultaneously. So all 11 batches of S1 happen back-to-back on the train, total ~28 days of S1 train time.
 
-### 4. Reactor selection — train availability
+### 4. Reactor selection — train availability with gap-packing
 
-In the train model the reactor selection is straightforward: the pool **is** the train, so there's no "selection" — we just compute when the entire train is free at the same time.
+In the train model the reactor selection is straightforward: the pool **is** the train, so there's no "selection" — we compute when the entire train is free **and** find the *earliest free gap* across all reactors in the pool.
 
 ```ts
-function trainReadyAt(pool: string[], earliest: number): number {
-  let trainStart = earliest;
-  for (const rid of pool) {
-    const slots = reactorBookings.get(rid)!;
-    const lastEnd = slots.length === 0 ? HORIZON_MS : slots[slots.length - 1].cycleEndMs;
-    if (lastEnd > trainStart) trainStart = lastEnd;
+function findTrainSlot(pool: string[], earliest: number, cycleMs: number): number {
+  let t = earliest;
+  const lookups = pool.map((rid) => reactorBookings.get(rid)!);
+
+  for (let safety = 0; safety < 5000; safety++) {
+    let conflictEnd = t;
+    let foundConflict = false;
+    for (const slots of lookups) {
+      for (const slot of slots) {
+        if (slot.cycleEndMs <= t) continue;       // entirely before our start
+        if (slot.startMs >= t + cycleMs) break;   // entirely after; rest are too (sorted)
+        // Genuine overlap — must wait until this slot frees
+        if (slot.cycleEndMs > conflictEnd) conflictEnd = slot.cycleEndMs;
+        foundConflict = true;
+        break;
+      }
+      if (foundConflict) break;
+    }
+    if (!foundConflict) return t;
+    t = conflictEnd;
   }
-  return trainStart;
+  return t;
 }
 ```
 
-Then book the cycle on EVERY reactor in the train:
+Then book the cycle on EVERY reactor in the train, **at the sorted position** so future scans walk slots in chronological order:
 
 ```ts
 for (const rid of stage.reactorPool) {
-  reactorBookings.get(rid)!.push({ startMs, endMs: analysisEndMs, cycleEndMs });
+  insertSorted(reactorBookings.get(rid)!, { startMs, endMs: analysisEndMs, cycleEndMs });
 }
 ```
 
-Why this is important: in the *previous* (fungible) model the algorithm could pick any one reactor from the pool, so multiple batches could run in parallel on different members of the pool. In the **train model** the entire pool is a single resource — only one batch of the stage runs at a time, regardless of how many reactors are listed.
+#### Why gap-finding is critical (real bug story)
+
+Earlier the algorithm only looked at each reactor's **last booking end**. That broke whenever a high-priority API's late stage forced a booking into the future:
+
+> **Bug scenario:** R107 is in API-01's S4 train. API-01's stage chain (S1 → S2 → S3 → S4) pushes its S4 batch to **week 5**. R107 books `[week 5, week 6]`.
+> 
+> **Naive algorithm:** When API-02's S1 wants R107 (which is in API-02's S1 pool), `lastEnd = week 6` → books at week 6. **Weeks 0–5 wasted.**
+> 
+> **Gap-finder:** Walks R107's bookings, sees `[week 5, week 6]` is the only one. Notes that `[week 0, week 5]` is free. Returns `t = week 0`. API-02's S1 books `[week 0, week 1]`.
+
+Real measured impact on the spec data:
+
+| Metric | Before fix (last-end only) | After fix (gap-finder) |
+|---|---|---|
+| Batches in FY | 304 | **641** |
+| Overflow | 544 | **207** |
+| Reactor clashes | 0 | 0 |
+
+The gap-finder more than **doubled** the in-FY throughput — same total work, same equipment, just better packing.
+
+Why this is important: in the *previous* (fungible) model the algorithm could pick any one reactor from the pool, so multiple batches could run in parallel on different members of the pool. In the **train model** the entire pool is a single resource — only one batch of the stage runs at a time, regardless of how many reactors are listed. **But** different APIs whose pools share that reactor can interleave around each other's idle windows.
 
 #### Realistic worked example
 
@@ -471,13 +505,13 @@ To run the scheduler standalone (no UI) for sanity-checking after changes:
 
 ```bash
 npx tsx scripts/verify.mjs
-# Output (train model):
+# Output (train model + gap-packing):
 #   APIs        : 20
 #   Total stages: 82
 #   Reactors    : 20
 #   Planned bts : 848
 #   Scheduled   : 848
-#   In FY       : 304   ← lower than fungible-pool model because trains run serially
-#   Overflow    : 544   ← shrink reactor trains (2 → 1) to fit more in FY
+#   In FY       : 641   ← gap-finder fits 2x more than the original last-end algorithm
+#   Overflow    : 207
 #   Clashes     : 0
 ```

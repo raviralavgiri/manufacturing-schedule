@@ -78,16 +78,64 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
     )
   );
 
-  // Helper: when does the entire reactor train become available together?
-  function trainReadyAt(pool: string[], earliest: number): number {
-    let trainStart = earliest;
-    for (const rid of pool) {
-      const slots = reactorBookings.get(rid)!;
-      const lastEnd =
-        slots.length === 0 ? HORIZON_MS : slots[slots.length - 1].cycleEndMs;
-      if (lastEnd > trainStart) trainStart = lastEnd;
+  /**
+   * Find the EARLIEST time t >= earliest such that [t, t + cycleMs) is free
+   * on every reactor in the pool simultaneously.
+   *
+   * Why this matters: a reactor R might have a booking at week 5-6 (because
+   * it's in API-01's stage-4 train, gated by stage-3 analysis). But R is
+   * IDLE in weeks 0-5 — and other APIs whose pool also contains R should
+   * be able to slot in there. A naive "look at last booking end" approach
+   * misses these earlier gaps; this gap-finder uses them.
+   *
+   * Algorithm: start at t=earliest. If any reactor in the pool has a
+   * booking that overlaps [t, t+cycleMs), jump t to that booking's end and
+   * retry. Repeats until a clean slot is found. O(B * P) where B is total
+   * bookings across the pool and P is pool size.
+   */
+  function findTrainSlot(
+    pool: string[],
+    earliest: number,
+    cycleMs: number
+  ): number {
+    let t = earliest;
+    // Per-reactor sorted booking lists (we keep them sorted by sorted insert
+    // below, so this is just a reference, no copying).
+    const lookups = pool.map((rid) => reactorBookings.get(rid)!);
+
+    for (let safety = 0; safety < 5000; safety++) {
+      let conflictEnd = t;
+      let foundConflict = false;
+      for (const slots of lookups) {
+        for (const slot of slots) {
+          // Slot ends before our window starts → no overlap, skip
+          if (slot.cycleEndMs <= t) continue;
+          // Slot starts at/after our window ends → no overlap, and since
+          // slots are sorted by startMs, no later slot in this reactor can
+          // overlap either.
+          if (slot.startMs >= t + cycleMs) break;
+          // Genuine overlap: must wait until this reactor frees
+          if (slot.cycleEndMs > conflictEnd) conflictEnd = slot.cycleEndMs;
+          foundConflict = true;
+          break;
+        }
+        if (foundConflict) break;
+      }
+      if (!foundConflict) return t;
+      t = conflictEnd;
     }
-    return trainStart;
+    // Safety fallback (should never hit unless something is malformed)
+    return t;
+  }
+
+  /** Insert a booking into a reactor's sorted slot list (by startMs). */
+  function insertSorted(slots: BookedSlot[], slot: BookedSlot): void {
+    // Linear scan from the end (most appends are still chronological because
+    // the algorithm processes batches mostly in order). Falls back to early
+    // insertion when a low-priority API slots into an earlier gap.
+    let i = slots.length;
+    while (i > 0 && slots[i - 1].startMs > slot.startMs) i--;
+    slots.splice(i, 0, slot);
   }
 
   for (let round = 0; round < maxBatches; round++) {
@@ -108,29 +156,34 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
             : apiStageLastEnd.get(api.id)![sIdx - 1] + bufferMs;
         const earliestStart = Math.max(prevStageReady, HORIZON_MS);
 
-        // 2. Train start = max(earliestStart, max-of-pool-last-cycle-end)
-        const startMs = trainReadyAt(stage.reactorPool, earliestStart);
+        // 2. Find the EARLIEST gap on the train where [t, t+cycle) is free on
+        //    every pool reactor simultaneously. This is the key fix: it lets
+        //    low-priority / late-stage trains slot into the early-week idle
+        //    windows that high-priority APIs leave behind on shared reactors.
+        const startMs = findTrainSlot(stage.reactorPool, earliestStart, cycleMs);
         const cycleEndMs = startMs + cycleMs;
         const analysisEndMs = cycleEndMs + analysisMs;
 
-        // 3. Defensive clash check (algorithm guarantees this never fires)
+        // 3. Defensive clash check — verify the slot we found genuinely doesn't
+        //    overlap any existing booking on any pool reactor.
         let clash = false;
         for (const rid of stage.reactorPool) {
           const slots = reactorBookings.get(rid)!;
-          if (slots.length > 0 && startMs < slots[slots.length - 1].cycleEndMs) {
+          for (const s of slots) {
+            if (s.cycleEndMs <= startMs) continue;
+            if (s.startMs >= cycleEndMs) break;
             clash = true;
             break;
           }
+          if (clash) break;
         }
         if (clash) clashCount++;
 
-        // 4. Book the cycle on EVERY reactor in the train
+        // 4. Book the cycle on EVERY reactor in the train, inserting at the
+        //    sorted position so future gap-finder scans walk slots in time order.
+        const newSlot: BookedSlot = { startMs, endMs: analysisEndMs, cycleEndMs };
         for (const rid of stage.reactorPool) {
-          reactorBookings.get(rid)!.push({
-            startMs,
-            endMs: analysisEndMs,
-            cycleEndMs,
-          });
+          insertSorted(reactorBookings.get(rid)!, newSlot);
           reactorLoadHours.set(
             rid,
             (reactorLoadHours.get(rid) ?? 0) + stage.cycleHours
