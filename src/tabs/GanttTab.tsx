@@ -26,14 +26,20 @@ export default function GanttTab() {
   const [mode, setMode] = useState<Mode>("by-stage");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
-  // Group batches by the active mode
+  // Group batches by the active mode. In by-reactor mode each batch appears
+  // in EVERY reactor row in its train (since trains lock all reactors together).
   const grouped = useMemo(() => {
     const map = new Map<string, BatchScheduleEntry[]>();
     schedule.batches.forEach((b) => {
-      let key: string;
-      if (mode === "by-api") key = b.apiId;
-      else if (mode === "by-reactor") key = b.reactorId;
-      else key = `${b.apiId}__S${b.stageNo}`;
+      if (mode === "by-reactor") {
+        b.reactorIds.forEach((rid) => {
+          if (!map.has(rid)) map.set(rid, []);
+          map.get(rid)!.push(b);
+        });
+        return;
+      }
+      const key =
+        mode === "by-api" ? b.apiId : `${b.apiId}__S${b.stageNo}`;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(b);
     });

@@ -50,6 +50,24 @@ A modern, glassmorphic React webapp that replaces an Excel-based pharmaceutical 
 
 This section is the deepest documentation in the repo. It explains every concept, the algorithm, and walks through one full real schedule trace.
 
+### Mental model: pool = reactor TRAIN, not fungible set
+
+> **The most important thing to understand:** when a stage's `reactorPool` lists multiple reactors, **every batch of that stage locks ALL of them simultaneously** for the cycle window. The pool is a *production train* (e.g. synthesis reactor + crystallizer + dryer), not a set of equivalent reactors.
+
+#### Concrete example
+
+> Pool `[R101, R102, R103]` for a stage with **10 batches**, cycle 96 h, analysis 24 h. 
+> 
+> - Batch 1: locks R101+R102+R103 from week 1 → end of week 1 (96 h)
+> - Batch 2 cannot start until **all three** are free → starts immediately after batch 1 ends. Total 10 batches × ~96 h ≈ **40 days serial**.
+> - Even though there are 3 reactors, **only one batch runs at a time** for this stage.
+> - But: a *different* stage's batch with pool `[R104, R105]` can run in parallel during this whole time.
+
+#### Why this matters
+- Total throughput is bounded by `cycleHours × plannedBatches` per stage train, not by `reactor count ÷ pool size`.
+- Shared reactors (one reactor in multiple stages' pools) become heavy serialization points — when API-A's S2 needs R107 and API-B's S1 also needs R107, one waits.
+- Smaller train sizes (1–2 reactors) → higher throughput. Larger trains (3+) → fewer parallel batches but more equipment per batch.
+
 ### 1. Domain model
 
 There are exactly four kinds of objects in the system:
@@ -93,12 +111,13 @@ export interface StageMaster {
 
 export interface BatchScheduleEntry {
   batchId: string; apiId: string; stageId: string; batchNo: number;
-  reactorId: string;
-  startMs: number;        // reactor cycle start
-  endMs: number;          // reactor cycle end (reactor free after this)
-  analysisEndMs: number;  // analysis window end
-  inFY: boolean;          // Apr 1 2026 – Mar 31 2027
-  clash: boolean;         // always false (sequencer guarantees this)
+  reactorId: string;       // primary / lead reactor (= reactorIds[0])
+  reactorIds: string[];    // FULL reactor train: every reactor locked together
+  startMs: number;         // train cycle start
+  endMs: number;           // train cycle end (all reactors free after this)
+  analysisEndMs: number;   // analysis window end
+  inFY: boolean;           // Apr 1 2026 – Mar 31 2027
+  clash: boolean;          // always false (sequencer guarantees this)
   outputKg: number;
 }
 ```
@@ -107,7 +126,7 @@ export interface BatchScheduleEntry {
 
 ### 2. The scheduling algorithm
 
-The full algorithm runs in `src/scheduler/scheduler.ts → runScheduler(apis, reactors)`. It's an **equipment-availability sequencer** with three nested loops:
+The full algorithm runs in `src/scheduler/scheduler.ts → runScheduler(apis, reactors)`. It's an **equipment-availability sequencer (train model)** with three nested loops:
 
 ```mermaid
 flowchart TD
@@ -118,8 +137,8 @@ flowchart TD
     Inner[for each Stage 1..N]
     Skip{round &lt; stage.<br/>plannedBatches?}
     EarlyStart[earliestStart = max<br/>prev-stage-analysis-end + 4h,<br/>scheduleHorizon]
-    PickReactor[Scan reactorPool:<br/>pick earliest free<br/>tie-break by least loaded]
-    Book[Book reactor:<br/>start, start+cycleHours<br/>analysis tail follows]
+    PickReactor[trainStart = max<br/>earliestStart, max-of-pool-last-cycle-end]
+    Book[Book ALL reactors in pool:<br/>start, start+cycleHours<br/>analysis tail follows]
     UpdateLast[apiStageLastEnd[stage] =<br/>max prev, analysisEnd]
     Done([848 BatchScheduleEntry rows])
 
@@ -185,97 +204,74 @@ export function weekIndexOf(ms: number): number {
 
 `FY_WEEKS` is a pre-built array of 52 entries (one per ISO week between Apr 1 2026 and Mar 31 2027) used by the UI for Gantt headers, heatmap columns, and quarterly grouping.
 
-### 3. Worked example: scheduling API-01
+### 3. Worked example: scheduling API-03 (train model)
 
-API-01 is **P1 priority**, has 4 stages, and lives in this seed (deterministic):
+API-03 has 4 stages with **small reactor trains** (1–3 reactors each, deterministic seed):
 
-| Stage | Batch Size | Cycle | Analysis | Reactor Pool | Planned Batches |
+| Stage | Cycle | Analysis | Reactor Train | Planned Batches |
+|---|---|---|---|---|
+| **S1** Intermediate-1 | 60 h | 30 h | `[R104, R105]` (2-reactor) | 11 |
+| **S2** Intermediate-2 | 72 h | 36 h | `[R107, R108, R201]` (3-reactor) | 11 |
+| **S3** Intermediate-3 | 84 h | 48 h | `[R204]` (single-reactor) | 11 |
+| **S4** Final API     | 120 h | 60 h | `[R302, R303]` (2-reactor) | 11 |
+
+The horizon is **Apr 1 2026 08:00**. Below is API-03's first batch through all 4 stages (assume R104, R105, R107, R108, R201, R204, R302, R303 are all initially idle):
+
+| Step | Stage | earliestStart | Train ready at | Books cycle | Notes |
 |---|---|---|---|---|---|
-| **S1** Intermediate-1 | 54 kg | 138 h | 70 h | R101..R108 | 11 |
-| **S2** Intermediate-2 | 71 kg | 192 h | 84 h | R103..R108, R201, R202 | 11 |
-| **S3** Intermediate-3 | 69 kg | 168 h | 60 h | R107, R108, R201..R206 | 11 |
-| **S4** Final API     | 163 kg | 264 h | 96 h | R301..R306 | 11 |
+| 1 | S1·b1 | Apr 1 08:00 | R104=Apr 1, R105=Apr 1 → max=**Apr 1 08:00** | Apr 1 08:00 → Apr 3 20:00 (60 h) on R104+R105 | Both reactors locked together |
+| 2 | S2·b1 | S1 analysis end + 4 h = Apr 5 02:00 + 4 = **Apr 5 06:00** | R107=Apr 1, R108=Apr 1, R201=Apr 1 → max=**Apr 5 06:00** | Apr 5 06:00 → Apr 8 06:00 (72 h) on R107+R108+R201 | Stage 2 waited for stage 1's analysis tail |
+| 3 | S3·b1 | S2 analysis end + 4 h = Apr 9 18:00 + 4 = **Apr 9 22:00** | R204=Apr 1 → max=**Apr 9 22:00** | Apr 9 22:00 → Apr 13 10:00 (84 h) on R204 | Single-reactor train |
+| 4 | S4·b1 | S3 analysis end + 4 h = Apr 15 10:00 + 4 = **Apr 15 14:00** | R302=Apr 1, R303=Apr 1 → max=**Apr 15 14:00** | Apr 15 14:00 → Apr 20 14:00 (120 h) on R302+R303 | Final API train |
 
-The horizon is **Apr 1 2026 08:00**. Below is what the scheduler does for the **first 3 rounds** (showing only API-01's bookings; in reality API-02..API-20 are interleaved between API-01's rounds):
+Then the loop moves to API-04 (P1) → … → API-20 (P5) → back to **API-03 round 1**. By the time API-03 starts S1 batch 2:
+- R104+R105 must both be free at the same time
+- They might already be busy because **API-15 also uses [R105, R106]** for its S2 → contention
+- API-03 S1 batch 2 starts at the later of: (i) the prev round-0 batch's release time, (ii) train re-availability after sharing — typically several days after batch 1.
 
-#### Round 0 (each stage's batch #1)
+#### Why batches are STRICTLY SERIAL within a stage
 
-| # | Stage | earliestStart | Pool scan results | Picked | Books cycle |
-|---|---|---|---|---|---|
-| 1 | S1·b1 | Apr 1 08:00 | R101..R108 all empty → Apr 1 08:00 | **R101** (lowest load score in tie) | Apr 1 08:00 → Apr 6 18:00 (138 h) |
-| 2 | S2·b1 | S1 analysis end + 4 h = `Apr 9 16:00 + 4 h = Apr 9 20:00` | R103..R108, R201, R202 all empty | **R103** | Apr 9 20:00 → Apr 17 20:00 (192 h) |
-| 3 | S3·b1 | S2 analysis end + 4 h = `Apr 21 08:00 + 4 h = Apr 21 12:00` | R107..R206 empty | **R107** | Apr 21 12:00 → Apr 28 12:00 (168 h) |
-| 4 | S4·b1 | S3 analysis end + 4 h = `Apr 30 24:00 + 4 h = May 1 04:00` | R301..R306 empty | **R301** | May 1 04:00 → May 12 04:00 (264 h) |
+Even though S1's train has 2 reactors, you cannot run S1 batch 1 and S1 batch 2 in parallel — they need **the same** R104 AND R105 simultaneously. So all 11 batches of S1 happen back-to-back on the train, total ~28 days of S1 train time.
 
-After round 0 of API-01, the loop moves to **API-02 round 0**, then API-03, … API-20, then back to **API-01 round 1**. Hence by the time API-01 starts batch #2 of S1, R101 is already busy (with API-01's b1 cycle).
+### 4. Reactor selection — train availability
 
-#### Round 1 (each stage's batch #2)
-
-| # | Stage | earliestStart | Pool scan | Picked | Why |
-|---|---|---|---|---|---|
-| 5 | S1·b2 | Apr 1 08:00 (no prev-stage gate; round-0 of all APIs has occupied many R10x reactors) | R101 busy until Apr 6 18:00, R102 busy till …, R104 (less loaded) free Apr 1 08:00 | **R104** | Load-balanced — picks the least-used reactor among the equally-free ones |
-| 6 | S2·b2 | S1·b2 analysis end + 4 h | mostly free Mediums | **R204** | R204 was barely used in round 0 |
-| 7 | S3·b2 | … | … | **R203** | Same load-balancing rationale |
-| 8 | S4·b2 | … | R301 still busy until May 12; R302..R306 free | **R302** | Earliest free among Larges |
-
-This is where the **load-balanced tie-break** matters most. Without it, API-01 would book R101 → R101 → R101 …; with it, the same API uses R101 → R104 → R102 → R105 → … rotating through its pool.
-
-By round 10 (b11 of every stage), all 11 batches of every stage of API-01 have been placed across roughly 6–8 different reactors per pool — visible in the **Gantt "By Reactor" mode** as a multi-color row pattern.
-
-### 4. Reactor selection — load-balanced earliest-free
-
-This is the most important per-batch decision. Inside the inner loop:
+In the train model the reactor selection is straightforward: the pool **is** the train, so there's no "selection" — we just compute when the entire train is free at the same time.
 
 ```ts
-let bestReactor: string | null = null;
-let bestStart = Infinity;
-let bestScore = Infinity;
-
-stage.reactorPool.forEach((rid, poolIdx) => {
-  const slots = reactorBookings.get(rid)!;
-  const lastEnd = slots.length === 0 ? HORIZON_MS : slots[slots.length - 1].cycleEndMs;
-  const candidateStart = Math.max(lastEnd, earliestStart);
-  const score = loadScore(
-    reactorLoadHours.get(rid) ?? 0,
-    reactorBatchCount.get(rid) ?? 0,
-    poolIdx
-  );
-
-  // Primary: earliest possible start time
-  if (candidateStart < bestStart) {
-    bestStart = candidateStart;
-    bestReactor = rid;
-    bestScore = score;
-    return;
+function trainReadyAt(pool: string[], earliest: number): number {
+  let trainStart = earliest;
+  for (const rid of pool) {
+    const slots = reactorBookings.get(rid)!;
+    const lastEnd = slots.length === 0 ? HORIZON_MS : slots[slots.length - 1].cycleEndMs;
+    if (lastEnd > trainStart) trainStart = lastEnd;
   }
-  // Tied on start: prefer the lower load score
-  if (candidateStart === bestStart && score < bestScore) {
-    bestReactor = rid;
-    bestScore = score;
-  }
-});
-```
-
-`loadScore` is a deterministic three-key tie-breaker:
-
-```ts
-function loadScore(busyHours: number, batchCount: number, poolIdx: number) {
-  return busyHours * 1000 + batchCount * 0.001 + poolIdx * 0.000001;
-  //     ^^^^^^^^^^^^^^^   ^^^^^^^^^^^^^^^^^^   ^^^^^^^^^^^^^^^^^^
-  //     primary           secondary            tertiary (deterministic)
+  return trainStart;
 }
 ```
 
-Why this matters: a stage's reactor pool isn't 4 equivalent options where one absorbs all batches — it's a **set of equivalent units that should all carry the load**. Without the tie-breaker the `for...of` loop always picked array-index 0 (R101 absorbing 86 batches while R204 only ran 6). With the tie-breaker:
+Then book the cycle on EVERY reactor in the train:
 
-| Reactor | Without load-balancing | With load-balancing |
-|---|---|---|
-| R101 | 86 | 68 |
-| R102 | 86 | 65 |
-| R204 | **6** | **36** |
-| R205 | **8** | **36** |
-| R206 | **15** | **36** |
-| **Spread (max−min)** | **80** | **37** |
+```ts
+for (const rid of stage.reactorPool) {
+  reactorBookings.get(rid)!.push({ startMs, endMs: analysisEndMs, cycleEndMs });
+}
+```
+
+Why this is important: in the *previous* (fungible) model the algorithm could pick any one reactor from the pool, so multiple batches could run in parallel on different members of the pool. In the **train model** the entire pool is a single resource — only one batch of the stage runs at a time, regardless of how many reactors are listed.
+
+#### Realistic worked example
+
+> Stage S1 of API-03 has pool `[R103, R104]` (2-reactor train), cycle 60 h, planned batches 10.
+>
+> ```
+> Batch 1: R103+R104 busy from Apr 1 08:00 → Apr 3 20:00  (60 h)
+> Batch 2: R103+R104 busy from Apr 3 20:00 → Apr 6 08:00  (next slot, no parallelism)
+> Batch 3: ...
+> ...
+> Batch 10: ends ~Apr 26
+> ```
+>
+> R103 is also in API-07 S2's pool `[R103, R201]`. While API-03 S1 has the train locked, API-07 S2 has to wait for R103 — that's how shared reactors create cross-API queueing.
 
 ### 5. FY vs Overflow classification
 
@@ -475,13 +471,13 @@ To run the scheduler standalone (no UI) for sanity-checking after changes:
 
 ```bash
 npx tsx scripts/verify.mjs
-# Output:
+# Output (train model):
 #   APIs        : 20
 #   Total stages: 82
 #   Reactors    : 20
 #   Planned bts : 848
 #   Scheduled   : 848
-#   In FY       : 645
-#   Overflow    : 203
+#   In FY       : 304   ← lower than fungible-pool model because trains run serially
+#   Overflow    : 544   ← shrink reactor trains (2 → 1) to fit more in FY
 #   Clashes     : 0
 ```

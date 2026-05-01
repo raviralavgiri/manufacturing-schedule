@@ -26,7 +26,7 @@ export default function ScheduleTab() {
   const filtered = useMemo(() => {
     return schedule.batches.filter((b) => {
       if (apiFilter !== "ALL" && b.apiId !== apiFilter) return false;
-      if (reactorFilter !== "ALL" && b.reactorId !== reactorFilter) return false;
+      if (reactorFilter !== "ALL" && !b.reactorIds.includes(reactorFilter)) return false;
       if (fyOnly && !b.inFY) return false;
       if (q) {
         const lower = q.toLowerCase();
@@ -67,7 +67,7 @@ export default function ScheduleTab() {
       "Stage",
       "Stage Name",
       "Batch #",
-      "Reactor",
+      "Reactor Train",
       "Start",
       "End (cycle)",
       "Analysis End",
@@ -82,7 +82,7 @@ export default function ScheduleTab() {
         `Stage ${b.stageNo}`,
         b.stageName,
         b.batchNo,
-        b.reactorId,
+        `"${b.reactorIds.join("|")}"`,
         fmtDateTime(b.startMs),
         fmtDateTime(b.endMs),
         fmtDateTime(b.analysisEndMs),
@@ -168,12 +168,12 @@ export default function ScheduleTab() {
       </Card>
 
       <Card className="overflow-hidden p-0">
-        <div className="grid grid-cols-[110px_72px_120px_70px_80px_180px_180px_180px_60px_60px_72px] gap-0 border-b border-white/10 bg-ink-900/80 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-ink-300">
+        <div className="grid grid-cols-[110px_72px_120px_70px_140px_180px_180px_180px_60px_60px_72px] gap-0 border-b border-white/10 bg-ink-900/80 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-ink-300">
           <span>Batch ID</span>
           <span>API</span>
           <span>Stage</span>
           <span>#</span>
-          <span>Reactor</span>
+          <span>Reactor Train</span>
           <span>Start</span>
           <span>End (Cycle)</span>
           <span>Analysis End</span>
@@ -194,7 +194,7 @@ export default function ScheduleTab() {
                 <div
                   key={b.batchId}
                   style={{ height: ROW_H }}
-                  className="grid grid-cols-[110px_72px_120px_70px_80px_180px_180px_180px_60px_60px_72px] items-center gap-0 border-b border-white/5 px-3 text-xs hover:bg-white/[0.04]"
+                  className="grid grid-cols-[110px_72px_120px_70px_140px_180px_180px_180px_60px_60px_72px] items-center gap-0 border-b border-white/5 px-3 text-xs hover:bg-white/[0.04]"
                 >
                   <span className="font-mono text-[11px] text-ink-200 truncate">
                     {b.batchId}
@@ -213,8 +213,11 @@ export default function ScheduleTab() {
                     S{b.stageNo} · {b.stageName}
                   </span>
                   <span className="font-mono text-ink-300">{b.batchNo}</span>
-                  <span className="font-mono font-semibold text-cyan-300">
-                    {b.reactorId}
+                  <span
+                    className="font-mono font-semibold text-cyan-300 truncate"
+                    title={`Reactor train: ${b.reactorIds.join(", ")}`}
+                  >
+                    {b.reactorIds.join(", ")}
                   </span>
                   <span className="font-mono text-ink-200 truncate">
                     {fmtDateTime(b.startMs)}

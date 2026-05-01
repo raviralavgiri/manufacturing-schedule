@@ -69,24 +69,46 @@ const STAGE_NAMES = [
   "Final API",
 ];
 
-// Pools by stage index — earlier stages use small reactors, later stages medium/large.
-// Intermediate stages frequently use shared reactors R105-R108, R205-R206.
-function reactorPoolFor(stageIdx: number, totalStages: number): string[] {
+// Train model: each stage uses a small set of reactors (1-3) that lock together
+// for every batch. We pick a deterministic subset from the stage's eligible
+// equipment class so batches of the same stage run serially on that train,
+// while different stages can run in parallel on different reactors.
+function reactorPoolFor(
+  stageIdx: number,
+  totalStages: number,
+  apiIdx: number
+): string[] {
   const isFinal = stageIdx === totalStages - 1;
+
+  // Eligible reactors for this stage's equipment class
+  let eligible: string[];
   if (isFinal) {
-    // Final stage: large reactors only
-    return ["R301", "R302", "R303", "R304", "R305", "R306"];
+    eligible = ["R301", "R302", "R303", "R304", "R305", "R306"];
+  } else if (stageIdx === 0) {
+    eligible = ["R101", "R102", "R103", "R104", "R105", "R106", "R107", "R108"];
+  } else if (stageIdx === 1) {
+    eligible = ["R103", "R104", "R105", "R106", "R107", "R108", "R201", "R202"];
+  } else {
+    eligible = ["R107", "R108", "R201", "R202", "R203", "R204", "R205", "R206"];
   }
-  if (stageIdx === 0) {
-    // First intermediate: smalls (incl. shared)
-    return ["R101", "R102", "R103", "R104", "R105", "R106", "R107", "R108"];
+
+  // Train size: deterministic 1-3 reactors per stage (mostly 2-3)
+  // - 30% single-reactor stages (size 1)
+  // - 50% two-reactor trains
+  // - 20% three-reactor trains
+  const sizeRoll = (apiIdx * 7 + stageIdx * 11) % 10;
+  const trainSize = sizeRoll < 3 ? 1 : sizeRoll < 8 ? 2 : 3;
+
+  // Pick a deterministic offset into the eligible list so different APIs
+  // get different (but overlapping) trains - this means shared reactors
+  // R105-R108 / R205-R206 still get used across multiple APIs, exactly like
+  // the original spec said.
+  const startOffset = (apiIdx * 3 + stageIdx * 5) % eligible.length;
+  const pool: string[] = [];
+  for (let i = 0; i < trainSize; i++) {
+    pool.push(eligible[(startOffset + i) % eligible.length]);
   }
-  if (stageIdx === 1) {
-    // 2nd intermediate: smalls (heavy use of shared) + medium R201/R202
-    return ["R103", "R104", "R105", "R106", "R107", "R108", "R201", "R202"];
-  }
-  // 3rd / 4th intermediate: mediums + shared smalls
-  return ["R107", "R108", "R201", "R202", "R203", "R204", "R205", "R206"];
+  return pool;
 }
 
 // Total batches must be 848. With 82 stages, mean ~10.34 batches/stage.
@@ -124,7 +146,7 @@ export function buildSeed(): { apis: API[]; reactors: Reactor[] } {
       const stageName = isFinal
         ? "Final API"
         : `Intermediate-${stageIdx + 1}`;
-      const pool = reactorPoolFor(stageIdx, nStages);
+      const pool = reactorPoolFor(stageIdx, nStages, apiIdx);
 
       // Realistic params (pharma campaigns: intermediates 4-7 days, final 7-12 days)
       const batchSizeKg = isFinal
@@ -132,8 +154,10 @@ export function buildSeed(): { apis: API[]; reactors: Reactor[] } {
         : stageIdx === 0
         ? ri(40, 110)
         : ri(60, 160);
-      const cycleHours = isFinal ? ri(192, 312) : ri(120, 216);
-      const analysisHours = isFinal ? ri(60, 108) : ri(42, 84);
+      // Train model uses reactors serially per-stage, so cycle times need to
+      // be shorter than the parallel-pool model to fit ~848 batches in a year.
+      const cycleHours = isFinal ? ri(96, 168) : ri(48, 96);
+      const analysisHours = isFinal ? ri(36, 72) : ri(24, 48);
       const plannedBatches = batchAllocations[stageCursor];
       stageCursor++;
 

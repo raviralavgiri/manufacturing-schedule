@@ -11,39 +11,37 @@ import {
 interface BookedSlot {
   startMs: number;
   endMs: number; // includes analysis tail
-  cycleEndMs: number; // physical reactor occupancy end (for util math); = endMs - analysis tail
+  cycleEndMs: number; // physical reactor occupancy end (= endMs - analysis tail)
 }
 
 /**
- * Tie-break score for two reactors that can both start a batch at the same
- * earliest time. Lower is better.
+ * Equipment-availability sequencer — TRAIN model.
  *
- * Primary key  : cumulative busy hours so far (load balancing — keeps the
- *                least-used reactor in the pool getting batches)
- * Secondary key: total batches booked (stable when both are at zero hours)
- * Tertiary key : pool index (deterministic fallback for full ties)
- */
-function loadScore(busyHours: number, batchCount: number, poolIdx: number) {
-  return busyHours * 1000 + batchCount * 0.001 + poolIdx * 0.000001;
-}
-
-/**
- * Equipment-availability sequencer.
+ * Each batch of a stage locks **every reactor in stage.reactorPool**
+ * simultaneously for the cycle window [start, start + cycleHours]. Examples:
  *
- * Strategy:
- * - For each API, walk stage 1 -> stage N. Earlier stages must finish before later
- *   stages can start (we use "earliest start = max(reactor available, prev stage end)").
- * - Within a stage, schedule its planned batches sequentially by picking the reactor
- *   from the allowed pool that becomes free earliest.
- * - The reactor is booked for the cycle window [start, start + cycle]. Analysis time
- *   runs after, but the physical reactor is FREE during analysis so the next batch
- *   on the same reactor can start as soon as cycleEnd.
- * - A small inter-stage buffer is added (4h) to model material transfer / QC release.
+ *   pool = [R101, R102, R103]      → batch 1 books all 3 reactors together
+ *   10 batches with the same pool  → run strictly serially
+ *                                    (you cannot run two batches in parallel
+ *                                    even though there are 3 reactors —
+ *                                    they're all needed for one batch)
+ *
+ * Constraints (provably never violated):
+ *   1. No reactor clash: a reactor's [start, cycleEnd] windows are
+ *      non-overlapping, so even when shared across stages there's no
+ *      double-booking.
+ *   2. Stage ordering inside an API: stage N+1's batch B can only start
+ *      after stage N's batch B finishes its analysis window plus a 4-hour
+ *      transfer buffer.
+ *   3. Priority ordering: APIs are processed in priority order (P1 first,
+ *      P5 last) within each round so high-priority APIs grab earliest slots.
+ *
+ * Reactor analysis windows (analysisHours) DO NOT lock the reactor — they
+ * only delay the next stage of the SAME API. Other batches can use these
+ * reactors as soon as cycleEnd.
  */
 export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
   const reactorBookings = new Map<string, BookedSlot[]>();
-  // Cumulative load per reactor — used for tie-breaking when multiple reactors
-  // in a pool can start a batch at the same earliest time.
   const reactorLoadHours = new Map<string, number>();
   const reactorBatchCount = new Map<string, number>();
   reactors.forEach((r) => {
@@ -58,18 +56,12 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
   const allBatches: BatchScheduleEntry[] = [];
   let clashCount = 0;
 
-  // Round-robin through APIs by interleaving batches to spread load over the year.
-  // Within each round, APIs are processed in PRIORITY ORDER (lowest number = highest
-  // priority) so P1 APIs always grab the earliest free reactor slots ahead of P5.
-  //
-  //   round 0: P1 APIs → P2 APIs → P3 → P4 → P5     (each: stage 1 batch 1, stage 2 batch 1, ...)
-  //   round 1: P1 APIs → P2 → P3 → P4 → P5          (stage 1 batch 2, ...)
-  // This keeps the Gantt visually distributed AND respects priority + stage ordering.
+  // APIs in priority order (P1 first ... P5 last)
   const apisInPriorityOrder = [...apis].sort(
     (a, b) => a.priority - b.priority || a.id.localeCompare(b.id)
   );
 
-  // Find max batches across all stages
+  // Find max batches across all stages (loop bound)
   let maxBatches = 0;
   apis.forEach((a) =>
     a.stages.forEach((s) => {
@@ -77,7 +69,7 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
     })
   );
 
-  // Per-API stage end-time tracker: latest end for stage i so stage i+1 can start after
+  // Per-API per-stage end tracker: latest analysis end so stage N+1 can wait
   const apiStageLastEnd = new Map<string, number[]>();
   apis.forEach((a) =>
     apiStageLastEnd.set(
@@ -86,78 +78,73 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
     )
   );
 
+  // Helper: when does the entire reactor train become available together?
+  function trainReadyAt(pool: string[], earliest: number): number {
+    let trainStart = earliest;
+    for (const rid of pool) {
+      const slots = reactorBookings.get(rid)!;
+      const lastEnd =
+        slots.length === 0 ? HORIZON_MS : slots[slots.length - 1].cycleEndMs;
+      if (lastEnd > trainStart) trainStart = lastEnd;
+    }
+    return trainStart;
+  }
+
   for (let round = 0; round < maxBatches; round++) {
     for (const api of apisInPriorityOrder) {
       for (let sIdx = 0; sIdx < api.stages.length; sIdx++) {
         const stage = api.stages[sIdx];
         if (round >= stage.plannedBatches) continue;
+        if (stage.reactorPool.length === 0) continue;
+
         const cycleMs = hoursToMs(stage.cycleHours);
         const analysisMs = hoursToMs(stage.analysisHours);
         const bufferMs = hoursToMs(INTER_STAGE_BUFFER_HOURS);
 
-        // Earliest possible start = max(prev stage's batch end, horizon)
+        // 1. Earliest possible start = max(prev stage's batch end + buffer, horizon)
         const prevStageReady =
-          sIdx === 0 ? HORIZON_MS : apiStageLastEnd.get(api.id)![sIdx - 1] + bufferMs;
+          sIdx === 0
+            ? HORIZON_MS
+            : apiStageLastEnd.get(api.id)![sIdx - 1] + bufferMs;
         const earliestStart = Math.max(prevStageReady, HORIZON_MS);
 
-        // Pick reactor in pool that becomes free earliest >= earliestStart.
-        // Among reactors tied on earliest start, pick the LEAST-LOADED so the
-        // entire pool gets exercised instead of always defaulting to the first.
-        let bestReactor: string | null = null;
-        let bestStart = Infinity;
-        let bestScore = Infinity;
-        stage.reactorPool.forEach((rid, poolIdx) => {
-          const slots = reactorBookings.get(rid)!;
-          const lastEnd = slots.length === 0 ? HORIZON_MS : slots[slots.length - 1].cycleEndMs;
-          const candidateStart = Math.max(lastEnd, earliestStart);
-          const score = loadScore(
-            reactorLoadHours.get(rid) ?? 0,
-            reactorBatchCount.get(rid) ?? 0,
-            poolIdx
-          );
-          // Primary: earliest possible start time
-          if (candidateStart < bestStart) {
-            bestStart = candidateStart;
-            bestReactor = rid;
-            bestScore = score;
-            return;
-          }
-          // Tied on start: prefer the lower load score
-          if (candidateStart === bestStart && score < bestScore) {
-            bestReactor = rid;
-            bestScore = score;
-          }
-        });
-        if (!bestReactor) continue;
-
-        const startMs = bestStart;
+        // 2. Train start = max(earliestStart, max-of-pool-last-cycle-end)
+        const startMs = trainReadyAt(stage.reactorPool, earliestStart);
         const cycleEndMs = startMs + cycleMs;
         const analysisEndMs = cycleEndMs + analysisMs;
 
-        // Detect clash defensively (sequencer guarantees zero, but verify)
-        const slots = reactorBookings.get(bestReactor)!;
+        // 3. Defensive clash check (algorithm guarantees this never fires)
         let clash = false;
-        if (slots.length > 0) {
-          const last = slots[slots.length - 1];
-          if (startMs < last.cycleEndMs) clash = true;
+        for (const rid of stage.reactorPool) {
+          const slots = reactorBookings.get(rid)!;
+          if (slots.length > 0 && startMs < slots[slots.length - 1].cycleEndMs) {
+            clash = true;
+            break;
+          }
         }
         if (clash) clashCount++;
 
-        slots.push({ startMs, endMs: analysisEndMs, cycleEndMs });
-        // Update tie-break stats for this reactor
-        reactorLoadHours.set(
-          bestReactor,
-          (reactorLoadHours.get(bestReactor) ?? 0) + stage.cycleHours
-        );
-        reactorBatchCount.set(
-          bestReactor,
-          (reactorBatchCount.get(bestReactor) ?? 0) + 1
-        );
+        // 4. Book the cycle on EVERY reactor in the train
+        for (const rid of stage.reactorPool) {
+          reactorBookings.get(rid)!.push({
+            startMs,
+            endMs: analysisEndMs,
+            cycleEndMs,
+          });
+          reactorLoadHours.set(
+            rid,
+            (reactorLoadHours.get(rid) ?? 0) + stage.cycleHours
+          );
+          reactorBatchCount.set(
+            rid,
+            (reactorBatchCount.get(rid) ?? 0) + 1
+          );
+        }
 
-        const stageEndForNext = analysisEndMs; // next stage waits for THIS stage's analysis to clear
+        // 5. Stage N+1 of THIS API waits for analysis end
         apiStageLastEnd.get(api.id)![sIdx] = Math.max(
           apiStageLastEnd.get(api.id)![sIdx],
-          stageEndForNext
+          analysisEndMs
         );
 
         const entry: BatchScheduleEntry = {
@@ -169,7 +156,8 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
           stageNo: stage.stageNo,
           stageName: stage.stageName,
           batchNo: round + 1,
-          reactorId: bestReactor,
+          reactorId: stage.reactorPool[0], // primary / lead reactor
+          reactorIds: stage.reactorPool.slice(),
           startMs,
           endMs: cycleEndMs,
           analysisEndMs,
@@ -182,39 +170,43 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
     }
   }
 
-  // Sort for stable output
+  // Sort by start for stable output
   allBatches.sort((a, b) => a.startMs - b.startMs);
 
-  // Reactor usage stats
+  // Reactor usage stats — count every reactor in every batch's train
   const reactorUsage: Record<string, { busyHours: number; batchCount: number }> = {};
   reactors.forEach((r) => (reactorUsage[r.id] = { busyHours: 0, batchCount: 0 }));
   allBatches.forEach((b) => {
-    const u = reactorUsage[b.reactorId];
-    u.busyHours += (b.endMs - b.startMs) / 3600000;
-    u.batchCount += 1;
+    const cycleHours = (b.endMs - b.startMs) / 3600000;
+    b.reactorIds.forEach((rid) => {
+      const u = reactorUsage[rid];
+      if (!u) return;
+      u.busyHours += cycleHours;
+      u.batchCount += 1;
+    });
   });
 
-  // Weekly occupancy matrix [reactorIdx][weekIdx] = hours busy in that week (cycle only, not analysis)
+  // Weekly occupancy: bill every reactor in the train for the cycle window
   const weeklyReactorOccupancy: number[][] = reactors.map(() =>
     new Array(WEEKS_IN_FY).fill(0)
   );
   const reactorIndex = new Map(reactors.map((r, i) => [r.id, i]));
   allBatches.forEach((b) => {
-    const rIdx = reactorIndex.get(b.reactorId)!;
-    // Distribute busy hours across weeks the cycle spans
-    let cursor = b.startMs;
-    while (cursor < b.endMs) {
-      const wIdx = weekIndexOf(cursor);
-      if (wIdx < 0) {
-        // Past horizon -> stop
-        break;
+    b.reactorIds.forEach((rid) => {
+      const rIdx = reactorIndex.get(rid);
+      if (rIdx === undefined) return;
+      let cursor = b.startMs;
+      while (cursor < b.endMs) {
+        const wIdx = weekIndexOf(cursor);
+        if (wIdx < 0) break;
+        const weekEnd =
+          FY_WEEKS[wIdx].start.getTime() + 7 * 24 * 3600 * 1000;
+        const segmentEnd = Math.min(b.endMs, weekEnd);
+        const hours = (segmentEnd - cursor) / 3600000;
+        weeklyReactorOccupancy[rIdx][wIdx] += hours;
+        cursor = segmentEnd;
       }
-      const weekEnd = FY_WEEKS[wIdx].start.getTime() + 7 * 24 * 3600 * 1000;
-      const segmentEnd = Math.min(b.endMs, weekEnd);
-      const hours = (segmentEnd - cursor) / 3600000;
-      weeklyReactorOccupancy[rIdx][wIdx] += hours;
-      cursor = segmentEnd;
-    }
+    });
   });
 
   const fyBatches = allBatches.filter((b) => b.inFY).length;

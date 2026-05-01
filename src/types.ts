@@ -40,7 +40,10 @@ export interface BatchScheduleEntry {
   stageNo: number;
   stageName: string;
   batchNo: number;
+  /** Primary / lead reactor in the train (= reactorIds[0]). Kept for backwards compat. */
   reactorId: string;
+  /** Full reactor train: every reactor locked for the cycle window. */
+  reactorIds: string[];
   startMs: number;
   endMs: number;
   analysisEndMs: number;
