@@ -217,6 +217,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
                     key={r.id}
                     type="button"
                     onClick={() => togglePool(r.id)}
+                    title={r.name === r.id ? r.id : `${r.name} (id: ${r.id})`}
                     className={clsx(
                       "rounded-md border px-2 py-1 font-mono text-[11px] font-semibold transition",
                       on
@@ -225,7 +226,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
                     )}
                   >
                     <Beaker size={9} className="mr-1 inline opacity-70" />
-                    {r.id}
+                    {r.name}
                     {r.shared && (
                       <span className="ml-1 text-[8px] text-violet-300">★</span>
                     )}

@@ -95,9 +95,9 @@ export default function GanttTab() {
     () =>
       reactors.map((r) => ({
         value: r.id,
-        label: r.id,
+        label: r.name,
         group: r.reactorClass,
-        secondary: r.shared ? "shared ★" : undefined,
+        secondary: r.name === r.id ? (r.shared ? "★" : undefined) : `id: ${r.id}`,
       })),
     [reactors]
   );
@@ -143,7 +143,7 @@ export default function GanttTab() {
         out.push({
           key: r.id,
           reactorId: r.id,
-          label: r.id,
+          label: r.name,
           color: classColor(r.reactorClass),
           reactorClass: r.reactorClass,
           shared: r.shared,
@@ -470,16 +470,17 @@ export default function GanttTab() {
                     key={r.id}
                     style={{ height: rowH }}
                     className="flex items-center gap-2 border-b border-white/5 px-3 text-[11px] font-bold text-white"
+                    title={r.name === r.id ? r.id : `${r.name} (id: ${r.id})`}
                   >
                     <span
-                      className="inline-block h-2 w-2 rounded-sm"
+                      className="inline-block h-2 w-2 shrink-0 rounded-sm"
                       style={{
                         background: cls,
                         boxShadow: `0 0 6px ${cls}80`,
                       }}
                     />
-                    <span className="font-mono">{r.id}</span>
-                    <span className="text-[9px] uppercase text-ink-400">
+                    <span className="truncate">{r.name}</span>
+                    <span className="shrink-0 text-[9px] uppercase text-ink-400">
                       {r.reactorClass.charAt(0)}
                     </span>
                     {r.shared && (
@@ -636,7 +637,14 @@ export default function GanttTab() {
                                 {b.batchId} · S{b.stageNo} · #{b.batchNo}
                               </div>
                               <div className="text-ink-300">
-                                Train: {b.reactorIds.join(" + ")}
+                                Train:{" "}
+                                {b.reactorIds
+                                  .map(
+                                    (id) =>
+                                      reactors.find((x) => x.id === id)?.name ??
+                                      id
+                                  )
+                                  .join(" + ")}
                               </div>
                               <div className="text-ink-300">
                                 Start: {new Date(b.startMs).toLocaleString()}

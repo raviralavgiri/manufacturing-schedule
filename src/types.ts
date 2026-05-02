@@ -1,7 +1,8 @@
 export type ReactorClass = "Small" | "Medium" | "Large";
 
 export interface Reactor {
-  id: string;
+  id: string;            // stable internal reference (e.g. "R101")
+  name: string;          // editable display name (defaults to id)
   reactorClass: ReactorClass;
   capacityKg: number;
   shared: boolean;

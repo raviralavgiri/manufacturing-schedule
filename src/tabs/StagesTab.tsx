@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Search, RotateCcw, Pencil, Plus, Trash2, Save, Lock } from "lucide-react";
+import {
+  Search,
+  Pencil,
+  Plus,
+  Trash2,
+  Lock,
+  ChevronDown,
+  ChevronRight,
+  Beaker,
+} from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
 import { Card, SectionHeader, Tag } from "../components/Primitives";
@@ -8,7 +17,17 @@ import PriorityPill from "../components/PriorityPill";
 import ReactorPoolEditor from "../components/ReactorPoolEditor";
 import type { Priority, StageMaster } from "../types";
 
-export default function MasterDataTab() {
+/**
+ * Stages tab — operational details for each stage.
+ *
+ * Layout:
+ *   1. Reactors panel (collapsible) — edit reactor display names; class
+ *      and capacity are read-only structural facts.
+ *   2. Stage table — the full editable per-stage master data
+ *      (Stage name, Reactor pool, Batch size, Cycle hrs, Analysis hrs,
+ *      Output target). Planned batches is derived.
+ */
+export default function StagesTab() {
   const apis = useStore((s) => s.apis);
   const reactors = useStore((s) => s.reactors);
   const updateStageField = useStore((s) => s.updateStageField);
@@ -16,17 +35,15 @@ export default function MasterDataTab() {
   const setStageName = useStore((s) => s.setStageName);
   const setStageReactorPool = useStore((s) => s.setStageReactorPool);
   const setApiPriority = useStore((s) => s.setApiPriority);
-  const setApiName = useStore((s) => s.setApiName);
+  const setReactorName = useStore((s) => s.setReactorName);
   const removeStage = useStore((s) => s.removeStage);
-  const resetToSeed = useStore((s) => s.resetToSeed);
   const recentlyAddedStageId = useStore((s) => s.recentlyAddedStageId);
   const clearRecentlyAdded = useStore((s) => s.clearRecentlyAdded);
-  const hasPersistedChanges = useStore((s) => s.hasPersistedChanges);
 
   const [q, setQ] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [confirmReset, setConfirmReset] = useState(false);
+  const [reactorsOpen, setReactorsOpen] = useState(true);
   const newRowRef = useRef<HTMLTableRowElement>(null);
 
   const sortedApis = useMemo(
@@ -64,31 +81,33 @@ export default function MasterDataTab() {
     );
   }, [sortedApis, q]);
 
-  const totalProjection = apis.reduce((acc, a) => acc + a.projectionKg, 0);
-  const totalBatches = apis.reduce(
-    (acc, a) => acc + a.stages.reduce((b, s) => b + s.plannedBatches, 0),
-    0
-  );
-
   useEffect(() => {
     if (!recentlyAddedStageId) return;
     const t1 = window.setTimeout(() => {
       newRowRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, 50);
-    const t2 = window.setTimeout(() => {
-      clearRecentlyAdded();
-    }, 3500);
+    const t2 = window.setTimeout(() => clearRecentlyAdded(), 3500);
     return () => {
       window.clearTimeout(t1);
       window.clearTimeout(t2);
     };
   }, [recentlyAddedStageId, clearRecentlyAdded]);
 
+  // ─── Reactors panel ────────────────────────────────────────────────────────
+  const reactorsByClass = useMemo(
+    () => ({
+      Small: reactors.filter((r) => r.reactorClass === "Small"),
+      Medium: reactors.filter((r) => r.reactorClass === "Medium"),
+      Large: reactors.filter((r) => r.reactorClass === "Large"),
+    }),
+    [reactors]
+  );
+
   return (
     <div className="space-y-4">
       <SectionHeader
-        title="Master Data"
-        subtitle={`Editable template — ${apis.length} APIs across ${rows.length} stages. Yellow cells are inputs.`}
+        title="Stages"
+        subtitle={`${apis.length} APIs · ${rows.length} stages · ${reactors.length} reactors. Edit any yellow cell to recompute the schedule.`}
         right={
           <div className="flex items-center gap-2">
             <div className="relative">
@@ -99,8 +118,8 @@ export default function MasterDataTab() {
               <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="Search API / stage…"
-                className="w-64 rounded-lg border border-white/10 bg-white/5 py-2 pl-9 pr-3 text-sm text-white placeholder-ink-400 outline-none focus:border-cyan-300/50 focus:bg-white/8"
+                placeholder="Search stage / API…"
+                className="w-64 rounded-lg border border-white/10 bg-white/5 py-2 pl-9 pr-3 text-sm text-white placeholder-ink-400 outline-none focus:border-cyan-300/50"
               />
             </div>
             <button
@@ -114,42 +133,6 @@ export default function MasterDataTab() {
             >
               <Plus size={13} /> {showForm ? "Close" : "Add Stage"}
             </button>
-            {confirmReset ? (
-              <div className="inline-flex items-center gap-1 rounded-lg border border-rose-300/40 bg-rose-400/10 px-2 py-1.5">
-                <span className="text-[10px] font-semibold text-rose-300">
-                  Discard local changes?
-                </span>
-                <button
-                  onClick={() => {
-                    resetToSeed();
-                    setConfirmReset(false);
-                  }}
-                  className="rounded-md bg-rose-400/20 px-2 py-0.5 text-[10px] font-bold text-rose-200 hover:bg-rose-400/40"
-                >
-                  Yes
-                </button>
-                <button
-                  onClick={() => setConfirmReset(false)}
-                  className="rounded-md bg-white/5 px-2 py-0.5 text-[10px] font-semibold text-ink-200 hover:bg-white/10"
-                >
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() =>
-                  hasPersistedChanges ? setConfirmReset(true) : resetToSeed()
-                }
-                className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-ink-200 transition hover:border-cyan-300/30 hover:bg-cyan-300/10 hover:text-cyan-300"
-                title={
-                  hasPersistedChanges
-                    ? "Reset to seed - clears localStorage"
-                    : "Already at seed values"
-                }
-              >
-                <RotateCcw size={13} /> Reset
-              </button>
-            )}
           </div>
         }
       />
@@ -161,28 +144,79 @@ export default function MasterDataTab() {
         />
       )}
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <KPI label="APIs" value={apis.length} />
-        <KPI label="Stages" value={rows.length} />
-        <KPI label="Planned Batches" value={totalBatches} />
-        <KPI
-          label="Projected Output"
-          value={`${(totalProjection / 1000).toFixed(1)}t`}
-        />
-      </div>
-
-      {hasPersistedChanges && (
-        <div className="flex items-center gap-2 rounded-xl border border-cyan-300/20 bg-cyan-300/5 px-3 py-2 text-xs text-cyan-200">
-          <Save size={12} className="text-cyan-300" />
-          <span>
-            <span className="font-bold">Saved locally.</span> Edits persist in
-            this browser; cloud sync runs if Supabase is configured. Click{" "}
-            <span className="font-bold">Reset</span> to discard and return to
-            the seed.
+      {/* Reactors panel */}
+      <Card className="overflow-hidden p-0">
+        <button
+          onClick={() => setReactorsOpen((v) => !v)}
+          className="flex w-full items-center justify-between border-b border-white/10 px-4 py-3 text-left transition hover:bg-white/5"
+        >
+          <div className="flex items-center gap-2">
+            {reactorsOpen ? (
+              <ChevronDown size={14} className="text-ink-400" />
+            ) : (
+              <ChevronRight size={14} className="text-ink-400" />
+            )}
+            <Beaker size={14} className="text-cyan-300" />
+            <h3 className="text-sm font-bold uppercase tracking-wider text-white">
+              Reactors ({reactors.length})
+            </h3>
+            <span className="text-[11px] text-ink-400">
+              · click any name to rename
+            </span>
+          </div>
+          <span className="text-[10px] text-ink-400">
+            Names are display-only labels; internal IDs are immutable.
           </span>
-        </div>
-      )}
+        </button>
+        {reactorsOpen && (
+          <div className="space-y-3 p-4">
+            {(["Small", "Medium", "Large"] as const).map((cls) => (
+              <div key={cls}>
+                <div className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-ink-400">
+                  {cls} ({reactorsByClass[cls].length})
+                </div>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                  {reactorsByClass[cls].map((r) => (
+                    <div
+                      key={r.id}
+                      className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] p-2"
+                    >
+                      <span
+                        className="h-2 w-2 shrink-0 rounded-sm"
+                        style={{
+                          background: classColor(r.reactorClass),
+                          boxShadow: `0 0 6px ${classColor(r.reactorClass)}80`,
+                        }}
+                      />
+                      <div className="flex flex-1 flex-col gap-0.5 overflow-hidden">
+                        <EditableTextCell
+                          value={r.name}
+                          onCommit={(v) => setReactorName(r.id, v)}
+                          placeholder={r.id}
+                        />
+                        <div className="flex items-center gap-1.5 text-[9px] uppercase tracking-wider text-ink-500">
+                          <span title="Stable internal id (immutable)">
+                            id: {r.id}
+                          </span>
+                          <span>·</span>
+                          <span>{r.capacityKg}L</span>
+                          {r.shared && (
+                            <Tag tone="violet" className="!px-1 !py-0 !text-[8px]">
+                              ★ shared
+                            </Tag>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
 
+      {/* Stages table */}
       <Card className="overflow-hidden p-0">
         <div className="max-h-[68vh] overflow-auto">
           <table className="min-w-full text-sm">
@@ -230,27 +264,20 @@ export default function MasterDataTab() {
                     )}
                   >
                     <td className="px-3 py-2 font-semibold text-white">
-                      <div className="flex items-start gap-2">
+                      <div className="flex items-center gap-2">
                         <span
-                          className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full"
+                          className="h-2.5 w-2.5 shrink-0 rounded-full"
                           style={{
                             background: r.color,
                             boxShadow: `0 0 8px 0 ${r.color}80`,
                           }}
                         />
-                        <div className="flex flex-1 flex-col gap-0.5">
-                          <EditableTextCell
-                            value={r.apiDisplayName}
-                            onCommit={(v) => setApiName(r.apiId, v)}
-                            placeholder={r.apiId}
-                          />
-                          <span
-                            className="font-mono text-[9px] uppercase tracking-wider text-ink-500"
-                            title="Stable internal ID (cannot be changed)"
-                          >
-                            id: {r.apiId}
-                          </span>
-                        </div>
+                        <span
+                          className="truncate"
+                          title={`${r.apiDisplayName} (id: ${r.apiId})`}
+                        >
+                          {r.apiDisplayName}
+                        </span>
                         <PriorityPill
                           value={r.priority}
                           onChange={(p) => setApiPriority(r.apiId, p)}
@@ -282,9 +309,7 @@ export default function MasterDataTab() {
                     <td className="px-3 py-2 text-right">
                       <EditableNumCell
                         value={r.cycleHours}
-                        onChange={(v) =>
-                          updateStageField(r.id, "cycleHours", v)
-                        }
+                        onChange={(v) => updateStageField(r.id, "cycleHours", v)}
                       />
                     </td>
                     <td className="px-3 py-2 text-right">
@@ -364,17 +389,17 @@ export default function MasterDataTab() {
           <span className="mr-1 font-bold">
             <Pencil size={12} className="inline" /> Editable:
           </span>
-          Stage Name, Reactor Pool, Batch Size, Cycle, Analysis, Output Target.
-          Type a new value (or click Reactor Pool to open the chip editor).
+          Reactor names, Stage Name, Reactor Pool (click cell), Batch Size,
+          Cycle, Analysis, Output Target.
         </div>
         <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs text-ink-300">
           <span className="mr-1 font-bold text-ink-100">
             <Lock size={11} className="inline" /> Derived:
           </span>
           <span className="font-mono text-cyan-300">
-            Planned Batches = ⌈ Output Target ÷ Batch Size ⌉
+            Planned Batches = ⌈ Output ÷ Batch Size ⌉
           </span>
-          . Actual Output = Planned × Batch Size (rounded up to whole batches).
+          . Actual Output = Planned × Batch Size.
         </div>
       </div>
     </div>
@@ -458,20 +483,13 @@ function EditableTextCell({
           (e.target as HTMLInputElement).blur();
         }
       }}
-      className="cell-yellow w-full max-w-[200px] rounded-md px-2 py-1 text-left font-mono text-xs transition"
+      className="cell-yellow w-full max-w-[180px] rounded-md px-2 py-1 text-left font-mono text-xs transition"
     />
   );
 }
 
-function KPI({ label, value }: { label: string; value: string | number }) {
-  return (
-    <Card className="!p-4">
-      <div className="text-[10px] uppercase tracking-[0.2em] text-ink-400">
-        {label}
-      </div>
-      <div className="mt-1 font-mono text-2xl font-bold tabular-nums text-white">
-        {value}
-      </div>
-    </Card>
-  );
+function classColor(cls: "Small" | "Medium" | "Large"): string {
+  if (cls === "Small") return "#00f0ff";
+  if (cls === "Medium") return "#a78bfa";
+  return "#f472b6";
 }

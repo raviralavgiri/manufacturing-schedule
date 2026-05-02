@@ -60,10 +60,20 @@ export default function ReactorPoolEditor({
         type="button"
         onClick={() => setOpen((v) => !v)}
         className="cell-yellow w-full max-w-[260px] rounded-md px-2 py-1 text-left font-mono text-[11px] tabular-nums transition hover:brightness-125"
-        title="Click to edit reactor pool"
+        title={`Click to edit reactor pool · ${value
+          .map((id) => {
+            const r = reactors.find((x) => x.id === id);
+            return r && r.name !== id ? `${r.name} (${id})` : id;
+          })
+          .join(", ") || "(empty)"}`}
       >
         <span className="line-clamp-1 text-amber-200">
-          {value.join(", ") || "(empty)"}
+          {value
+            .map((id) => {
+              const r = reactors.find((x) => x.id === id);
+              return r ? r.name : id;
+            })
+            .join(", ") || "(empty)"}
         </span>
       </button>
       {open && (
@@ -110,6 +120,7 @@ export default function ReactorPoolEditor({
                       key={r.id}
                       type="button"
                       onClick={() => toggle(r.id)}
+                      title={r.name === r.id ? r.id : `${r.name} (id: ${r.id})`}
                       className={clsx(
                         "rounded-md border px-1.5 py-0.5 font-mono text-[10px] font-semibold transition",
                         on
@@ -118,7 +129,7 @@ export default function ReactorPoolEditor({
                       )}
                     >
                       <Beaker size={8} className="mr-0.5 inline opacity-70" />
-                      {r.id}
+                      {r.name}
                       {r.shared && (
                         <span className="ml-0.5 text-[8px] text-violet-300">★</span>
                       )}

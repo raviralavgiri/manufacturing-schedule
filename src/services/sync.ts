@@ -1,4 +1,4 @@
-import type { API } from "../types";
+import type { API, Reactor } from "../types";
 import { getWorkspaceId, isSupabaseEnabled, supabase } from "./supabase";
 
 export type SyncStatus =
@@ -11,40 +11,49 @@ export type SyncStatus =
 
 const TABLE = "workspaces";
 
+export interface CloudSnapshot {
+  apis: API[];
+  reactors: Reactor[];
+}
+
 interface RowShape {
   id: string;
   apis: API[];
+  reactors?: Reactor[];
   updated_at?: string;
 }
 
 /**
- * Try to load APIs for this workspace from Supabase.
+ * Try to load workspace snapshot for this browser from Supabase.
  * Returns null if Supabase is disabled, the row doesn't exist, or any error.
  */
-export async function loadFromCloud(): Promise<API[] | null> {
+export async function loadFromCloud(): Promise<CloudSnapshot | null> {
   if (!isSupabaseEnabled || !supabase) return null;
   const id = getWorkspaceId();
   const { data, error } = await supabase
     .from(TABLE)
-    .select("apis")
+    .select("apis, reactors")
     .eq("id", id)
     .maybeSingle();
   if (error) {
-    // PGRST116 = no rows returned - that's fine, just means first-time user
     console.warn("[sync] loadFromCloud error:", error.message);
     return null;
   }
   if (!data) return null;
-  const row = data as Pick<RowShape, "apis">;
+  const row = data as Pick<RowShape, "apis" | "reactors">;
   if (!Array.isArray(row.apis)) return null;
-  return row.apis;
+  // Migrate reactors entries to ensure they have a name field
+  const reactors = Array.isArray(row.reactors)
+    ? row.reactors.map((r) => ({ ...r, name: r.name ?? r.id }))
+    : [];
+  return { apis: row.apis, reactors };
 }
 
 /**
- * Upsert the entire APIs array to Supabase. Throws on error so caller can
+ * Upsert the workspace snapshot to Supabase. Throws on error so caller can
  * mark sync status appropriately.
  */
-export async function saveToCloud(apis: API[]): Promise<void> {
+export async function saveToCloud(snapshot: CloudSnapshot): Promise<void> {
   if (!isSupabaseEnabled || !supabase) {
     throw new Error("Supabase not configured");
   }
@@ -52,14 +61,19 @@ export async function saveToCloud(apis: API[]): Promise<void> {
   const { error } = await supabase
     .from(TABLE)
     .upsert(
-      { id, apis, updated_at: new Date().toISOString() },
+      {
+        id,
+        apis: snapshot.apis,
+        reactors: snapshot.reactors,
+        updated_at: new Date().toISOString(),
+      },
       { onConflict: "id" }
     );
   if (error) throw new Error(error.message);
 }
 
 // ─── Debounced background sync ─────────────────────────────────────────────────
-let pending: API[] | null = null;
+let pending: CloudSnapshot | null = null;
 let inflight = false;
 let timer: number | undefined;
 
@@ -86,9 +100,12 @@ export function getSyncStatus(): SyncStatus {
 /**
  * Schedule a debounced cloud save. Coalesces rapid edits into a single write.
  */
-export function queueCloudSave(apis: API[], debounceMs = 800): void {
+export function queueCloudSave(
+  snapshot: CloudSnapshot,
+  debounceMs = 800
+): void {
   if (!isSupabaseEnabled) return;
-  pending = apis;
+  pending = snapshot;
   if (timer) window.clearTimeout(timer);
   timer = window.setTimeout(flush, debounceMs);
 }
@@ -103,15 +120,12 @@ async function flush() {
     await saveToCloud(snapshot);
     lastSyncedAt = Date.now();
     emit("synced");
-    // If more edits arrived during the in-flight write, immediately retry
     if (pending) {
       window.setTimeout(flush, 0);
     }
   } catch (err) {
     console.error("[sync] saveToCloud failed:", err);
     emit("error");
-    // Keep `pending` so the next change attempts again; the user could also
-    // refresh and try again.
   } finally {
     inflight = false;
   }

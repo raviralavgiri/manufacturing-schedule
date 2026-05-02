@@ -149,7 +149,10 @@ export default function ScheduleTab() {
             onChange={setReactorFilter}
             options={[
               { v: "ALL", l: "All Reactors" },
-              ...reactors.map((r) => ({ v: r.id, l: r.id })),
+              ...reactors.map((r) => ({
+                v: r.id,
+                l: r.name === r.id ? r.id : `${r.name} (${r.id})`,
+              })),
             ]}
           />
           <button
@@ -221,9 +224,16 @@ export default function ScheduleTab() {
                   <span className="font-mono text-ink-300">{b.batchNo}</span>
                   <span
                     className="font-mono font-semibold text-cyan-300 truncate"
-                    title={`Reactor train: ${b.reactorIds.join(", ")}`}
+                    title={`Reactor train: ${b.reactorIds
+                      .map((id) => {
+                        const r = reactors.find((x) => x.id === id);
+                        return r && r.name !== id ? `${r.name} (${id})` : id;
+                      })
+                      .join(" + ")}`}
                   >
-                    {b.reactorIds.join(", ")}
+                    {b.reactorIds
+                      .map((id) => reactors.find((x) => x.id === id)?.name ?? id)
+                      .join(", ")}
                   </span>
                   <span className="font-mono text-ink-200 truncate">
                     {fmtDateTime(b.startMs)}

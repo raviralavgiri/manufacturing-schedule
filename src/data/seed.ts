@@ -22,31 +22,41 @@ export const API_PALETTE = [
   "#fda4af", "#86efac", "#fcd34d", "#7dd3fc", "#d8b4fe",
 ];
 
-// Reactors: 20 total, with shared ones across stages
+// Reactors: 20 total, with shared ones across stages.
+// `id` is the stable internal reference; `name` is the editable display label.
+function r(
+  id: string,
+  cls: Reactor["reactorClass"],
+  capacityKg: number,
+  shared: boolean
+): Reactor {
+  return { id, name: id, reactorClass: cls, capacityKg, shared };
+}
+
 export const REACTORS: Reactor[] = [
   // Small reactors R101..R108 — R105-R108 are shared across multiple intermediate stages
-  { id: "R101", reactorClass: "Small", capacityKg: 200, shared: false },
-  { id: "R102", reactorClass: "Small", capacityKg: 200, shared: false },
-  { id: "R103", reactorClass: "Small", capacityKg: 250, shared: false },
-  { id: "R104", reactorClass: "Small", capacityKg: 250, shared: false },
-  { id: "R105", reactorClass: "Small", capacityKg: 300, shared: true },
-  { id: "R106", reactorClass: "Small", capacityKg: 300, shared: true },
-  { id: "R107", reactorClass: "Small", capacityKg: 350, shared: true },
-  { id: "R108", reactorClass: "Small", capacityKg: 350, shared: true },
+  r("R101", "Small", 200, false),
+  r("R102", "Small", 200, false),
+  r("R103", "Small", 250, false),
+  r("R104", "Small", 250, false),
+  r("R105", "Small", 300, true),
+  r("R106", "Small", 300, true),
+  r("R107", "Small", 350, true),
+  r("R108", "Small", 350, true),
   // Medium R201..R206 — R205, R206 shared
-  { id: "R201", reactorClass: "Medium", capacityKg: 500, shared: false },
-  { id: "R202", reactorClass: "Medium", capacityKg: 500, shared: false },
-  { id: "R203", reactorClass: "Medium", capacityKg: 600, shared: false },
-  { id: "R204", reactorClass: "Medium", capacityKg: 600, shared: false },
-  { id: "R205", reactorClass: "Medium", capacityKg: 700, shared: true },
-  { id: "R206", reactorClass: "Medium", capacityKg: 700, shared: true },
+  r("R201", "Medium", 500, false),
+  r("R202", "Medium", 500, false),
+  r("R203", "Medium", 600, false),
+  r("R204", "Medium", 600, false),
+  r("R205", "Medium", 700, true),
+  r("R206", "Medium", 700, true),
   // Large R301..R306 — final-stage / large volume
-  { id: "R301", reactorClass: "Large", capacityKg: 1000, shared: false },
-  { id: "R302", reactorClass: "Large", capacityKg: 1000, shared: false },
-  { id: "R303", reactorClass: "Large", capacityKg: 1200, shared: false },
-  { id: "R304", reactorClass: "Large", capacityKg: 1200, shared: false },
-  { id: "R305", reactorClass: "Large", capacityKg: 1500, shared: false },
-  { id: "R306", reactorClass: "Large", capacityKg: 1500, shared: false },
+  r("R301", "Large", 1000, false),
+  r("R302", "Large", 1000, false),
+  r("R303", "Large", 1200, false),
+  r("R304", "Large", 1200, false),
+  r("R305", "Large", 1500, false),
+  r("R306", "Large", 1500, false),
 ];
 
 // Distribution of stage counts per API to total 82 stages over 20 APIs:

@@ -28,6 +28,7 @@ export default function EquipmentTab() {
       const util = (total / cap) * 100;
       return {
         id: r.id,
+        name: r.name,
         cls: r.reactorClass,
         shared: r.shared,
         util: Math.min(util, 100),
@@ -96,8 +97,11 @@ export default function EquipmentTab() {
             {utilByReactor.map((r) => (
               <div key={r.id} className="space-y-0.5">
                 <div className="flex items-center justify-between text-[11px]">
-                  <span className="flex items-center gap-1.5 font-mono font-semibold text-white">
-                    {r.id}
+                  <span
+                    className="flex items-center gap-1.5 font-mono font-semibold text-white truncate"
+                    title={r.name === r.id ? r.id : `${r.name} (id: ${r.id})`}
+                  >
+                    <span className="truncate">{r.name}</span>
                     <span className="text-[9px] uppercase text-ink-400">
                       {r.cls}
                     </span>
@@ -186,7 +190,7 @@ export default function EquipmentTab() {
 function Heatmap({
   util,
 }: {
-  util: { id: string; cls: string; weekHours: number[] }[];
+  util: { id: string; name: string; cls: string; weekHours: number[] }[];
 }) {
   const cellW = 16;
   const cellH = 18;
@@ -194,7 +198,7 @@ function Heatmap({
     <div className="inline-block">
       {/* Top header (weeks) */}
       <div className="flex">
-        <div style={{ width: 80 }} />
+        <div style={{ width: 90 }} />
         {FY_WEEKS.map((w, i) => (
           <div
             key={i}
@@ -214,10 +218,11 @@ function Heatmap({
         return (
           <div key={r.id} className="flex items-center">
             <div
-              style={{ width: 80 }}
-              className="shrink-0 py-0.5 pr-2 text-right font-mono text-[10px] font-semibold text-white"
+              style={{ width: 90 }}
+              className="shrink-0 truncate py-0.5 pr-2 text-right font-mono text-[10px] font-semibold text-white"
+              title={r.name === r.id ? r.id : `${r.name} (id: ${r.id})`}
             >
-              {r.id}
+              {r.name}
             </div>
             {r.weekHours.map((h, i) => {
               const pct = Math.min(h / totalCap, 1);
@@ -236,7 +241,7 @@ function Heatmap({
                         : undefined,
                   }}
                   className="rounded-[3px] transition hover:scale-110 hover:ring-1 hover:ring-white"
-                  title={`${r.id} · ${FY_WEEKS[i].label}: ${h.toFixed(1)} hrs (${(pct * 100).toFixed(0)}%) · max=${maxHrs.toFixed(0)}h`}
+                  title={`${r.name === r.id ? r.id : `${r.name} (id: ${r.id})`} · ${FY_WEEKS[i].label}: ${h.toFixed(1)} hrs (${(pct * 100).toFixed(0)}%) · max=${maxHrs.toFixed(0)}h`}
                 />
               );
             })}

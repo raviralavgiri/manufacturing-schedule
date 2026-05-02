@@ -15,7 +15,8 @@ import { clsx } from "clsx";
 import { useStore } from "./store";
 import { Pill } from "./components/Primitives";
 import SyncBadge from "./components/SyncBadge";
-import MasterDataTab from "./tabs/MasterDataTab";
+import ApisTab from "./tabs/ApisTab";
+import StagesTab from "./tabs/StagesTab";
 import ScheduleTab from "./tabs/ScheduleTab";
 import GanttTab from "./tabs/GanttTab";
 import EquipmentTab from "./tabs/EquipmentTab";
@@ -23,7 +24,8 @@ import ClashTab from "./tabs/ClashTab";
 import QuarterlyTab from "./tabs/QuarterlyTab";
 
 type TabId =
-  | "master"
+  | "apis"
+  | "stages"
   | "schedule"
   | "gantt"
   | "equipment"
@@ -38,11 +40,18 @@ const TABS: {
   desc: string;
 }[] = [
   {
-    id: "master",
-    label: "Master Data",
+    id: "apis",
+    label: "APIs",
+    icon: <FlaskConical size={18} />,
+    accent: "amber",
+    desc: "API name, target qty, priority",
+  },
+  {
+    id: "stages",
+    label: "Stages",
     icon: <Database size={18} />,
     accent: "amber",
-    desc: "Editable APIs × Stages template",
+    desc: "Per-stage details + reactors",
   },
   {
     id: "schedule",
@@ -82,7 +91,7 @@ const TABS: {
 ];
 
 export default function App() {
-  const [active, setActive] = useState<TabId>("gantt");
+  const [active, setActive] = useState<TabId>("apis");
   const schedule = useStore((s) => s.schedule);
   const reactors = useStore((s) => s.reactors);
   const apis = useStore((s) => s.apis);
@@ -191,7 +200,8 @@ export default function App() {
       {/* Main */}
       <main className="mx-auto max-w-[1600px] px-4 py-6 sm:px-6">
         <div key={active} className="animate-fade-in">
-          {active === "master" && <MasterDataTab />}
+          {active === "apis" && <ApisTab />}
+          {active === "stages" && <StagesTab />}
           {active === "schedule" && <ScheduleTab />}
           {active === "gantt" && <GanttTab />}
           {active === "equipment" && <EquipmentTab />}
