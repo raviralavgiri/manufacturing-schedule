@@ -22,6 +22,7 @@ export interface NewStageInput {
   apiId: string;
   stageName: string;
   batchSizeKg: number;
+  inputKgPerBatch: number;
   reactorPool: string[];
   cycleHours: number;
   analysisHours: number;
@@ -44,7 +45,11 @@ interface AppState {
     stageId: string,
     field: keyof Pick<
       StageMaster,
-      "batchSizeKg" | "cycleHours" | "analysisHours" | "plannedBatches"
+      | "batchSizeKg"
+      | "inputKgPerBatch"
+      | "cycleHours"
+      | "analysisHours"
+      | "plannedBatches"
     >,
     value: number
   ) => void;
@@ -129,9 +134,13 @@ export const useStore = create<AppState>((set, get) => ({
         s.id === stageId ? { ...s, [field]: Math.max(1, value) } : s
       );
       const updated = { ...a, stages: updatedStages };
-      // Edits to batchSizeKg or plannedBatches change the cascade flow.
-      // Other fields (cycleHours, analysisHours) don't.
-      if (field === "batchSizeKg" || field === "plannedBatches") {
+      // Cascade fires when anything that changes material flow changes.
+      // cycleHours/analysisHours don't change material flow.
+      if (
+        field === "batchSizeKg" ||
+        field === "inputKgPerBatch" ||
+        field === "plannedBatches"
+      ) {
         return cascadePlannedBatches(updated);
       }
       return updated;
@@ -199,6 +208,7 @@ export const useStore = create<AppState>((set, get) => ({
       stageNo: nextStageNo,
       stageName: input.stageName.trim() || `Intermediate-${nextStageNo}`,
       batchSizeKg: Math.max(1, input.batchSizeKg),
+      inputKgPerBatch: Math.max(1, input.inputKgPerBatch),
       reactorPool: input.reactorPool.slice(),
       cycleHours: Math.max(1, input.cycleHours),
       analysisHours: Math.max(1, input.analysisHours),
@@ -295,13 +305,15 @@ export const useStore = create<AppState>((set, get) => ({
         while (stages.length < target) {
           const nextNo = stages.length + 1;
           const isFinal = nextNo === target;
+          const out = isFinal ? 100 : 80;
           stages.push({
             id: `${a.id}-S${nextNo}`,
             apiId: a.id,
             apiName: a.name,
             stageNo: nextNo,
             stageName: isFinal ? "Final API" : `Intermediate-${nextNo}`,
-            batchSizeKg: isFinal ? 100 : 80,
+            batchSizeKg: out,
+            inputKgPerBatch: out, // 1:1 yield default
             reactorPool: defaultPool.length > 0 ? defaultPool : [reactors[0]?.id ?? ""],
             cycleHours: isFinal ? 120 : 72,
             analysisHours: isFinal ? 48 : 24,
@@ -344,6 +356,7 @@ export const useStore = create<AppState>((set, get) => ({
             stageNo: 1,
             stageName: "Final API",
             batchSizeKg: 100,
+            inputKgPerBatch: 100, // 1:1 yield default
             reactorPool: reactors
               .filter((r) => r.reactorClass === "Large")
               .slice(0, 2)

@@ -344,6 +344,7 @@ export default function GanttTab() {
                   "End (Cycle)",
                   "Analysis End",
                   "FY",
+                  "Input kg",
                   "Output kg",
                 ];
                 const rows = filteredBatches.map((b) => [
@@ -361,6 +362,7 @@ export default function GanttTab() {
                   fmtDateTime(b.endMs),
                   fmtDateTime(b.analysisEndMs),
                   b.inFY ? "FY" : "Ovr",
+                  b.inputKg,
                   b.outputKg,
                 ]);
                 const filterTag = anyFilterActive ? "_filtered" : "";

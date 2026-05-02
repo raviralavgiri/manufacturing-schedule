@@ -86,6 +86,7 @@ export default function ScheduleTab() {
         "Analysis End",
         "FY",
         "Clash",
+        "Input kg",
         "Output kg",
       ],
       filtered.map((b) => [
@@ -104,6 +105,7 @@ export default function ScheduleTab() {
         fmtDateTime(b.analysisEndMs),
         b.inFY ? "FY" : "Ovr",
         b.clash ? "CLASH" : "OK",
+        b.inputKg,
         b.outputKg,
       ])
     );

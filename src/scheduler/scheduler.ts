@@ -217,6 +217,10 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
           inFY: isInFY(startMs) && isInFY(cycleEndMs),
           clash,
           outputKg: stage.batchSizeKg,
+          inputKg:
+            typeof stage.inputKgPerBatch === "number" && stage.inputKgPerBatch > 0
+              ? stage.inputKgPerBatch
+              : stage.batchSizeKg,
         };
         allBatches.push(entry);
       }

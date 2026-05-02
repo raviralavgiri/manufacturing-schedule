@@ -58,17 +58,23 @@ export default function StagesTab() {
       color: string;
       priority: Priority;
       apiDisplayName: string;
-      demandKg: number; // cascade input for this stage
+      /** Output demand on this stage = next stage's input consumed (or api.targetKg for final). */
+      demandKg: number;
     })[] = [];
     sortedApis.forEach((a) => {
       const sortedStages = [...a.stages].sort((x, y) => x.stageNo - y.stageNo);
-      // Walk backwards to compute the demand on each stage for display
+      // Walk backwards to compute the OUTPUT demand on each stage. Demand
+      // for stage N = input consumed by stage N+1 = planned(N+1) * input/batch(N+1).
       let nextDemand = a.targetKg;
       const demandByStageId = new Map<string, number>();
       for (let i = sortedStages.length - 1; i >= 0; i--) {
         const s = sortedStages[i];
         demandByStageId.set(s.id, nextDemand);
-        nextDemand = s.batchSizeKg * s.plannedBatches;
+        const inputPerBatch =
+          typeof s.inputKgPerBatch === "number" && s.inputKgPerBatch > 0
+            ? s.inputKgPerBatch
+            : s.batchSizeKg;
+        nextDemand = inputPerBatch * s.plannedBatches;
       }
       sortedStages.forEach((s) =>
         all.push({
@@ -237,7 +243,10 @@ export default function StagesTab() {
                 <Th yellow>Stage Name</Th>
                 <Th yellow>Reactor Pool</Th>
                 <Th align="right" yellow>
-                  Batch Size (kg)
+                  Input/Batch (kg)
+                </Th>
+                <Th align="right" yellow>
+                  Output/Batch (kg)
                 </Th>
                 <Th align="right" yellow>
                   Cycle (h)
@@ -249,10 +258,13 @@ export default function StagesTab() {
                   Required (kg)
                 </Th>
                 <Th align="right" locked>
-                  Planned Batches
+                  Planned
                 </Th>
                 <Th align="right" locked>
                   Actual Output (kg)
+                </Th>
+                <Th align="right" locked>
+                  Input Consumed (kg)
                 </Th>
                 <Th align="right">&nbsp;</Th>
               </tr>
@@ -260,6 +272,11 @@ export default function StagesTab() {
             <tbody>
               {rows.map((r, i) => {
                 const actualOutput = r.batchSizeKg * r.plannedBatches;
+                const inputPerBatch =
+                  typeof r.inputKgPerBatch === "number" && r.inputKgPerBatch > 0
+                    ? r.inputKgPerBatch
+                    : r.batchSizeKg;
+                const inputConsumed = inputPerBatch * r.plannedBatches;
                 const isNew = r.id === recentlyAddedStageId;
                 const isConfirming = r.id === confirmDeleteId;
                 return (
@@ -309,6 +326,14 @@ export default function StagesTab() {
                     </td>
                     <td className="px-3 py-2 text-right">
                       <EditableNumCell
+                        value={inputPerBatch}
+                        onChange={(v) =>
+                          updateStageField(r.id, "inputKgPerBatch", v)
+                        }
+                      />
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <EditableNumCell
                         value={r.batchSizeKg}
                         onChange={(v) =>
                           updateStageField(r.id, "batchSizeKg", v)
@@ -347,6 +372,15 @@ export default function StagesTab() {
                     <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-cyan-300">
                       {actualOutput.toLocaleString()}
                     </td>
+                    <td
+                      className="px-3 py-2.5 text-right font-mono tabular-nums text-ink-200"
+                      title="Total input consumed by this stage = planned batches × input/batch. This is the demand placed on the previous stage's output."
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        <Lock size={10} className="text-ink-500" />
+                        {inputConsumed.toLocaleString()}
+                      </span>
+                    </td>
                     <td className="px-2 py-2 text-right">
                       {isConfirming ? (
                         <div className="inline-flex items-center gap-1">
@@ -382,7 +416,7 @@ export default function StagesTab() {
               {rows.length === 0 && (
                 <tr>
                   <td
-                    colSpan={11}
+                    colSpan={13}
                     className="py-12 text-center text-sm text-ink-300"
                   >
                     No stages match. Click{" "}
@@ -401,18 +435,20 @@ export default function StagesTab() {
           <span className="mr-1 font-bold">
             <Pencil size={12} className="inline" /> Editable here:
           </span>
-          Reactor names, Stage Name, Reactor Pool, Batch Size, Cycle, Analysis.
-          Set the API target on the <span className="font-bold">APIs</span> tab.
+          Reactor names, Stage Name, Reactor Pool, Input/Batch (kg),
+          Output/Batch (kg), Cycle, Analysis. Set the API target on the{" "}
+          <span className="font-bold">APIs</span> tab.
         </div>
         <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs text-ink-300">
           <span className="mr-1 font-bold text-ink-100">
-            <Lock size={11} className="inline" /> Cascade:
+            <Lock size={11} className="inline" /> Cascade with yields:
           </span>
           <span className="font-mono text-cyan-300">
-            Planned = ⌈ Required ÷ Batch Size ⌉
+            Planned = ⌈ Required ÷ Output/Batch ⌉
           </span>
-          ; Actual Output = Planned × Batch Size; upstream Required = downstream
-          Actual Output. Final stage Required = API target.
+          ; Input Consumed = Planned × Input/Batch ⇒ becomes upstream Required.
+          Set Input/Batch &lt; Output/Batch for yield gain (rare); &gt; for yield
+          loss (common).
         </div>
       </div>
     </div>

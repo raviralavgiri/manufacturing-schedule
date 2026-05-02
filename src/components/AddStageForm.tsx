@@ -24,6 +24,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
   const [apiId, setApiId] = useState<string>(apis[0]?.id ?? "");
   const [stageName, setStageName] = useState("");
   const [batchSizeKg, setBatchSizeKg] = useState(100);
+  const [inputKgPerBatch, setInputKgPerBatch] = useState(100);
   const [cycleHours, setCycleHours] = useState(120);
   const [analysisHours, setAnalysisHours] = useState(48);
   const [plannedBatches, setPlannedBatches] = useState(10);
@@ -91,6 +92,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
       apiId,
       stageName,
       batchSizeKg,
+      inputKgPerBatch,
       cycleHours,
       analysisHours,
       plannedBatches,
@@ -162,10 +164,21 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
         </Field>
 
         <NumField
-          label="Batch Size (kg)"
+          label="Input/Batch (kg)"
+          value={inputKgPerBatch}
+          onChange={setInputKgPerBatch}
+          className="sm:col-span-1"
+        />
+        <NumField
+          label="Output/Batch (kg)"
           value={batchSizeKg}
-          onChange={setBatchSizeKg}
-          className="sm:col-span-2"
+          onChange={(v) => {
+            setBatchSizeKg(v);
+            // Convenience: if input is still at the previous default value
+            // matching the old output, keep it in sync (1:1 yield)
+            if (inputKgPerBatch === batchSizeKg) setInputKgPerBatch(v);
+          }}
+          className="sm:col-span-1"
         />
         <NumField
           label="Cycle (h)"
@@ -181,8 +194,11 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
         />
       </div>
       <p className="mt-1 text-[10px] text-ink-400">
-        Planned batches are auto-computed by the cascade after you add this
-        stage (uses the API's target output and downstream stages).
+        <span className="font-semibold text-ink-300">Input/Batch</span> is what
+        this stage consumes per batch (= upstream demand);{" "}
+        <span className="font-semibold text-ink-300">Output/Batch</span> is what
+        it produces. Set them equal for 1:1 yield. Planned batches are
+        auto-computed after the cascade fires.
       </p>
 
       {/* Row 2: Reactor Pool */}

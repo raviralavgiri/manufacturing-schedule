@@ -26,7 +26,7 @@ export function loadPersisted(): PersistedSnapshot | null {
     if (!parsed.apis.every((a) => a && a.id && Array.isArray(a.stages))) {
       return null;
     }
-    // Migrate: ensure priority + targetKg fields exist
+    // Migrate: ensure priority + targetKg + inputKgPerBatch fields exist
     const apis = parsed.apis.map((a) => {
       const priority = (a.priority ?? 3) as API["priority"];
       // If targetKg is missing (old save), derive it from the final stage's
@@ -44,7 +44,18 @@ export function loadPersisted(): PersistedSnapshot | null {
           targetKg = 0;
         }
       }
-      return { ...a, priority, targetKg };
+      // Ensure every stage has inputKgPerBatch (defaults to batchSizeKg for
+      // 1:1 yield - matches old behavior for back-compat)
+      const stages = Array.isArray(a.stages)
+        ? a.stages.map((s) => ({
+            ...s,
+            inputKgPerBatch:
+              typeof s.inputKgPerBatch === "number" && s.inputKgPerBatch > 0
+                ? s.inputKgPerBatch
+                : s.batchSizeKg,
+          }))
+        : [];
+      return { ...a, priority, targetKg, stages };
     });
     // Migrate: reactors may be missing in old saves; if present, ensure each
     // has a `name` field (default to id).

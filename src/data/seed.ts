@@ -178,6 +178,7 @@ export function buildSeed(): { apis: API[]; reactors: Reactor[] } {
         stageNo: s + 1,
         stageName,
         batchSizeKg,
+        inputKgPerBatch: batchSizeKg, // 1:1 yield default; user can adjust
         reactorPool: pool,
         cycleHours,
         analysisHours,

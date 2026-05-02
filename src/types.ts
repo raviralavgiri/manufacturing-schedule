@@ -14,7 +14,18 @@ export interface StageMaster {
   apiName: string;
   stageNo: number;
   stageName: string;
+  /**
+   * Output produced per batch (kg). This is what the cascade uses to compute
+   * `plannedBatches` from the downstream stage's input demand.
+   */
   batchSizeKg: number;
+  /**
+   * Input consumed per batch (kg). May differ from batchSizeKg when the
+   * reaction has a yield ≠ 100% (e.g. yield loss → input > output;
+   * crystallization with carriers → input < output). Defaults to batchSizeKg
+   * (1:1 yield) on legacy data via the storage loader.
+   */
+  inputKgPerBatch: number;
   reactorPool: string[];
   cycleHours: number;
   analysisHours: number;
@@ -58,7 +69,10 @@ export interface BatchScheduleEntry {
   analysisEndMs: number;
   inFY: boolean;
   clash: boolean;
+  /** Output produced by this batch (kg) — typically equals the stage's batchSizeKg. */
   outputKg: number;
+  /** Input consumed by this batch (kg) — equals stage.inputKgPerBatch. */
+  inputKg: number;
 }
 
 export interface ScheduleResult {
