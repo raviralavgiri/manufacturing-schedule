@@ -31,9 +31,11 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       - name: Build
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        # Supabase credentials are baked into the bundle in obfuscated form
+        # (see src/config/supabaseConfig.ts), so no env-var injection needed.
+        # Env vars still work as an override if you'd rather keep them out
+        # of the committed source — set them as repo secrets and add an
+        # `env:` block here.
         run: npm run build
 
       - name: SPA fallback (404 -> index)

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "obfuscate-credentials": "node scripts/obfuscate-credentials.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.1",

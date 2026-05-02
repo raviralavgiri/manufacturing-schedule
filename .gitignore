@@ -9,5 +9,7 @@ tsconfig.tsbuildinfo
 # env files - never commit secrets
 .env
 .env.local
+.env.development.local
+.env.production.local
 .env.*.local
 !.env.example

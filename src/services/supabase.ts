@@ -1,18 +1,12 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { getSupabaseConfig } from "../config/supabaseConfig";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as
-  | string
-  | undefined;
+const config = getSupabaseConfig();
 
-export const isSupabaseEnabled =
-  typeof SUPABASE_URL === "string" &&
-  SUPABASE_URL.length > 0 &&
-  typeof SUPABASE_ANON_KEY === "string" &&
-  SUPABASE_ANON_KEY.length > 0;
+export const isSupabaseEnabled = config !== null;
 
-export const supabase: SupabaseClient | null = isSupabaseEnabled
-  ? createClient(SUPABASE_URL!, SUPABASE_ANON_KEY!, {
+export const supabase: SupabaseClient | null = config
+  ? createClient(config.url, config.key, {
       auth: { persistSession: false },
     })
   : null;
@@ -47,7 +41,6 @@ export function setWorkspaceId(id: string): void {
 }
 
 function newWorkspaceId(): string {
-  // crypto.randomUUID is widely supported; fallback for very old browsers
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
   }

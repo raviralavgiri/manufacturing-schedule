@@ -1,6 +1,6 @@
 # API Manufacturing Schedule · FY 2026-27
 
-🔗 **Live demo:** https://raviralavgiri.github.io/manufacturing-schedule/
+🔗 **Live demo:** [https://raviralavgiri.github.io/manufacturing-schedule/](https://raviralavgiri.github.io/manufacturing-schedule/)
 
 A modern, glassmorphic React webapp that replaces an Excel-based pharmaceutical manufacturing scheduler. Given master data for **20 APIs**, **82 stages**, and **20 reactors** (some shared across stages), it produces an **848-batch yearly schedule** with **zero reactor clashes**, weekly Gantt, equipment heatmap, clash report, and quarterly summary.
 
@@ -35,14 +35,16 @@ A modern, glassmorphic React webapp that replaces an Excel-based pharmaceutical 
 
 ## Tabs
 
-| Tab | What you see |
-|-----|--------------|
-| Master Data | 82-row editable template (yellow = input, lock = derived) |
-| Schedule | All 848 batches with start / end / analysis dates, FY & clash flags, CSV export |
-| Gantt Chart | Weekly Apr 26 – Mar 27, color per API, faded tail = analysis window. Three modes: by Stage / by API / by Reactor |
-| Equipment | 20-reactor × 52-week occupancy heatmap, util bars, weekly fleet trend |
-| Clash Report | Zero-clash hero + sequencer explanation + shared-reactor proof |
-| Quarterly Summary | Pivot (API × Stage × Q1–Q4 + FY total) + bar chart + treemap |
+
+| Tab               | What you see                                                                                                     |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Master Data       | 82-row editable template (yellow = input, lock = derived)                                                        |
+| Schedule          | All 848 batches with start / end / analysis dates, FY & clash flags, CSV export                                  |
+| Gantt Chart       | Weekly Apr 26 – Mar 27, color per API, faded tail = analysis window. Three modes: by Stage / by API / by Reactor |
+| Equipment         | 20-reactor × 52-week occupancy heatmap, util bars, weekly fleet trend                                            |
+| Clash Report      | Zero-clash hero + sequencer explanation + shared-reactor proof                                                   |
+| Quarterly Summary | Pivot (API × Stage × Q1–Q4 + FY total) + bar chart + treemap                                                     |
+
 
 ---
 
@@ -57,13 +59,14 @@ This section is the deepest documentation in the repo. It explains every concept
 #### Concrete example
 
 > Pool `[R101, R102, R103]` for a stage with **10 batches**, cycle 96 h, analysis 24 h. 
-> 
+>
 > - Batch 1: locks R101+R102+R103 from week 1 → end of week 1 (96 h)
 > - Batch 2 cannot start until **all three** are free → starts immediately after batch 1 ends. Total 10 batches × ~96 h ≈ **40 days serial**.
 > - Even though there are 3 reactors, **only one batch runs at a time** for this stage.
 > - But: a *different* stage's batch with pool `[R104, R105]` can run in parallel during this whole time.
 
 #### Why this matters
+
 - Total throughput is bounded by `cycleHours × plannedBatches` per stage train, not by `reactor count ÷ pool size`.
 - Shared reactors (one reactor in multiple stages' pools) become heavy serialization points — when API-A's S2 needs R107 and API-B's S1 also needs R107, one waits.
 - Smaller train sizes (1–2 reactors) → higher throughput. Larger trains (3+) → fewer parallel batches but more equipment per batch.
@@ -135,7 +138,7 @@ flowchart TD
     Outer[for round = 0 .. maxBatches]
     Mid[for each API in priorityOrder]
     Inner[for each Stage 1..N]
-    Skip{round &lt; stage.<br/>plannedBatches?}
+    Skip{round < stage.<br/>plannedBatches?}
     EarlyStart[earliestStart = max<br/>prev-stage-analysis-end + 4h,<br/>scheduleHorizon]
     PickReactor[trainStart = max<br/>earliestStart, max-of-pool-last-cycle-end]
     Book[Book ALL reactors in pool:<br/>start, start+cycleHours<br/>analysis tail follows]
@@ -150,13 +153,17 @@ flowchart TD
     Outer -- all rounds done --> Done
 ```
 
+
+
 #### 2.1 The three loops in plain English
 
-| Loop | What it iterates | Why |
-|---|---|---|
-| Outer: **round** | 0 .. (max planned batches across any stage) | Campaign style — batch #1 of every (API, stage) before any batch #2. Spreads load over the year. |
-| Middle: **API in priority order** | P1 → ... → P5 | High-priority APIs grab the earliest free reactor slots in each round. |
-| Inner: **stage 1..N** | within each API | Stage N+1's batches require Stage N's batch to have finished analysis (waits with a 4-hour transfer buffer). |
+
+| Loop                              | What it iterates                            | Why                                                                                                          |
+| --------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Outer: **round**                  | 0 .. (max planned batches across any stage) | Campaign style — batch #1 of every (API, stage) before any batch #2. Spreads load over the year.             |
+| Middle: **API in priority order** | P1 → ... → P5                               | High-priority APIs grab the earliest free reactor slots in each round.                                       |
+| Inner: **stage 1..N**             | within each API                             | Stage N+1's batches require Stage N's batch to have finished analysis (waits with a 4-hour transfer buffer). |
+
 
 #### 2.2 The two hard constraints
 
@@ -208,23 +215,28 @@ export function weekIndexOf(ms: number): number {
 
 API-03 has 4 stages with **small reactor trains** (1–3 reactors each, deterministic seed):
 
-| Stage | Cycle | Analysis | Reactor Train | Planned Batches |
-|---|---|---|---|---|
-| **S1** Intermediate-1 | 60 h | 30 h | `[R104, R105]` (2-reactor) | 11 |
-| **S2** Intermediate-2 | 72 h | 36 h | `[R107, R108, R201]` (3-reactor) | 11 |
-| **S3** Intermediate-3 | 84 h | 48 h | `[R204]` (single-reactor) | 11 |
-| **S4** Final API     | 120 h | 60 h | `[R302, R303]` (2-reactor) | 11 |
+
+| Stage                 | Cycle | Analysis | Reactor Train                    | Planned Batches |
+| --------------------- | ----- | -------- | -------------------------------- | --------------- |
+| **S1** Intermediate-1 | 60 h  | 30 h     | `[R104, R105]` (2-reactor)       | 11              |
+| **S2** Intermediate-2 | 72 h  | 36 h     | `[R107, R108, R201]` (3-reactor) | 11              |
+| **S3** Intermediate-3 | 84 h  | 48 h     | `[R204]` (single-reactor)        | 11              |
+| **S4** Final API      | 120 h | 60 h     | `[R302, R303]` (2-reactor)       | 11              |
+
 
 The horizon is **Apr 1 2026 08:00**. Below is API-03's first batch through all 4 stages (assume R104, R105, R107, R108, R201, R204, R302, R303 are all initially idle):
 
-| Step | Stage | earliestStart | Train ready at | Books cycle | Notes |
-|---|---|---|---|---|---|
-| 1 | S1·b1 | Apr 1 08:00 | R104=Apr 1, R105=Apr 1 → max=**Apr 1 08:00** | Apr 1 08:00 → Apr 3 20:00 (60 h) on R104+R105 | Both reactors locked together |
-| 2 | S2·b1 | S1 analysis end + 4 h = Apr 5 02:00 + 4 = **Apr 5 06:00** | R107=Apr 1, R108=Apr 1, R201=Apr 1 → max=**Apr 5 06:00** | Apr 5 06:00 → Apr 8 06:00 (72 h) on R107+R108+R201 | Stage 2 waited for stage 1's analysis tail |
-| 3 | S3·b1 | S2 analysis end + 4 h = Apr 9 18:00 + 4 = **Apr 9 22:00** | R204=Apr 1 → max=**Apr 9 22:00** | Apr 9 22:00 → Apr 13 10:00 (84 h) on R204 | Single-reactor train |
-| 4 | S4·b1 | S3 analysis end + 4 h = Apr 15 10:00 + 4 = **Apr 15 14:00** | R302=Apr 1, R303=Apr 1 → max=**Apr 15 14:00** | Apr 15 14:00 → Apr 20 14:00 (120 h) on R302+R303 | Final API train |
+
+| Step | Stage | earliestStart                                               | Train ready at                                           | Books cycle                                        | Notes                                      |
+| ---- | ----- | ----------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------- | ------------------------------------------ |
+| 1    | S1·b1 | Apr 1 08:00                                                 | R104=Apr 1, R105=Apr 1 → max=**Apr 1 08:00**             | Apr 1 08:00 → Apr 3 20:00 (60 h) on R104+R105      | Both reactors locked together              |
+| 2    | S2·b1 | S1 analysis end + 4 h = Apr 5 02:00 + 4 = **Apr 5 06:00**   | R107=Apr 1, R108=Apr 1, R201=Apr 1 → max=**Apr 5 06:00** | Apr 5 06:00 → Apr 8 06:00 (72 h) on R107+R108+R201 | Stage 2 waited for stage 1's analysis tail |
+| 3    | S3·b1 | S2 analysis end + 4 h = Apr 9 18:00 + 4 = **Apr 9 22:00**   | R204=Apr 1 → max=**Apr 9 22:00**                         | Apr 9 22:00 → Apr 13 10:00 (84 h) on R204          | Single-reactor train                       |
+| 4    | S4·b1 | S3 analysis end + 4 h = Apr 15 10:00 + 4 = **Apr 15 14:00** | R302=Apr 1, R303=Apr 1 → max=**Apr 15 14:00**            | Apr 15 14:00 → Apr 20 14:00 (120 h) on R302+R303   | Final API train                            |
+
 
 Then the loop moves to API-04 (P1) → … → API-20 (P5) → back to **API-03 round 1**. By the time API-03 starts S1 batch 2:
+
 - R104+R105 must both be free at the same time
 - They might already be busy because **API-15 also uses [R105, R106]** for its S2 → contention
 - API-03 S1 batch 2 starts at the later of: (i) the prev round-0 batch's release time, (ii) train re-availability after sharing — typically several days after batch 1.
@@ -276,18 +288,20 @@ for (const rid of stage.reactorPool) {
 Earlier the algorithm only looked at each reactor's **last booking end**. That broke whenever a high-priority API's late stage forced a booking into the future:
 
 > **Bug scenario:** R107 is in API-01's S4 train. API-01's stage chain (S1 → S2 → S3 → S4) pushes its S4 batch to **week 5**. R107 books `[week 5, week 6]`.
-> 
+>
 > **Naive algorithm:** When API-02's S1 wants R107 (which is in API-02's S1 pool), `lastEnd = week 6` → books at week 6. **Weeks 0–5 wasted.**
-> 
+>
 > **Gap-finder:** Walks R107's bookings, sees `[week 5, week 6]` is the only one. Notes that `[week 0, week 5]` is free. Returns `t = week 0`. API-02's S1 books `[week 0, week 1]`.
 
 Real measured impact on the spec data:
 
-| Metric | Before fix (last-end only) | After fix (gap-finder) |
-|---|---|---|
-| Batches in FY | 304 | **641** |
-| Overflow | 544 | **207** |
-| Reactor clashes | 0 | 0 |
+
+| Metric          | Before fix (last-end only) | After fix (gap-finder) |
+| --------------- | -------------------------- | ---------------------- |
+| Batches in FY   | 304                        | **641**                |
+| Overflow        | 544                        | **207**                |
+| Reactor clashes | 0                          | 0                      |
+
 
 The gap-finder more than **doubled** the in-FY throughput — same total work, same equipment, just better packing.
 
@@ -334,7 +348,10 @@ sequenceDiagram
     Store-->>All Tabs: re-render with new schedule
 ```
 
+
+
 Two debounce timers:
+
 - **350 ms** for re-running the scheduler — coalesces rapid keystrokes during a number edit
 - **800 ms** for the Supabase upsert — batches multiple edits into one network call
 
@@ -380,69 +397,108 @@ npm run dev
 # open http://localhost:5173
 ```
 
-## Cloud persistence with Supabase (optional, free tier)
+## Cloud persistence with Supabase
 
-The app works without any setup (localStorage only). To make your edits sync
-across browsers / devices, plug in a free Supabase project:
+Cloud sync uses Supabase free tier. Credentials are baked into the source
+bundle in **obfuscated form** (XOR + hex), so the deployed site is
+self-contained and works without GitHub Actions secrets injection.
 
-### 1. Create a free Supabase project
+### What ships in the bundle
 
-1. Sign up at [supabase.com](https://supabase.com) (free tier: 500 MB DB, no credit card)
-2. Create a new project and pick any password (you won't need it)
-3. Wait ~30 seconds for it to provision
+- `src/config/supabaseConfig.ts` contains `ENCODED_URL` and `ENCODED_KEY` —
+hex blobs that are XOR-decoded at runtime against a salt that's also in
+the bundle.
+- The decoder runs once at app startup; the resulting plain values never
+appear as a literal string in the source.
 
-### 2. Run the schema migration
+### ⚠️ Important: this is obfuscation, not encryption
 
-1. In your Supabase dashboard, go to **SQL Editor → New query**
-2. Paste the contents of [`supabase/schema.sql`](./supabase/schema.sql) and run it
-3. Verify the `workspaces` table appears under **Table Editor**
+The salt and algorithm are in the same bundle as the encoded blobs, so a
+determined inspector can recover the plaintext (one debugger statement is
+enough). The point is just to keep the credentials from showing up via
+plain `grep` or DevTools "Search all files" — nothing more.
 
-### 3. Grab your project URL + anon key
+The actual security boundary is **Supabase Row-Level Security** policies
+defined in `[supabase/schema.sql](./supabase/schema.sql)`. With the
+publishable key (`sb_publishable_`* is designed to be public), the worst
+anyone can do is read/write the `workspaces` table — exactly what's
+allowed by the schema. For multi-user production, add Supabase Auth and
+tighten the RLS policies to `auth.uid() = owner_uuid`.
 
-In your dashboard go to **Settings → API**:
-- Copy **Project URL** → `VITE_SUPABASE_URL`
-- Copy **anon / public** key → `VITE_SUPABASE_ANON_KEY`
+### Setting up your own Supabase project (one-time)
 
-### 4. Configure local dev
+1. Sign up at [supabase.com](https://supabase.com) — free tier, 500 MB DB,
+  no credit card.
+2. Create a new project; wait ~30 seconds for provisioning.
+3. **SQL Editor → New query**, paste the contents of
+  `[supabase/schema.sql](./supabase/schema.sql)`, click **Run**.
+4. **Settings → API**, copy the **Project URL** and **anon / publishable**
+  key.
+
+### Bake credentials into the bundle (obfuscated)
 
 ```bash
-cp .env.example .env.local
-# then edit .env.local with your values
+npm run obfuscate-credentials -- \
+  "https://YOUR.supabase.co" \
+  "sb_publishable_YOUR_KEY"
+
+# Paste the printed ENCODED_URL and ENCODED_KEY into
+# src/config/supabaseConfig.ts (top-level export const lines).
+```
+
+Commit the change, push to main → site auto-deploys with cloud sync
+enabled. Anyone who clones the repo gets the same setup with no extra
+configuration.
+
+### Local dev override
+
+For local development you can override the obfuscated config with env
+vars — useful while testing key rotations or pointing at a different
+project. Use `.env.development.local` (dev-mode only — never inlined
+into production builds, even if you accidentally `npm run build` while
+the file exists):
+
+```bash
+cp .env.example .env.development.local
+# edit .env.development.local with your URL + key
 npm run dev
 ```
 
-You should see the **"Cloud ready"** badge in the top-right; edits will show
-**"Syncing… → Synced"**.
+> ⚠️ Don't use `.env.local` (without `.development`) — Vite reads that
+> for **both** dev and production builds, which would defeat the
+> obfuscation. The repo's `.gitignore` blocks both, but the naming
+> matters for build hygiene.
 
-### 5. Configure the deployed site (GitHub Pages)
+Resolution order in `getSupabaseConfig()`:
 
-Add the same two values as **GitHub repo secrets**:
+1. `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` env vars (local dev)
+2. Obfuscated `ENCODED_URL` / `ENCODED_KEY` from
+  `src/config/supabaseConfig.ts` (always present in deployed builds)
+3. `null` → cloud sync disabled, app falls back to localStorage only
 
-```bash
-gh secret set VITE_SUPABASE_URL    --body "https://YOUR.supabase.co"
-gh secret set VITE_SUPABASE_ANON_KEY --body "eyJhbGciOi..."
-```
+### Rotating credentials
 
-Push any commit to main → the Action picks them up at build time and
-deploys with cloud sync enabled.
+If you need to rotate the Supabase key:
+
+1. Reset it in **Supabase dashboard → Settings → API**
+2. Re-run `npm run obfuscate-credentials -- "<URL>" "<NEW_KEY>"`
+3. Paste the new `ENCODED_URL` / `ENCODED_KEY` into
+  `src/config/supabaseConfig.ts`
+4. Commit + push → next deploy picks up the new key
 
 ### Sharing a workspace across devices
 
-Each browser generates a UUID stored in `localStorage["pharma:workspaceId:v1"]`. To use the same workspace on another device:
+Each browser generates a UUID stored in
+`localStorage["pharma:workspaceId:v1"]`. To use the same workspace on
+another device:
 
-1. Click the **copy** icon in the Sync badge (top-right) on the source browser
+1. Click the **copy** icon in the Sync badge (top-right) on the source
+  browser.
 2. On the new browser, open DevTools console and run:
-   ```js
+  ```js
    localStorage.setItem("pharma:workspaceId:v1", "PASTE-UUID-HERE");
    location.reload();
-   ```
-
-### Security notes
-
-The `anon` key is embedded in the public JS bundle (this is normal for any
-client-only Supabase app). The default RLS policies in `schema.sql` allow
-anonymous CRUD — fine for a personal demo. For multi-user production, add
-Supabase Auth and tighten the RLS policies to `auth.uid() = owner_uuid`.
+  ```
 
 ## Build
 
@@ -515,3 +571,4 @@ npx tsx scripts/verify.mjs
 #   Overflow    : 207
 #   Clashes     : 0
 ```
+
