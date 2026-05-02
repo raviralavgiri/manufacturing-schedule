@@ -30,6 +30,7 @@ export default function ApisTab() {
   const setApiName = useStore((s) => s.setApiName);
   const setApiPriority = useStore((s) => s.setApiPriority);
   const setApiTargetOutput = useStore((s) => s.setApiTargetOutput);
+  const setApiStageCount = useStore((s) => s.setApiStageCount);
   const addAPI = useStore((s) => s.addAPI);
   const removeAPI = useStore((s) => s.removeAPI);
   const resetToSeed = useStore((s) => s.resetToSeed);
@@ -61,7 +62,7 @@ export default function ApisTab() {
     );
   }, [sortedApis, q]);
 
-  // Per-API derived numbers (final stage, target output, actual output, planned batches)
+  // Per-API derived numbers
   const enriched = useMemo(
     () =>
       filteredApis.map((api) => {
@@ -71,13 +72,13 @@ export default function ApisTab() {
                 s.stageNo > acc.stageNo ? s : acc
               )
             : null;
-        const targetOutputKg = finalStage
+        const actualOutputKg = finalStage
           ? finalStage.batchSizeKg * finalStage.plannedBatches
           : 0;
         return {
           api,
           finalStage,
-          targetOutputKg,
+          actualOutputKg,
           plannedBatchesAcrossStages: api.stages.reduce(
             (acc, s) => acc + s.plannedBatches,
             0
@@ -189,20 +190,27 @@ export default function ApisTab() {
               <tr className="text-left text-[11px] uppercase tracking-wider text-ink-300">
                 <Th yellow>API Name</Th>
                 <Th yellow>Priority</Th>
-                <Th align="right">Stages</Th>
+                <Th align="right" yellow>
+                  Stages
+                </Th>
                 <Th align="right" yellow>
                   Target Output (kg)
                 </Th>
                 <Th align="right" locked>
+                  Actual Output (kg)
+                </Th>
+                <Th align="right" locked>
                   Final Batches
                 </Th>
-                <Th align="right">Total Planned Batches</Th>
+                <Th align="right" locked>
+                  Total Batches
+                </Th>
                 <Th align="right">&nbsp;</Th>
               </tr>
             </thead>
             <tbody>
               {enriched.map(
-                ({ api, finalStage, targetOutputKg, plannedBatchesAcrossStages }, i) => {
+                ({ api, finalStage, actualOutputKg, plannedBatchesAcrossStages }, i) => {
                   const isNew = api.id === recentlyAddedApiId;
                   const isConfirming = api.id === confirmDeleteId;
                   return (
@@ -245,13 +253,19 @@ export default function ApisTab() {
                           onChange={(p) => setApiPriority(api.id, p)}
                         />
                       </td>
-                      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-ink-200">
-                        {api.stages.length}
+                      <td className="px-3 py-2 text-right">
+                        <EditableNumCell
+                          value={api.stages.length}
+                          min={1}
+                          max={10}
+                          width="w-20"
+                          onChange={(v) => setApiStageCount(api.id, v)}
+                        />
                       </td>
                       <td className="px-3 py-2 text-right">
                         {finalStage ? (
                           <EditableNumCell
-                            value={targetOutputKg}
+                            value={api.targetKg}
                             onChange={(v) => setApiTargetOutput(api.id, v)}
                           />
                         ) : (
@@ -260,14 +274,20 @@ export default function ApisTab() {
                           </span>
                         )}
                       </td>
+                      <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-cyan-300">
+                        {actualOutputKg.toLocaleString()}
+                      </td>
                       <td className="px-3 py-2.5 text-right font-mono tabular-nums text-ink-200">
                         <span className="inline-flex items-center gap-1">
                           <Lock size={10} className="text-ink-500" />
                           {finalStage?.plannedBatches ?? 0}
                         </span>
                       </td>
-                      <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-cyan-300">
-                        {plannedBatchesAcrossStages}
+                      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-ink-200">
+                        <span className="inline-flex items-center gap-1">
+                          <Lock size={10} className="text-ink-500" />
+                          {plannedBatchesAcrossStages}
+                        </span>
                       </td>
                       <td className="px-2 py-2 text-right">
                         {isConfirming ? (
@@ -305,7 +325,7 @@ export default function ApisTab() {
               {filteredApis.length === 0 && (
                 <tr>
                   <td
-                    colSpan={7}
+                    colSpan={8}
                     className="py-12 text-center text-sm text-ink-300"
                   >
                     No APIs match. Click{" "}
@@ -324,18 +344,22 @@ export default function ApisTab() {
           <span className="mr-1 font-bold">
             <Pencil size={12} className="inline" /> Editable here:
           </span>
-          API Name, Priority (P1–P5), Target Output (kg). Edits trigger an
-          immediate reschedule.
+          API Name, Priority, <span className="font-bold">Stages count</span>{" "}
+          (1–10), Target Output. Stage count ⇒ adds/removes trailing rows on
+          the Stages tab.
         </div>
         <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs text-ink-300">
           <span className="mr-1 font-bold text-ink-100">
-            <Lock size={11} className="inline" /> Target ⇒ Final Batches:
+            <Lock size={11} className="inline" /> Cascade derives all batches:
           </span>
           <span className="font-mono text-cyan-300">
-            ⌈ Target ÷ final stage batch size ⌉
+            final = ⌈ target ÷ batch ⌉
           </span>
-          . Reactor pools, cycle hrs, and analysis hrs live in the{" "}
-          <span className="font-bold text-white">Stages</span> tab.
+          ; for each upstream stage,{" "}
+          <span className="font-mono text-cyan-300">
+            ⌈ next-stage actual output ÷ this stage's batch ⌉
+          </span>
+          . Edit batch sizes in the Stages tab.
         </div>
       </div>
     </div>
@@ -376,17 +400,28 @@ function Th({
 function EditableNumCell({
   value,
   onChange,
+  min = 1,
+  max,
+  width = "w-28",
 }: {
   value: number;
   onChange: (v: number) => void;
+  min?: number;
+  max?: number;
+  width?: string;
 }) {
   return (
     <input
       type="number"
       value={value}
-      min={1}
-      onChange={(e) => onChange(Number(e.target.value) || 1)}
-      className="cell-yellow w-28 rounded-md px-2 py-1 text-right font-mono text-sm tabular-nums transition"
+      min={min}
+      max={max}
+      onChange={(e) => {
+        let v = Number(e.target.value) || min;
+        if (max !== undefined) v = Math.min(max, v);
+        onChange(Math.max(min, v));
+      }}
+      className={`cell-yellow ${width} rounded-md px-2 py-1 text-right font-mono text-sm tabular-nums transition`}
     />
   );
 }

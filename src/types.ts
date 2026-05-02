@@ -28,6 +28,14 @@ export interface API {
   name: string;
   color: string;
   priority: Priority;
+  /**
+   * Final-API output target in kg. Drives the cascading derivation of
+   * `plannedBatches` for every stage:
+   *   final stage:  ⌈ targetKg ÷ final batch size ⌉
+   *   stage N:      ⌈ next stage actual output ÷ stage N batch size ⌉
+   */
+  targetKg: number;
+  /** Legacy field, kept for back-compat with old Quarterly summary code. */
   projectionKg: number;
   stages: StageMaster[];
 }

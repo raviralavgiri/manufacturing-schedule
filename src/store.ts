@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { API_PALETTE, buildSeed } from "./data/seed";
 import { runScheduler } from "./scheduler/scheduler";
+import { cascadePlannedBatches } from "./scheduler/cascade";
 import type { API, Priority, Reactor, ScheduleResult, StageMaster } from "./types";
 import {
   clearPersisted,
@@ -56,8 +57,10 @@ interface AppState {
   // ─ API actions ─────────────────────────────────────────────────
   setApiPriority: (apiId: string, priority: Priority) => void;
   setApiName: (apiId: string, name: string) => void;
-  /** Sets the FINAL stage's outputTarget; high-level "API target qty" UX. */
+  /** Sets the API target output (kg). Triggers cascade across all stages. */
   setApiTargetOutput: (apiId: string, targetKg: number) => void;
+  /** Add or remove trailing stages so the API has exactly `count` stages. */
+  setApiStageCount: (apiId: string, count: number) => void;
   /**
    * Add a brand-new API. If `withDefaultFinalStage` is true (default),
    * also creates a single "Final API" stage so the API has something to
@@ -77,7 +80,10 @@ interface AppState {
 // ─── Initial hydration: seed → localStorage → cloud (async) ─────────────────────
 const seed = buildSeed();
 const persisted = loadPersisted();
-const initialApis = persisted?.apis ?? seed.apis;
+const initialApisRaw = persisted?.apis ?? seed.apis;
+// Run cascade on every API so plannedBatches is always in sync with targetKg
+// and current batch sizes. Idempotent on the seed (numbers don't change).
+const initialApis = initialApisRaw.map(cascadePlannedBatches);
 const initialReactors = persisted?.reactors ?? seed.reactors;
 const initialSchedule = runScheduler(initialApis, initialReactors);
 
@@ -116,30 +122,38 @@ export const useStore = create<AppState>((set, get) => ({
 
   // ─ Stage actions ────────────────────────────────────────────────
   updateStageField: (stageId, field, value) => {
-    const apis = get().apis.map((a) => ({
-      ...a,
-      stages: a.stages.map((s) =>
+    const apis = get().apis.map((a) => {
+      const idx = a.stages.findIndex((s) => s.id === stageId);
+      if (idx < 0) return a;
+      const updatedStages = a.stages.map((s) =>
         s.id === stageId ? { ...s, [field]: Math.max(1, value) } : s
-      ),
-    }));
+      );
+      const updated = { ...a, stages: updatedStages };
+      // Edits to batchSizeKg or plannedBatches change the cascade flow.
+      // Other fields (cycleHours, analysisHours) don't.
+      if (field === "batchSizeKg" || field === "plannedBatches") {
+        return cascadePlannedBatches(updated);
+      }
+      return updated;
+    });
     set({ apis, hasPersistedChanges: true });
     persistAndSync(apis, get().reactors);
     scheduleRecompute(set, get);
   },
 
   setStageOutput: (stageId, outputKg) => {
-    const target = Math.max(1, outputKg);
-    const apis = get().apis.map((a) => ({
-      ...a,
-      stages: a.stages.map((s) => {
-        if (s.id !== stageId) return s;
-        const planned = Math.max(1, Math.ceil(target / Math.max(1, s.batchSizeKg)));
-        return { ...s, plannedBatches: planned };
-      }),
-    }));
-    set({ apis, hasPersistedChanges: true });
-    persistAndSync(apis, get().reactors);
-    scheduleRecompute(set, get);
+    // Kept for back-compat - now equivalent to setting the API target if this
+    // is the final stage, otherwise a no-op (cascade owns plannedBatches).
+    const apis = get().apis;
+    const owningApi = apis.find((a) =>
+      a.stages.some((s) => s.id === stageId)
+    );
+    if (!owningApi) return;
+    const finalStage = owningApi.stages.reduce((acc, s) =>
+      s.stageNo > acc.stageNo ? s : acc
+    );
+    if (finalStage.id !== stageId) return;
+    get().setApiTargetOutput(owningApi.id, outputKg);
   },
 
   setStageName: (stageId, name) => {
@@ -191,9 +205,13 @@ export const useStore = create<AppState>((set, get) => ({
       plannedBatches: Math.max(1, input.plannedBatches),
     };
 
-    const updatedApis = apis.map((a) =>
-      a.id === api.id ? { ...a, stages: [...a.stages, newStage] } : a
-    );
+    const updatedApis = apis.map((a) => {
+      if (a.id !== api.id) return a;
+      return cascadePlannedBatches({
+        ...a,
+        stages: [...a.stages, newStage],
+      });
+    });
 
     set({
       apis: updatedApis,
@@ -206,10 +224,13 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   removeStage: (stageId) => {
-    const apis = get().apis.map((a) => ({
-      ...a,
-      stages: a.stages.filter((s) => s.id !== stageId),
-    }));
+    const apis = get().apis.map((a) => {
+      if (!a.stages.some((s) => s.id === stageId)) return a;
+      return cascadePlannedBatches({
+        ...a,
+        stages: a.stages.filter((s) => s.id !== stageId),
+      });
+    });
     set({ apis, hasPersistedChanges: true });
     persistAndSync(apis, get().reactors);
     scheduleRecompute(set, get, true);
@@ -243,32 +264,66 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   setApiTargetOutput: (apiId, targetKg) => {
-    // "Target output for this API" maps to the FINAL stage's output target.
-    const apis = get().apis;
-    const api = apis.find((a) => a.id === apiId);
-    if (!api || api.stages.length === 0) return;
-    // Final stage = highest stageNo
-    const finalStage = api.stages.reduce((acc, s) =>
-      s.stageNo > acc.stageNo ? s : acc
-    );
     const target = Math.max(1, targetKg);
-    const plannedFinal = Math.max(
-      1,
-      Math.ceil(target / Math.max(1, finalStage.batchSizeKg))
+    const apis = get().apis.map((a) =>
+      a.id === apiId ? cascadePlannedBatches({ ...a, targetKg: target }) : a
     );
-    const updated = apis.map((a) =>
-      a.id !== apiId
-        ? a
-        : {
-            ...a,
-            stages: a.stages.map((s) =>
-              s.id === finalStage.id ? { ...s, plannedBatches: plannedFinal } : s
-            ),
-          }
-    );
-    set({ apis: updated, hasPersistedChanges: true });
-    persistAndSync(updated, get().reactors);
+    set({ apis, hasPersistedChanges: true });
+    persistAndSync(apis, get().reactors);
     scheduleRecompute(set, get);
+  },
+
+  setApiStageCount: (apiId, count) => {
+    const target = Math.max(1, Math.min(10, Math.round(count)));
+    const reactors = get().reactors;
+    const apis = get().apis.map((a) => {
+      if (a.id !== apiId) return a;
+      const sorted = [...a.stages].sort((x, y) => x.stageNo - y.stageNo);
+      let stages = sorted.slice();
+
+      if (stages.length === target) return a; // no-op
+
+      if (stages.length > target) {
+        // Trim trailing stages
+        stages = stages.slice(0, target);
+      } else {
+        // Append default stages until we reach target
+        const defaultPool = reactors
+          .filter((r) => r.reactorClass === "Medium")
+          .slice(0, 2)
+          .map((r) => r.id);
+        while (stages.length < target) {
+          const nextNo = stages.length + 1;
+          const isFinal = nextNo === target;
+          stages.push({
+            id: `${a.id}-S${nextNo}`,
+            apiId: a.id,
+            apiName: a.name,
+            stageNo: nextNo,
+            stageName: isFinal ? "Final API" : `Intermediate-${nextNo}`,
+            batchSizeKg: isFinal ? 100 : 80,
+            reactorPool: defaultPool.length > 0 ? defaultPool : [reactors[0]?.id ?? ""],
+            cycleHours: isFinal ? 120 : 72,
+            analysisHours: isFinal ? 48 : 24,
+            plannedBatches: 1, // overwritten by cascade below
+          });
+        }
+      }
+      // After last stage may now be a different stage, recompute names so
+      // the highest stageNo is "Final API" (only when we trimmed - leave
+      // user-customized names alone otherwise).
+      if (stages.length < sorted.length) {
+        // We trimmed; rename the new last stage to "Final API" for clarity.
+        const last = stages[stages.length - 1];
+        if (last && !/final/i.test(last.stageName)) {
+          stages[stages.length - 1] = { ...last, stageName: "Final API" };
+        }
+      }
+      return cascadePlannedBatches({ ...a, stages });
+    });
+    set({ apis, hasPersistedChanges: true });
+    persistAndSync(apis, get().reactors);
+    scheduleRecompute(set, get, true);
   },
 
   addAPI: (withDefaultFinalStage = true) => {
@@ -299,14 +354,17 @@ export const useStore = create<AppState>((set, get) => ({
           },
         ]
       : [];
-    const newApi: API = {
+    // Default target = 500kg (5 batches of 100kg in the default Final stage).
+    // Run cascade so plannedBatches matches targetKg from the start.
+    const newApi: API = cascadePlannedBatches({
       id: newId,
       name: newId,
       color,
       priority: 3,
+      targetKg: withDefaultFinalStage ? 500 : 0,
       projectionKg: 0,
       stages,
-    };
+    });
     const updated = [...apis, newApi];
     set({ apis: updated, hasPersistedChanges: true });
     persistAndSync(updated, reactors);

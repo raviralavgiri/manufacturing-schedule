@@ -31,7 +31,6 @@ export default function StagesTab() {
   const apis = useStore((s) => s.apis);
   const reactors = useStore((s) => s.reactors);
   const updateStageField = useStore((s) => s.updateStageField);
-  const setStageOutput = useStore((s) => s.setStageOutput);
   const setStageName = useStore((s) => s.setStageName);
   const setStageReactorPool = useStore((s) => s.setStageReactorPool);
   const setApiPriority = useStore((s) => s.setApiPriority);
@@ -59,17 +58,28 @@ export default function StagesTab() {
       color: string;
       priority: Priority;
       apiDisplayName: string;
+      demandKg: number; // cascade input for this stage
     })[] = [];
-    sortedApis.forEach((a) =>
-      a.stages.forEach((s) =>
+    sortedApis.forEach((a) => {
+      const sortedStages = [...a.stages].sort((x, y) => x.stageNo - y.stageNo);
+      // Walk backwards to compute the demand on each stage for display
+      let nextDemand = a.targetKg;
+      const demandByStageId = new Map<string, number>();
+      for (let i = sortedStages.length - 1; i >= 0; i--) {
+        const s = sortedStages[i];
+        demandByStageId.set(s.id, nextDemand);
+        nextDemand = s.batchSizeKg * s.plannedBatches;
+      }
+      sortedStages.forEach((s) =>
         all.push({
           ...s,
           color: a.color,
           priority: a.priority,
           apiDisplayName: a.name,
+          demandKg: demandByStageId.get(s.id) ?? 0,
         })
-      )
-    );
+      );
+    });
     if (!q) return all;
     const lower = q.toLowerCase();
     return all.filter(
@@ -235,8 +245,8 @@ export default function StagesTab() {
                 <Th align="right" yellow>
                   Analysis (h)
                 </Th>
-                <Th align="right" yellow>
-                  Output Target (kg)
+                <Th align="right" locked>
+                  Required (kg)
                 </Th>
                 <Th align="right" locked>
                   Planned Batches
@@ -252,7 +262,6 @@ export default function StagesTab() {
                 const actualOutput = r.batchSizeKg * r.plannedBatches;
                 const isNew = r.id === recentlyAddedStageId;
                 const isConfirming = r.id === confirmDeleteId;
-                const targetOutput = actualOutput;
                 return (
                   <tr
                     key={r.id}
@@ -320,11 +329,14 @@ export default function StagesTab() {
                         }
                       />
                     </td>
-                    <td className="px-3 py-2 text-right">
-                      <EditableNumCell
-                        value={targetOutput}
-                        onChange={(v) => setStageOutput(r.id, v)}
-                      />
+                    <td className="px-3 py-2.5 text-right font-mono tabular-nums text-ink-200">
+                      <span
+                        className="inline-flex items-center gap-1"
+                        title="Required input from this stage = next stage's actual output (or API target for the final stage)"
+                      >
+                        <Lock size={10} className="text-ink-500" />
+                        {r.demandKg.toLocaleString()}
+                      </span>
                     </td>
                     <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-ink-200">
                       <span className="inline-flex items-center gap-1">
@@ -387,19 +399,20 @@ export default function StagesTab() {
       <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
         <div className="rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-xs text-amber-200">
           <span className="mr-1 font-bold">
-            <Pencil size={12} className="inline" /> Editable:
+            <Pencil size={12} className="inline" /> Editable here:
           </span>
-          Reactor names, Stage Name, Reactor Pool (click cell), Batch Size,
-          Cycle, Analysis, Output Target.
+          Reactor names, Stage Name, Reactor Pool, Batch Size, Cycle, Analysis.
+          Set the API target on the <span className="font-bold">APIs</span> tab.
         </div>
         <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs text-ink-300">
           <span className="mr-1 font-bold text-ink-100">
-            <Lock size={11} className="inline" /> Derived:
+            <Lock size={11} className="inline" /> Cascade:
           </span>
           <span className="font-mono text-cyan-300">
-            Planned Batches = ⌈ Output ÷ Batch Size ⌉
+            Planned = ⌈ Required ÷ Batch Size ⌉
           </span>
-          . Actual Output = Planned × Batch Size.
+          ; Actual Output = Planned × Batch Size; upstream Required = downstream
+          Actual Output. Final stage Required = API target.
         </div>
       </div>
     </div>

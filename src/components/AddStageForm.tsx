@@ -165,7 +165,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
           label="Batch Size (kg)"
           value={batchSizeKg}
           onChange={setBatchSizeKg}
-          className="sm:col-span-1"
+          className="sm:col-span-2"
         />
         <NumField
           label="Cycle (h)"
@@ -179,13 +179,11 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
           onChange={setAnalysisHours}
           className="sm:col-span-1"
         />
-        <NumField
-          label="Batches"
-          value={plannedBatches}
-          onChange={setPlannedBatches}
-          className="sm:col-span-2"
-        />
       </div>
+      <p className="mt-1 text-[10px] text-ink-400">
+        Planned batches are auto-computed by the cascade after you add this
+        stage (uses the API's target output and downstream stages).
+      </p>
 
       {/* Row 2: Reactor Pool */}
       <div className="mt-4">

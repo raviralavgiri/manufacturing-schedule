@@ -187,6 +187,15 @@ export function buildSeed(): { apis: API[]; reactors: Reactor[] } {
     const projectionKg = stages
       .filter((st) => st.stageName === "Final API")
       .reduce((acc, st) => acc + st.batchSizeKg * st.plannedBatches, 0);
+    // Initial target = final stage's actual output (so cascade is a no-op
+    // on first load and the seed numbers stay identical to before).
+    const finalStage =
+      stages.length > 0
+        ? stages.reduce((acc, s) => (s.stageNo > acc.stageNo ? s : acc))
+        : null;
+    const targetKg = finalStage
+      ? finalStage.batchSizeKg * finalStage.plannedBatches
+      : 0;
     // Priority distribution: 2x P1, 4x P2, 8x P3, 4x P4, 2x P5  (total 20)
     const priorityByIdx: Priority[] = [
       1, 1,                      // 2 critical
@@ -200,6 +209,7 @@ export function buildSeed(): { apis: API[]; reactors: Reactor[] } {
       name: apiName,
       color: API_PALETTE[apiIdx % API_PALETTE.length],
       priority: priorityByIdx[apiIdx] ?? 3,
+      targetKg,
       projectionKg,
       stages,
     };

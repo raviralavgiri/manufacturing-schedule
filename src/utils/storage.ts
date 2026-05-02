@@ -26,11 +26,26 @@ export function loadPersisted(): PersistedSnapshot | null {
     if (!parsed.apis.every((a) => a && a.id && Array.isArray(a.stages))) {
       return null;
     }
-    // Migrate: ensure priority field exists (older saves may lack it)
-    const apis = parsed.apis.map((a) => ({
-      ...a,
-      priority: (a.priority ?? 3) as API["priority"],
-    }));
+    // Migrate: ensure priority + targetKg fields exist
+    const apis = parsed.apis.map((a) => {
+      const priority = (a.priority ?? 3) as API["priority"];
+      // If targetKg is missing (old save), derive it from the final stage's
+      // actual output. This keeps the cascade idempotent on first load.
+      let targetKg = a.targetKg;
+      if (typeof targetKg !== "number" || targetKg <= 0) {
+        const stages = Array.isArray(a.stages) ? a.stages : [];
+        if (stages.length > 0) {
+          const finalStage = stages.reduce((acc, s) =>
+            s.stageNo > acc.stageNo ? s : acc
+          );
+          targetKg =
+            (finalStage.batchSizeKg ?? 0) * (finalStage.plannedBatches ?? 0);
+        } else {
+          targetKg = 0;
+        }
+      }
+      return { ...a, priority, targetKg };
+    });
     // Migrate: reactors may be missing in old saves; if present, ensure each
     // has a `name` field (default to id).
     let reactors: Reactor[] | null = null;
