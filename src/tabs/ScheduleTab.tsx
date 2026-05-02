@@ -1,9 +1,16 @@
 import { useMemo, useState, useRef, useLayoutEffect } from "react";
-import { Search, Download, Filter } from "lucide-react";
+import { Search, Filter } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
 import { Card, SectionHeader, Tag } from "../components/Primitives";
+import ExportMenu from "../components/ExportMenu";
 import { fmtDateTime } from "../utils/dates";
+import {
+  downloadCsv,
+  downloadElementAsPng,
+  fileStamp,
+  printPage,
+} from "../utils/exporters";
 
 const ROW_H = 40;
 
@@ -60,46 +67,46 @@ export default function ScheduleTab() {
   );
   const visible = filtered.slice(startIdx, endIdx);
 
+  const tableCardRef = useRef<HTMLDivElement>(null);
+
   function exportCsv() {
-    const header = [
-      "Batch ID",
-      "API",
-      "Stage",
-      "Stage Name",
-      "Batch #",
-      "Reactor Train",
-      "Start",
-      "End (cycle)",
-      "Analysis End",
-      "FY",
-      "Clash",
-      "Output kg",
-    ].join(",");
-    const lines = filtered.map((b) =>
+    downloadCsv(
+      `schedule_${filtered.length}rows_${fileStamp()}.csv`,
       [
+        "Batch ID",
+        "API ID",
+        "API Name",
+        "Stage",
+        "Stage Name",
+        "Batch #",
+        "Reactor Train (IDs)",
+        "Reactor Train (Names)",
+        "Start",
+        "End (cycle)",
+        "Analysis End",
+        "FY",
+        "Clash",
+        "Output kg",
+      ],
+      filtered.map((b) => [
         b.batchId,
+        b.apiId,
         b.apiName,
         `Stage ${b.stageNo}`,
         b.stageName,
         b.batchNo,
-        `"${b.reactorIds.join("|")}"`,
+        b.reactorIds.join(" + "),
+        b.reactorIds
+          .map((id) => reactors.find((x) => x.id === id)?.name ?? id)
+          .join(" + "),
         fmtDateTime(b.startMs),
         fmtDateTime(b.endMs),
         fmtDateTime(b.analysisEndMs),
         b.inFY ? "FY" : "Ovr",
         b.clash ? "CLASH" : "OK",
         b.outputKg,
-      ].join(",")
+      ])
     );
-    const blob = new Blob([header + "\n" + lines.join("\n")], {
-      type: "text/csv",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `schedule_${filtered.length}rows.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
   }
 
   return (
@@ -108,12 +115,17 @@ export default function ScheduleTab() {
         title="Schedule"
         subtitle={`${filtered.length.toLocaleString()} batches displayed · start, end, analysis dates · FY & clash flags`}
         right={
-          <button
-            onClick={exportCsv}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-300/30 bg-cyan-300/10 px-3 py-2 text-xs font-semibold text-cyan-300 transition hover:bg-cyan-300/20"
-          >
-            <Download size={13} /> Export CSV
-          </button>
+          <ExportMenu
+            onCsv={exportCsv}
+            onPng={async () => {
+              await downloadElementAsPng(
+                tableCardRef.current,
+                `schedule_${filtered.length}rows_${fileStamp()}.png`,
+                { backgroundColor: "#04081a", pixelRatio: 2 }
+              );
+            }}
+            onPrint={() => printPage()}
+          />
         }
       />
 
@@ -173,6 +185,7 @@ export default function ScheduleTab() {
         </div>
       </Card>
 
+      <div ref={tableCardRef} className="schedule-table-card">
       <Card className="overflow-hidden p-0">
         <div className="grid grid-cols-[110px_72px_120px_70px_140px_180px_180px_180px_60px_60px_72px] gap-0 border-b border-white/10 bg-ink-900/80 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-ink-300">
           <span>Batch ID</span>
@@ -267,6 +280,7 @@ export default function ScheduleTab() {
           </div>
         </div>
       </Card>
+      </div>
     </div>
   );
 }

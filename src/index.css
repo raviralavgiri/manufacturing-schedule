@@ -97,3 +97,49 @@ input[type="number"] { -moz-appearance: textfield; }
   100% { background-color: transparent; box-shadow: inset 0 0 0 0 transparent; }
 }
 .row-flash { animation: rowFlash 3s ease-out 1; }
+
+/* ─── Print styles ─────────────────────────────────────────────────────────
+   When the user prints (Cmd+P / browser print or "Print" export option),
+   strip the chrome, force light backgrounds with dark text, and let the
+   chart card span the full paper width.
+*/
+@media print {
+  body {
+    background: white !important;
+    color: #000 !important;
+  }
+  body::before { display: none !important; }
+  header, footer, nav { display: none !important; }
+  .glass, .glass-strong {
+    background: white !important;
+    border-color: rgba(0,0,0,0.15) !important;
+    color: #000 !important;
+    backdrop-filter: none !important;
+  }
+  /* Remove glow / shadow effects that don't print well */
+  * {
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+  /* Make any text that was light grey / ink-300 readable on paper */
+  .text-ink-100, .text-ink-200, .text-ink-300, .text-ink-400, .text-white {
+    color: #1a1a2e !important;
+  }
+  .text-cyan-200, .text-cyan-300, .text-violet-200, .text-violet-300,
+  .text-amber-200, .text-amber-300, .text-lime-200, .text-lime-300,
+  .text-rose-200, .text-rose-300, .text-pink-200, .text-pink-300 {
+    color: #1a1a2e !important;
+  }
+  /* Show the Gantt / table cards full width */
+  .gantt-chart-card, .schedule-table-card {
+    width: 100% !important;
+    max-width: none !important;
+    page-break-inside: avoid;
+  }
+  /* Allow content beyond viewport to print */
+  .max-h-\[68vh\], .max-h-\[62vh\] {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  .overflow-auto, .overflow-y-auto { overflow: visible !important; }
+}

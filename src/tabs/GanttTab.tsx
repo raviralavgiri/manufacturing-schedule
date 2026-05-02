@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   ZoomIn,
   ZoomOut,
@@ -18,7 +18,14 @@ import MultiSelectPopover, {
   ClearFiltersButton,
   type Option as MsOption,
 } from "../components/MultiSelectPopover";
-import { FY_WEEKS } from "../utils/dates";
+import ExportMenu from "../components/ExportMenu";
+import { FY_WEEKS, fmtDateTime } from "../utils/dates";
+import {
+  downloadCsv,
+  downloadElementAsPng,
+  fileStamp,
+  printPage,
+} from "../utils/exporters";
 import type { BatchScheduleEntry, Reactor } from "../types";
 
 type Mode = "by-api" | "by-stage" | "by-reactor";
@@ -39,6 +46,9 @@ export default function GanttTab() {
   const [pxPerWeek, setPxPerWeek] = useState(64); // default = "Quarter view": ~13 weeks visible per ~830px
   const [mode, setMode] = useState<Mode>("by-stage");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  // Ref to the Gantt card so we can snapshot it as PNG
+  const chartCardRef = useRef<HTMLDivElement>(null);
 
   // Filter state - empty Set means "all" (no filter)
   const [apiFilter, setApiFilter] = useState<Set<string>>(new Set());
@@ -317,6 +327,59 @@ export default function GanttTab() {
                 <ZoomIn size={13} />
               </button>
             </div>
+
+            {/* Export menu */}
+            <ExportMenu
+              onCsv={() => {
+                const headers = [
+                  "Batch ID",
+                  "API ID",
+                  "API Name",
+                  "Stage No",
+                  "Stage Name",
+                  "Batch #",
+                  "Reactor Train (IDs)",
+                  "Reactor Train (Names)",
+                  "Start",
+                  "End (Cycle)",
+                  "Analysis End",
+                  "FY",
+                  "Output kg",
+                ];
+                const rows = filteredBatches.map((b) => [
+                  b.batchId,
+                  b.apiId,
+                  b.apiName,
+                  b.stageNo,
+                  b.stageName,
+                  b.batchNo,
+                  b.reactorIds.join(" + "),
+                  b.reactorIds
+                    .map((id) => reactors.find((x) => x.id === id)?.name ?? id)
+                    .join(" + "),
+                  fmtDateTime(b.startMs),
+                  fmtDateTime(b.endMs),
+                  fmtDateTime(b.analysisEndMs),
+                  b.inFY ? "FY" : "Ovr",
+                  b.outputKg,
+                ]);
+                const filterTag = anyFilterActive ? "_filtered" : "";
+                downloadCsv(
+                  `gantt_${mode}${filterTag}_${fileStamp()}.csv`,
+                  headers,
+                  rows
+                );
+              }}
+              onPng={async () => {
+                const filterTag = anyFilterActive ? "_filtered" : "";
+                await downloadElementAsPng(
+                  chartCardRef.current,
+                  `gantt_${mode}${filterTag}_${fileStamp()}.png`,
+                  { backgroundColor: "#04081a", pixelRatio: 2 }
+                );
+              }}
+              onPrint={() => printPage()}
+            />
           </div>
         }
       />
@@ -367,6 +430,7 @@ export default function GanttTab() {
         )}
       </div>
 
+      <div ref={chartCardRef} className="gantt-chart-card">
       <Card className="overflow-hidden p-0">
         <div className="flex">
           {/* Left labels column */}
@@ -676,6 +740,7 @@ export default function GanttTab() {
           </div>
         </div>
       </Card>
+      </div>
 
       {/* Legend */}
       <Card className="!p-3">
