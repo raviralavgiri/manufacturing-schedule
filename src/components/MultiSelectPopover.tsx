@@ -136,11 +136,8 @@ export default function MultiSelectPopover({
 
       {open && (
         <div
-          className="absolute right-0 top-full z-50 mt-1 overflow-hidden rounded-xl border border-cyan-300/40 shadow-2xl shadow-black/60 ring-1 ring-cyan-300/20"
-          style={{
-            width,
-            background: "linear-gradient(180deg, #0b1130 0%, #04081a 100%), #04081a",
-          }}
+          className="popover-surface absolute right-0 top-full z-50 mt-1 overflow-hidden rounded-xl shadow-2xl shadow-black/60 ring-1 ring-cyan-300/20"
+          style={{ width }}
         >
           <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
             <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">

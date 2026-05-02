@@ -75,13 +75,7 @@ export default function ExportMenu({
         <ChevronDown size={11} className="opacity-70" />
       </button>
       {open && (
-        <div
-          className="absolute right-0 top-full z-50 mt-1 min-w-[200px] overflow-hidden rounded-xl border border-cyan-300/40 shadow-2xl shadow-black/60 ring-1 ring-cyan-300/20"
-          style={{
-            background:
-              "linear-gradient(180deg, #0b1130 0%, #04081a 100%), #04081a",
-          }}
-        >
+        <div className="popover-surface absolute right-0 top-full z-50 mt-1 min-w-[200px] overflow-hidden rounded-xl shadow-2xl shadow-black/60 ring-1 ring-cyan-300/20">
           {onCsv && (
             <ExportItem
               icon={<FileText size={13} />}

@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useStore } from "../store";
 import { Card, SectionHeader } from "../components/Primitives";
 import { quarterOf } from "../utils/dates";
+import { useChartTheme } from "../utils/chartTheme";
 import {
   ResponsiveContainer,
   BarChart,
@@ -30,6 +31,7 @@ interface PivotRow {
 export default function QuarterlyTab() {
   const apisRaw = useStore((s) => s.apis);
   const schedule = useStore((s) => s.schedule);
+  const chartTheme = useChartTheme();
   const apis = useMemo(
     () =>
       [...apisRaw].sort(
@@ -137,8 +139,12 @@ export default function QuarterlyTab() {
           <div style={{ width: "100%", height: 260 }}>
             <ResponsiveContainer>
               <BarChart data={quarterTotals}>
-                <CartesianGrid stroke="#ffffff10" strokeDasharray="3 3" />
-                <XAxis dataKey="name" stroke="#94a1bd" fontSize={11} />
+                <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="name"
+                  stroke={chartTheme.axis}
+                  fontSize={11}
+                />
                 <YAxis yAxisId="left" stroke="#00f0ff" fontSize={11} />
                 <YAxis
                   yAxisId="right"
@@ -148,11 +154,13 @@ export default function QuarterlyTab() {
                 />
                 <Tooltip
                   contentStyle={{
-                    background: "rgba(8,13,40,0.95)",
-                    border: "1px solid rgba(255,255,255,0.15)",
+                    background: chartTheme.tooltipBg,
+                    border: `1px solid ${chartTheme.tooltipBorder}`,
                     borderRadius: 8,
                     fontSize: 12,
+                    color: chartTheme.tooltipText,
                   }}
+                  labelStyle={{ color: chartTheme.tooltipText }}
                 />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
                 <Bar

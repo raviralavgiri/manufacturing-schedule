@@ -15,6 +15,7 @@ import { clsx } from "clsx";
 import { useStore } from "./store";
 import { Pill } from "./components/Primitives";
 import SyncBadge from "./components/SyncBadge";
+import ThemeToggle from "./components/ThemeToggle";
 import ApisTab from "./tabs/ApisTab";
 import StagesTab from "./tabs/StagesTab";
 import ScheduleTab from "./tabs/ScheduleTab";
@@ -161,6 +162,7 @@ export default function App() {
               </span>
             )}
             <SyncBadge />
+            <ThemeToggle />
           </div>
         </div>
 

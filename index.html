@@ -9,6 +9,26 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
   </head>
   <body>
+    <script>
+      // No-flash theme bootstrap. Runs before React renders so the user
+      // never sees the wrong theme briefly.
+      (function () {
+        try {
+          var saved = localStorage.getItem("pharma:theme:v1");
+          var choice = saved === "light" || saved === "dark" || saved === "system" ? saved : "system";
+          var resolved = choice;
+          if (choice === "system") {
+            resolved = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
+              ? "light"
+              : "dark";
+          }
+          document.documentElement.setAttribute("data-theme", resolved);
+          document.documentElement.style.colorScheme = resolved;
+        } catch (_) {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

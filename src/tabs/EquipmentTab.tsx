@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useStore } from "../store";
 import { Card, SectionHeader, Tag } from "../components/Primitives";
 import { FY_WEEKS, WEEKS_IN_FY } from "../utils/dates";
+import { useChartTheme } from "../utils/chartTheme";
 import {
   ResponsiveContainer,
   LineChart,
@@ -19,6 +20,7 @@ const HOURS_PER_WEEK = 7 * 24;
 export default function EquipmentTab() {
   const reactors = useStore((s) => s.reactors);
   const schedule = useStore((s) => s.schedule);
+  const chartTheme = useChartTheme();
 
   const utilByReactor = useMemo(() => {
     return reactors.map((r, i) => {
@@ -146,22 +148,23 @@ export default function EquipmentTab() {
                   <stop offset="100%" stopColor="#00f0ff" stopOpacity={0.02} />
                 </linearGradient>
               </defs>
-              <CartesianGrid stroke="#ffffff10" strokeDasharray="3 3" />
+              <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" />
               <XAxis
                 dataKey="week"
-                stroke="#94a1bd"
+                stroke={chartTheme.axis}
                 fontSize={10}
                 interval={3}
               />
-              <YAxis stroke="#94a1bd" fontSize={10} unit="%" />
+              <YAxis stroke={chartTheme.axis} fontSize={10} unit="%" />
               <Tooltip
                 contentStyle={{
-                  background: "rgba(8,13,40,0.95)",
-                  border: "1px solid rgba(255,255,255,0.15)",
+                  background: chartTheme.tooltipBg,
+                  border: `1px solid ${chartTheme.tooltipBorder}`,
                   borderRadius: 8,
                   fontSize: 11,
+                  color: chartTheme.tooltipText,
                 }}
-                labelStyle={{ color: "#e6ebf3" }}
+                labelStyle={{ color: chartTheme.tooltipText }}
               />
               <Area
                 type="monotone"

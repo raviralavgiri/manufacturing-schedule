@@ -77,15 +77,7 @@ export default function ReactorPoolEditor({
         </span>
       </button>
       {open && (
-        <div
-          className="absolute right-0 top-full z-50 mt-1 w-[360px] overflow-hidden rounded-xl border border-cyan-300/40 p-3 shadow-2xl shadow-black/60 ring-1 ring-cyan-300/20"
-          style={{
-            // Fully opaque layered fill so table rows behind never bleed through
-            background:
-              "linear-gradient(180deg, #0b1130 0%, #04081a 100%), #04081a",
-            backgroundBlendMode: "normal",
-          }}
-        >
+        <div className="popover-surface absolute right-0 top-full z-50 mt-1 w-[360px] overflow-hidden rounded-xl p-3 shadow-2xl shadow-black/60 ring-1 ring-cyan-300/20">
           <div className="mb-2 flex items-center justify-between">
             <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">
               Reactor Pool · {draft.length} selected
