@@ -493,12 +493,36 @@ function EditableNumCell({
   value: number;
   onChange: (v: number) => void;
 }) {
+  // Local string state so transient empty/partial input isn't clamped on
+  // every keystroke. Commit only on blur or Enter.
+  const [local, setLocal] = useState(String(value));
+  useEffect(() => setLocal(String(value)), [value]);
+
+  const commit = () => {
+    const parsed = Number(local);
+    if (!Number.isFinite(parsed)) {
+      setLocal(String(value));
+      return;
+    }
+    const v = Math.max(1, parsed);
+    if (v !== value) onChange(v);
+    setLocal(String(v));
+  };
+
   return (
     <input
       type="number"
-      value={value}
+      value={local}
       min={1}
-      onChange={(e) => onChange(Number(e.target.value) || 1)}
+      onChange={(e) => setLocal(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        if (e.key === "Escape") {
+          setLocal(String(value));
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
       className="cell-yellow w-24 rounded-md px-2 py-1 text-right font-mono text-sm tabular-nums transition"
     />
   );

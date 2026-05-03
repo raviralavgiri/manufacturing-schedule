@@ -320,14 +320,38 @@ function NumField({
   onChange: (v: number) => void;
   className?: string;
 }) {
+  // Local string buffer so the user can clear the input and retype without
+  // every transient keystroke clamping back to 1.
+  const [local, setLocal] = useState(String(value));
+  useEffect(() => setLocal(String(value)), [value]);
+
+  const commit = () => {
+    const parsed = Number(local);
+    if (!Number.isFinite(parsed)) {
+      setLocal(String(value));
+      return;
+    }
+    const v = Math.max(1, parsed);
+    if (v !== value) onChange(v);
+    setLocal(String(v));
+  };
+
   return (
     <div className={className}>
       <Label>{label}</Label>
       <input
         type="number"
         min={1}
-        value={value}
-        onChange={(e) => onChange(Math.max(1, Number(e.target.value) || 1))}
+        value={local}
+        onChange={(e) => setLocal(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          if (e.key === "Escape") {
+            setLocal(String(value));
+            (e.target as HTMLInputElement).blur();
+          }
+        }}
         className="cell-yellow w-full rounded-md px-2 py-2 text-right font-mono text-sm tabular-nums"
       />
     </div>

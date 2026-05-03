@@ -433,16 +433,37 @@ function EditableNumCell({
   max?: number;
   width?: string;
 }) {
+  // Local string state so the user can transit through empty / partial values
+  // without our handler instantly clamping back. Commit on blur / Enter.
+  const [local, setLocal] = useState(String(value));
+  useEffect(() => setLocal(String(value)), [value]);
+
+  const commit = () => {
+    const parsed = Number(local);
+    if (!Number.isFinite(parsed)) {
+      setLocal(String(value));
+      return;
+    }
+    let v = Math.max(min, parsed);
+    if (max !== undefined) v = Math.min(max, v);
+    if (v !== value) onChange(v);
+    setLocal(String(v));
+  };
+
   return (
     <input
       type="number"
-      value={value}
+      value={local}
       min={min}
       max={max}
-      onChange={(e) => {
-        let v = Number(e.target.value) || min;
-        if (max !== undefined) v = Math.min(max, v);
-        onChange(Math.max(min, v));
+      onChange={(e) => setLocal(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        if (e.key === "Escape") {
+          setLocal(String(value));
+          (e.target as HTMLInputElement).blur();
+        }
       }}
       className={`cell-yellow ${width} rounded-md px-2 py-1 text-right font-mono text-sm tabular-nums transition`}
     />
