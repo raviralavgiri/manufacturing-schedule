@@ -92,6 +92,8 @@ interface AppState {
   // ─ Misc ────────────────────────────────────────────────────────
   clearRecentlyAdded: () => void;
   resetToSeed: () => void;
+  /** Synchronously rebuild the schedule using the current state. */
+  forceRecompute: () => void;
 }
 
 // ─── Initial hydration: seed → localStorage → cloud (async) ─────────────────────
@@ -441,6 +443,13 @@ export const useStore = create<AppState>((set, get) => ({
 
   // ─ Misc ────────────────────────────────────────────────────────
   clearRecentlyAdded: () => set({ recentlyAddedStageId: null }),
+
+  forceRecompute: () => {
+    const { apis, reactors, window: planWindow } = get();
+    set({ isRecomputing: true });
+    const sched = runScheduler(apis, reactors, planWindow);
+    set({ schedule: sched, isRecomputing: false, lastRecomputeMs: Date.now() });
+  },
 
   resetToSeed: () => {
     clearPersisted();

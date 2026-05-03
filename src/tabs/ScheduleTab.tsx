@@ -1,10 +1,10 @@
 import { useMemo, useState, useRef, useLayoutEffect } from "react";
-import { Search, Filter } from "lucide-react";
+import { Search, Filter, AlertTriangle, RefreshCw } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
 import { Card, SectionHeader, Tag } from "../components/Primitives";
 import ExportMenu from "../components/ExportMenu";
-import { fmtDateTime } from "../utils/dates";
+import { fmtDate, fmtDateTime } from "../utils/dates";
 import {
   downloadCsv,
   downloadElementAsPng,
@@ -18,6 +18,9 @@ export default function ScheduleTab() {
   const schedule = useStore((s) => s.schedule);
   const apisRaw = useStore((s) => s.apis);
   const reactors = useStore((s) => s.reactors);
+  const planWindow = useStore((s) => s.window);
+  const forceRecompute = useStore((s) => s.forceRecompute);
+  const isRecomputing = useStore((s) => s.isRecomputing);
   const apis = useMemo(
     () =>
       [...apisRaw].sort(
@@ -111,11 +114,32 @@ export default function ScheduleTab() {
     );
   }
 
+  // Detect batches whose start is BEFORE the global plan window OR whose
+  // cycle ends AFTER it. If any exist, the schedule is stale relative to
+  // the current window and the user should recompute.
+  const outOfRange = useMemo(() => {
+    const before: number[] = [];
+    const after: number[] = [];
+    for (const b of schedule.batches) {
+      if (b.startMs < planWindow.startMs) before.push(b.startMs);
+      if (b.endMs > planWindow.endMs) after.push(b.endMs);
+    }
+    return {
+      beforeCount: before.length,
+      afterCount: after.length,
+      earliestBefore: before.length > 0 ? Math.min(...before) : null,
+      latestAfter: after.length > 0 ? Math.max(...after) : null,
+    };
+  }, [schedule.batches, planWindow]);
+
+  const hasStaleData =
+    outOfRange.beforeCount > 0 || outOfRange.afterCount > 0;
+
   return (
     <div className="space-y-4">
       <SectionHeader
         title="Schedule"
-        subtitle={`${filtered.length.toLocaleString()} batches displayed · start, end, analysis dates · FY & clash flags`}
+        subtitle={`${filtered.length.toLocaleString()} batches · Plan window: ${fmtDate(planWindow.startMs)} → ${fmtDate(planWindow.endMs)}`}
         right={
           <ExportMenu
             onCsv={exportCsv}
@@ -130,6 +154,73 @@ export default function ScheduleTab() {
           />
         }
       />
+
+      {hasStaleData && (
+        <div
+          data-export-skip="true"
+          className="flex flex-wrap items-center gap-3 rounded-2xl border border-amber-300/40 bg-amber-300/10 px-4 py-3 text-xs"
+        >
+          <AlertTriangle size={16} className="text-amber-300" />
+          <div className="flex-1 text-amber-200">
+            <span className="font-bold">Schedule is out of plan window.</span>{" "}
+            {outOfRange.beforeCount > 0 && (
+              <span>
+                {outOfRange.beforeCount.toLocaleString()} batches start{" "}
+                <span className="font-mono">
+                  before {fmtDate(planWindow.startMs)}
+                </span>
+                {outOfRange.earliestBefore !== null && (
+                  <>
+                    {" "}(earliest:{" "}
+                    <span className="font-mono">
+                      {fmtDate(outOfRange.earliestBefore)}
+                    </span>
+                    )
+                  </>
+                )}
+                .
+              </span>
+            )}
+            {outOfRange.afterCount > 0 && (
+              <span>
+                {" "}
+                {outOfRange.afterCount.toLocaleString()} batches finish{" "}
+                <span className="font-mono">
+                  after {fmtDate(planWindow.endMs)}
+                </span>
+                {outOfRange.latestAfter !== null && (
+                  <>
+                    {" "}(latest:{" "}
+                    <span className="font-mono">
+                      {fmtDate(outOfRange.latestAfter)}
+                    </span>
+                    )
+                  </>
+                )}
+                .
+              </span>
+            )}{" "}
+            Click <span className="font-bold">Recompute</span> to rebuild
+            the schedule with the current plan window.
+          </div>
+          <button
+            onClick={() => forceRecompute()}
+            disabled={isRecomputing}
+            className={clsx(
+              "inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-bold transition",
+              isRecomputing
+                ? "border-white/10 bg-white/5 text-ink-300"
+                : "border-amber-300/40 bg-amber-300/15 text-amber-200 hover:bg-amber-300/25"
+            )}
+          >
+            <RefreshCw
+              size={13}
+              className={isRecomputing ? "animate-spin" : ""}
+            />
+            {isRecomputing ? "Recomputing…" : "Recompute"}
+          </button>
+        </div>
+      )}
 
       <Card className="!p-3">
         <div className="flex flex-wrap items-center gap-2">
