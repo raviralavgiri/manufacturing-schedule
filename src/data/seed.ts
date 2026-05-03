@@ -1,4 +1,5 @@
 import type { API, Priority, Reactor, StageMaster } from "../types";
+import { FY_END_MS, FY_START_MS } from "../utils/dates";
 
 // Deterministic PRNG (mulberry32) so the demo is reproducible
 function mulberry32(seed: number) {
@@ -211,6 +212,10 @@ export function buildSeed(): { apis: API[]; reactors: Reactor[] } {
       color: API_PALETTE[apiIdx % API_PALETTE.length],
       priority: priorityByIdx[apiIdx] ?? 3,
       targetKg,
+      // Default per-API window: the legacy FY 2026-27 dates. User can edit
+      // per API on the APIs tab to shift any individual API's plan.
+      startMs: FY_START_MS,
+      endMs: FY_END_MS,
       projectionKg,
       stages,
     };

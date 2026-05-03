@@ -19,7 +19,7 @@ import MultiSelectPopover, {
   type Option as MsOption,
 } from "../components/MultiSelectPopover";
 import ExportMenu from "../components/ExportMenu";
-import { FY_WEEKS, fmtDateTime } from "../utils/dates";
+import { computeWeeks, fmtDateTime, unionRange } from "../utils/dates";
 import {
   downloadCsv,
   downloadElementAsPng,
@@ -180,8 +180,13 @@ export default function GanttTab() {
     return out;
   }, [apis, reactors, mode]);
 
-  const fyStartMs = FY_WEEKS[0].start.getTime();
-  const totalWeeks = FY_WEEKS.length;
+  // Dynamic timeline range = union of every API's [startMs, endMs]
+  const weeks = useMemo(() => {
+    const r = unionRange(apisRaw);
+    return computeWeeks(r.startMs, r.endMs);
+  }, [apisRaw]);
+  const fyStartMs = weeks.length > 0 ? weeks[0].startMs : Date.now();
+  const totalWeeks = weeks.length;
   const rowH = mode === "by-api" ? 40 : mode === "by-reactor" ? 30 : 28;
 
   // For collapse: by API
@@ -213,7 +218,7 @@ export default function GanttTab() {
     const bands: { qStart: number; qEnd: number; label: string }[] = [];
     let lastQ = -1;
     let bandStart = 0;
-    FY_WEEKS.forEach((w, i) => {
+    weeks.forEach((w, i) => {
       if (w.quarter !== lastQ) {
         if (lastQ !== -1) {
           bands.push({
@@ -225,12 +230,12 @@ export default function GanttTab() {
         bandStart = i;
         lastQ = w.quarter;
       }
-      if (i === FY_WEEKS.length - 1) {
-        bands.push({ qStart: bandStart, qEnd: FY_WEEKS.length, label: `Q${lastQ}` });
+      if (i === weeks.length - 1) {
+        bands.push({ qStart: bandStart, qEnd: weeks.length, label: `Q${lastQ}` });
       }
     });
     return bands;
-  }, []);
+  }, [weeks]);
 
   return (
     <div className="space-y-4">
@@ -580,7 +585,7 @@ export default function GanttTab() {
                       style={{ width: (q.qEnd - q.qStart) * pxPerWeek }}
                       className="flex items-center justify-center border-r border-white/10 bg-gradient-to-b from-violet-500/10 to-transparent text-[11px] font-bold uppercase tracking-widest text-violet-200"
                     >
-                      {q.label} · {monthForBand(q.qStart, q.qEnd)}
+                      {q.label} · {monthForBand(weeks, q.qStart, q.qEnd)}
                     </div>
                   ))}
                 </div>
@@ -593,7 +598,7 @@ export default function GanttTab() {
                       className="relative flex h-7 border-b border-white/10"
                       style={{ width: totalWeeks * pxPerWeek }}
                     >
-                      {FY_WEEKS.map((w, i) => {
+                      {weeks.map((w, i) => {
                         const showLabel = i % labelEvery === 0;
                         return (
                           <div
@@ -632,7 +637,7 @@ export default function GanttTab() {
                       )}
                     >
                       {/* Week vertical guides - thicker every 4 weeks */}
-                      {FY_WEEKS.map((_, i) => (
+                      {weeks.map((_, i) => (
                         <div
                           key={i}
                           style={{ left: i * pxPerWeek, width: pxPerWeek }}
@@ -796,9 +801,14 @@ function Legend({
   );
 }
 
-function monthForBand(qStart: number, qEnd: number): string {
-  const a = FY_WEEKS[qStart].start;
-  const b = FY_WEEKS[Math.min(qEnd - 1, FY_WEEKS.length - 1)].start;
+function monthForBand(
+  weeks: { start: Date }[],
+  qStart: number,
+  qEnd: number
+): string {
+  if (weeks.length === 0) return "";
+  const a = weeks[qStart].start;
+  const b = weeks[Math.min(qEnd - 1, weeks.length - 1)].start;
   return `${a.toLocaleString("en", { month: "short" })}–${b.toLocaleString("en", { month: "short" })}`;
 }
 

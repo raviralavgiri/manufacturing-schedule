@@ -1,11 +1,12 @@
 import type { API, BatchScheduleEntry, Reactor, ScheduleResult } from "../types";
 import {
-  FY_WEEKS,
-  SCHEDULE_HORIZON_START,
-  WEEKS_IN_FY,
+  FY_END_MS,
+  FY_START_MS,
+  computeWeeks,
   hoursToMs,
-  isInFY,
-  weekIndexOf,
+  isInApiWindow,
+  unionRange,
+  weekIndexIn,
 } from "../utils/dates";
 
 interface BookedSlot {
@@ -50,7 +51,6 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
     reactorBatchCount.set(r.id, 0);
   });
 
-  const HORIZON_MS = SCHEDULE_HORIZON_START.getTime();
   const INTER_STAGE_BUFFER_HOURS = 4;
 
   const allBatches: BatchScheduleEntry[] = [];
@@ -69,12 +69,18 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
     })
   );
 
+  // Per-API horizon = the API's own startMs (or the FY default as fallback)
+  const apiHorizon = (api: API): number =>
+    typeof api.startMs === "number" && api.startMs > 0
+      ? api.startMs
+      : FY_START_MS;
+
   // Per-API per-stage end tracker: latest analysis end so stage N+1 can wait
   const apiStageLastEnd = new Map<string, number[]>();
   apis.forEach((a) =>
     apiStageLastEnd.set(
       a.id,
-      a.stages.map(() => HORIZON_MS)
+      a.stages.map(() => apiHorizon(a))
     )
   );
 
@@ -149,12 +155,14 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
         const analysisMs = hoursToMs(stage.analysisHours);
         const bufferMs = hoursToMs(INTER_STAGE_BUFFER_HOURS);
 
-        // 1. Earliest possible start = max(prev stage's batch end + buffer, horizon)
+        // 1. Earliest possible start = max(prev stage's batch end + buffer,
+        //    THIS api's own start date)
+        const horizon = apiHorizon(api);
         const prevStageReady =
           sIdx === 0
-            ? HORIZON_MS
+            ? horizon
             : apiStageLastEnd.get(api.id)![sIdx - 1] + bufferMs;
-        const earliestStart = Math.max(prevStageReady, HORIZON_MS);
+        const earliestStart = Math.max(prevStageReady, horizon);
 
         // 2. Find the EARLIEST gap on the train where [t, t+cycle) is free on
         //    every pool reactor simultaneously. This is the key fix: it lets
@@ -214,7 +222,8 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
           startMs,
           endMs: cycleEndMs,
           analysisEndMs,
-          inFY: isInFY(startMs) && isInFY(cycleEndMs),
+          // "In FY" now means "within THIS api's own production window"
+          inFY: isInApiWindow(api, startMs) && isInApiWindow(api, cycleEndMs),
           clash,
           outputKg: stage.batchSizeKg,
           inputKg:
@@ -243,9 +252,13 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
     });
   });
 
-  // Weekly occupancy: bill every reactor in the train for the cycle window
+  // Weekly occupancy: bill every reactor in the train for the cycle window.
+  // Range = union of all APIs' windows so the heatmap covers the whole plan.
+  const range = unionRange(apis);
+  const weeks = computeWeeks(range.startMs, range.endMs);
+  const weekCount = weeks.length;
   const weeklyReactorOccupancy: number[][] = reactors.map(() =>
-    new Array(WEEKS_IN_FY).fill(0)
+    new Array(weekCount).fill(0)
   );
   const reactorIndex = new Map(reactors.map((r, i) => [r.id, i]));
   allBatches.forEach((b) => {
@@ -254,10 +267,10 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
       if (rIdx === undefined) return;
       let cursor = b.startMs;
       while (cursor < b.endMs) {
-        const wIdx = weekIndexOf(cursor);
+        const wIdx = weekIndexIn(weeks, cursor);
         if (wIdx < 0) break;
         const weekEnd =
-          FY_WEEKS[wIdx].start.getTime() + 7 * 24 * 3600 * 1000;
+          weeks[wIdx].startMs + 7 * 24 * 3600 * 1000;
         const segmentEnd = Math.min(b.endMs, weekEnd);
         const hours = (segmentEnd - cursor) / 3600000;
         weeklyReactorOccupancy[rIdx][wIdx] += hours;

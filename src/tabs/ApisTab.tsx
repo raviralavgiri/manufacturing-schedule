@@ -13,6 +13,7 @@ import { clsx } from "clsx";
 import { useStore } from "../store";
 import { Card, SectionHeader, Tag } from "../components/Primitives";
 import PriorityPill from "../components/PriorityPill";
+import { fmtIsoDate, parseIsoDate } from "../utils/dates";
 import type { API, Priority } from "../types";
 
 /**
@@ -30,6 +31,7 @@ export default function ApisTab() {
   const setApiName = useStore((s) => s.setApiName);
   const setApiPriority = useStore((s) => s.setApiPriority);
   const setApiTargetOutput = useStore((s) => s.setApiTargetOutput);
+  const setApiWindow = useStore((s) => s.setApiWindow);
   const setApiStageCount = useStore((s) => s.setApiStageCount);
   const addAPI = useStore((s) => s.addAPI);
   const removeAPI = useStore((s) => s.removeAPI);
@@ -193,17 +195,19 @@ export default function ApisTab() {
                 <Th align="right" yellow>
                   Stages
                 </Th>
+                <Th yellow>Start Date</Th>
+                <Th yellow>End Date</Th>
                 <Th align="right" yellow>
-                  Target Output (kg)
+                  Target (kg)
                 </Th>
                 <Th align="right" locked>
-                  Actual Output (kg)
+                  Actual (kg)
                 </Th>
                 <Th align="right" locked>
-                  Final Batches
+                  Final Btc
                 </Th>
                 <Th align="right" locked>
-                  Total Batches
+                  Total Btc
                 </Th>
                 <Th align="right">&nbsp;</Th>
               </tr>
@@ -260,6 +264,23 @@ export default function ApisTab() {
                           max={10}
                           width="w-20"
                           onChange={(v) => setApiStageCount(api.id, v)}
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <DateCell
+                          value={api.startMs}
+                          onChange={(ms) =>
+                            setApiWindow(api.id, ms, api.endMs)
+                          }
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <DateCell
+                          value={api.endMs}
+                          onChange={(ms) =>
+                            setApiWindow(api.id, api.startMs, ms)
+                          }
+                          min={api.startMs}
                         />
                       </td>
                       <td className="px-3 py-2 text-right">
@@ -325,7 +346,7 @@ export default function ApisTab() {
               {filteredApis.length === 0 && (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={10}
                     className="py-12 text-center text-sm text-ink-300"
                   >
                     No APIs match. Click{" "}
@@ -344,9 +365,11 @@ export default function ApisTab() {
           <span className="mr-1 font-bold">
             <Pencil size={12} className="inline" /> Editable here:
           </span>
-          API Name, Priority, <span className="font-bold">Stages count</span>{" "}
-          (1–10), Target Output. Stage count ⇒ adds/removes trailing rows on
-          the Stages tab.
+          API Name, Priority, Stages (1–10),{" "}
+          <span className="font-bold">Start Date / End Date</span>, Target.
+          Each API has its own production window — batches cannot start
+          before Start Date; any batch finishing after End Date is flagged
+          "Ovr".
         </div>
         <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs text-ink-300">
           <span className="mr-1 font-bold text-ink-100">
@@ -359,7 +382,7 @@ export default function ApisTab() {
           <span className="font-mono text-cyan-300">
             ⌈ next-stage actual output ÷ this stage's batch ⌉
           </span>
-          . Edit batch sizes in the Stages tab.
+          .
         </div>
       </div>
     </div>
@@ -422,6 +445,31 @@ function EditableNumCell({
         onChange(Math.max(min, v));
       }}
       className={`cell-yellow ${width} rounded-md px-2 py-1 text-right font-mono text-sm tabular-nums transition`}
+    />
+  );
+}
+
+function DateCell({
+  value,
+  onChange,
+  min,
+}: {
+  value: number;
+  onChange: (ms: number) => void;
+  min?: number;
+}) {
+  const iso = Number.isFinite(value) ? fmtIsoDate(value) : "";
+  const minIso = typeof min === "number" ? fmtIsoDate(min) : undefined;
+  return (
+    <input
+      type="date"
+      value={iso}
+      min={minIso}
+      onChange={(e) => {
+        const next = parseIsoDate(e.target.value);
+        if (Number.isFinite(next)) onChange(next);
+      }}
+      className="cell-yellow w-36 rounded-md px-2 py-1 text-left font-mono text-xs transition"
     />
   );
 }

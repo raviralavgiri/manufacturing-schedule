@@ -10,6 +10,7 @@ import {
   savePersisted,
 } from "./utils/storage";
 import { isSupabaseEnabled } from "./services/supabase";
+import { FY_END_MS, FY_START_MS } from "./utils/dates";
 import {
   loadFromCloud,
   queueCloudSave,
@@ -64,6 +65,8 @@ interface AppState {
   setApiName: (apiId: string, name: string) => void;
   /** Sets the API target output (kg). Triggers cascade across all stages. */
   setApiTargetOutput: (apiId: string, targetKg: number) => void;
+  /** Set the API's production window (start + end as epoch ms). */
+  setApiWindow: (apiId: string, startMs: number, endMs: number) => void;
   /** Add or remove trailing stages so the API has exactly `count` stages. */
   setApiStageCount: (apiId: string, count: number) => void;
   /**
@@ -283,6 +286,21 @@ export const useStore = create<AppState>((set, get) => ({
     scheduleRecompute(set, get);
   },
 
+  setApiWindow: (apiId, startMs, endMs) => {
+    if (
+      !Number.isFinite(startMs) ||
+      !Number.isFinite(endMs) ||
+      endMs <= startMs
+    )
+      return;
+    const apis = get().apis.map((a) =>
+      a.id === apiId ? { ...a, startMs, endMs } : a
+    );
+    set({ apis, hasPersistedChanges: true });
+    persistAndSync(apis, get().reactors);
+    scheduleRecompute(set, get, true);
+  },
+
   setApiStageCount: (apiId, count) => {
     const target = Math.max(1, Math.min(10, Math.round(count)));
     const reactors = get().reactors;
@@ -375,6 +393,8 @@ export const useStore = create<AppState>((set, get) => ({
       color,
       priority: 3,
       targetKg: withDefaultFinalStage ? 500 : 0,
+      startMs: FY_START_MS,
+      endMs: FY_END_MS,
       projectionKg: 0,
       stages,
     });

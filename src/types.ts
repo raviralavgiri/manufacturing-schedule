@@ -46,6 +46,14 @@ export interface API {
    *   stage N:      ⌈ next stage actual output ÷ stage N batch size ⌉
    */
   targetKg: number;
+  /**
+   * Production window for this API (epoch ms). Batches cannot start before
+   * `startMs`; any batch whose cycle finishes after `endMs` is flagged
+   * "Ovr" (overflow). Each API has its own window — there is no global
+   * fiscal year anymore.
+   */
+  startMs: number;
+  endMs: number;
   /** Legacy field, kept for back-compat with old Quarterly summary code. */
   projectionKg: number;
   stages: StageMaster[];

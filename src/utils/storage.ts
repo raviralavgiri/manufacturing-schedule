@@ -1,4 +1,5 @@
 import type { API, Reactor } from "../types";
+import { FY_END_MS, FY_START_MS } from "./dates";
 
 // Bump if schema changes - old data is then ignored & seed is used.
 const STORAGE_KEY = "pharma:apis:v1";
@@ -55,7 +56,12 @@ export function loadPersisted(): PersistedSnapshot | null {
                 : s.batchSizeKg,
           }))
         : [];
-      return { ...a, priority, targetKg, stages };
+      // Per-API production window: default to FY 2026-27 if missing
+      const startMs =
+        typeof a.startMs === "number" && a.startMs > 0 ? a.startMs : FY_START_MS;
+      const endMs =
+        typeof a.endMs === "number" && a.endMs > startMs ? a.endMs : FY_END_MS;
+      return { ...a, priority, targetKg, startMs, endMs, stages };
     });
     // Migrate: reactors may be missing in old saves; if present, ensure each
     // has a `name` field (default to id).

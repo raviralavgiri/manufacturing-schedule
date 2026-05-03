@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useStore } from "../store";
 import { Card, SectionHeader, Tag } from "../components/Primitives";
-import { FY_WEEKS, WEEKS_IN_FY } from "../utils/dates";
+import { computeWeeks, unionRange, type WeekBucket } from "../utils/dates";
 import { useChartTheme } from "../utils/chartTheme";
 import {
   ResponsiveContainer,
@@ -19,14 +19,22 @@ const HOURS_PER_WEEK = 7 * 24;
 
 export default function EquipmentTab() {
   const reactors = useStore((s) => s.reactors);
+  const apis = useStore((s) => s.apis);
   const schedule = useStore((s) => s.schedule);
   const chartTheme = useChartTheme();
+
+  // Dynamic timeline range = union of every API's window
+  const weeks = useMemo(() => {
+    const r = unionRange(apis);
+    return computeWeeks(r.startMs, r.endMs);
+  }, [apis]);
+  const weeksCount = weeks.length;
 
   const utilByReactor = useMemo(() => {
     return reactors.map((r, i) => {
       const weekHours = schedule.weeklyReactorOccupancy[i];
       const total = weekHours.reduce((a, b) => a + b, 0);
-      const cap = WEEKS_IN_FY * HOURS_PER_WEEK;
+      const cap = weeksCount * HOURS_PER_WEEK;
       const util = (total / cap) * 100;
       return {
         id: r.id,
@@ -39,10 +47,10 @@ export default function EquipmentTab() {
         weekHours,
       };
     });
-  }, [reactors, schedule]);
+  }, [reactors, schedule, weeksCount]);
 
   const trend = useMemo(() => {
-    return FY_WEEKS.map((w, i) => {
+    return weeks.map((w, i) => {
       const totalHrs = schedule.weeklyReactorOccupancy.reduce(
         (acc, row) => acc + row[i],
         0
@@ -60,7 +68,7 @@ export default function EquipmentTab() {
         }).length,
       };
     });
-  }, [schedule, reactors]);
+  }, [schedule, reactors, weeks]);
 
   const avgUtil =
     utilByReactor.reduce((a, r) => a + r.util, 0) / utilByReactor.length;
@@ -84,7 +92,7 @@ export default function EquipmentTab() {
             </div>
           </div>
           <div className="overflow-auto p-3">
-            <Heatmap util={utilByReactor} />
+            <Heatmap util={utilByReactor} weeks={weeks} />
           </div>
         </Card>
 
@@ -192,8 +200,10 @@ export default function EquipmentTab() {
 
 function Heatmap({
   util,
+  weeks,
 }: {
   util: { id: string; name: string; cls: string; weekHours: number[] }[];
+  weeks: WeekBucket[];
 }) {
   const cellW = 16;
   const cellH = 18;
@@ -202,7 +212,7 @@ function Heatmap({
       {/* Top header (weeks) */}
       <div className="flex">
         <div style={{ width: 90 }} />
-        {FY_WEEKS.map((w, i) => (
+        {weeks.map((w, i) => (
           <div
             key={i}
             style={{ width: cellW }}
@@ -244,7 +254,7 @@ function Heatmap({
                         : undefined,
                   }}
                   className="rounded-[3px] transition hover:scale-110 hover:ring-1 hover:ring-white"
-                  title={`${r.name === r.id ? r.id : `${r.name} (id: ${r.id})`} · ${FY_WEEKS[i].label}: ${h.toFixed(1)} hrs (${(pct * 100).toFixed(0)}%) · max=${maxHrs.toFixed(0)}h`}
+                  title={`${r.name === r.id ? r.id : `${r.name} (id: ${r.id})`} · ${weeks[i]?.label ?? ""}: ${h.toFixed(1)} hrs (${(pct * 100).toFixed(0)}%) · max=${maxHrs.toFixed(0)}h`}
                 />
               );
             })}

@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useStore } from "../store";
 import { Card, SectionHeader } from "../components/Primitives";
-import { quarterOf } from "../utils/dates";
+import { computeWeeks, quarterIn, unionRange } from "../utils/dates";
 import { useChartTheme } from "../utils/chartTheme";
 import {
   ResponsiveContainer,
@@ -46,6 +46,12 @@ export default function QuarterlyTab() {
     return m;
   }, [apis]);
 
+  // Quarters span the union of all APIs' windows, divided into 4 equal slices
+  const weeks = useMemo(() => {
+    const r = unionRange(apis);
+    return computeWeeks(r.startMs, r.endMs);
+  }, [apis]);
+
   const pivot: PivotRow[] = useMemo(() => {
     const map = new Map<string, PivotRow>();
     apis.forEach((a) =>
@@ -65,7 +71,7 @@ export default function QuarterlyTab() {
       })
     );
     schedule.batches.forEach((b) => {
-      const q = quarterOf(b.startMs);
+      const q = quarterIn(weeks, b.startMs);
       if (!q) return;
       const key = `${b.apiId}__${b.stageNo}`;
       const row = map.get(key);
@@ -84,7 +90,7 @@ export default function QuarterlyTab() {
       }
       return a.stageNo - b.stageNo;
     });
-  }, [apis, schedule, apiOrder]);
+  }, [apis, schedule, apiOrder, weeks]);
 
   const quarterTotals = useMemo(() => {
     const out = [
