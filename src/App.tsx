@@ -17,6 +17,7 @@ import { Pill } from "./components/Primitives";
 import { fmtDate } from "./utils/dates";
 import SyncBadge from "./components/SyncBadge";
 import ThemeToggle from "./components/ThemeToggle";
+import ProjectSwitcher from "./components/ProjectSwitcher";
 import ApisTab from "./tabs/ApisTab";
 import StagesTab from "./tabs/StagesTab";
 import ScheduleTab from "./tabs/ScheduleTab";
@@ -118,8 +119,14 @@ export default function App() {
                 Plan: {fmtDate(planWindow.startMs)} → {fmtDate(planWindow.endMs)} · Pharma Production Planner
               </p>
             </div>
+            <div className="ml-3 hidden sm:block">
+              <ProjectSwitcher />
+            </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="block sm:hidden">
+              <ProjectSwitcher />
+            </div>
             <Pill
               label="Batches"
               value={schedule.totalBatches}

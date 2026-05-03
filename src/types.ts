@@ -60,6 +60,20 @@ export interface PlanWindow {
   endMs: number;
 }
 
+/**
+ * A namespace bundling APIs, reactors, and a plan window into a single
+ * planning context. Multiple projects can co-exist; the user picks an
+ * active one via the project switcher in the app header.
+ */
+export interface Project {
+  id: string;          // stable internal id
+  name: string;        // editable display name
+  createdAt: number;
+  apis: API[];
+  reactors: Reactor[];
+  window: PlanWindow;
+}
+
 export interface BatchScheduleEntry {
   batchId: string;
   apiId: string;

@@ -1,131 +1,178 @@
-import type { API, PlanWindow, Reactor } from "../types";
+import type { API, PlanWindow, Project, Reactor } from "../types";
 import { FY_END_MS, FY_START_MS } from "./dates";
 import { refreshPaletteColors } from "../data/seed";
 
-// Bump if schema changes - old data is then ignored & seed is used.
-const STORAGE_KEY = "pharma:apis:v1";
+// We bump version when the persisted shape changes incompatibly.
+// v1: single-namespace { apis, reactors, window }
+// v2: multi-project namespace { projects, activeProjectId }
+const STORAGE_KEY = "pharma:apis:v1"; // kept the same to avoid orphaning data
+// Migration is performed inline based on the `v` field within the JSON.
 
-export interface PersistedShape {
+interface PersistedV1 {
   v: 1;
   apis: API[];
-  /** Older saves don't have this; we fall back to the seed in that case. */
   reactors?: Reactor[];
-  /** Single global plan window. Older saves stored per-API windows. */
   window?: PlanWindow;
-  savedAt: number;
+  savedAt?: number;
 }
+
+interface PersistedV2 {
+  v: 2;
+  projects: Project[];
+  activeProjectId: string;
+  savedAt?: number;
+}
+
+type AnyPersisted = PersistedV1 | PersistedV2;
 
 export interface PersistedSnapshot {
-  apis: API[];
-  reactors: Reactor[] | null;
-  window: PlanWindow;
+  projects: Project[];
+  activeProjectId: string;
 }
 
+/** Try to load the persisted state. Performs v1 → v2 migration in memory. */
 export function loadPersisted(): PersistedSnapshot | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as PersistedShape;
-    if (parsed.v !== 1 || !Array.isArray(parsed.apis)) return null;
-    if (!parsed.apis.every((a) => a && a.id && Array.isArray(a.stages))) {
-      return null;
-    }
-    // Migrate: ensure priority + targetKg + per-stage inputKgPerBatch fields
-    // exist. Strip any legacy per-API startMs/endMs (now global).
-    const migrated = parsed.apis.map((a) => {
-      const priority = (a.priority ?? 3) as API["priority"];
-      let targetKg = a.targetKg;
-      if (typeof targetKg !== "number" || targetKg <= 0) {
-        const stages = Array.isArray(a.stages) ? a.stages : [];
-        if (stages.length > 0) {
-          const finalStage = stages.reduce((acc, s) =>
-            s.stageNo > acc.stageNo ? s : acc
-          );
-          targetKg =
-            (finalStage.batchSizeKg ?? 0) * (finalStage.plannedBatches ?? 0);
-        } else {
-          targetKg = 0;
-        }
-      }
-      const stages = Array.isArray(a.stages)
-        ? a.stages.map((s) => ({
-            ...s,
-            inputKgPerBatch:
-              typeof s.inputKgPerBatch === "number" && s.inputKgPerBatch > 0
-                ? s.inputKgPerBatch
-                : s.batchSizeKg,
-          }))
-        : [];
-      // Drop the deprecated per-API window fields (kept by destructure).
-      const {
-        startMs: _legacyStart,
-        endMs: _legacyEnd,
-        ...rest
-      } = a as API & { startMs?: number; endMs?: number };
-      void _legacyStart;
-      void _legacyEnd;
-      return { ...rest, priority, targetKg, stages };
-    });
-    // Apply the latest palette colors based on array order
-    const apis = refreshPaletteColors(migrated);
+    const parsed = JSON.parse(raw) as AnyPersisted;
+    if (!parsed || typeof parsed !== "object") return null;
 
-    let reactors: Reactor[] | null = null;
-    if (Array.isArray(parsed.reactors)) {
-      reactors = parsed.reactors.map((r) => ({
-        ...r,
-        name: r.name ?? r.id,
-      }));
+    if (parsed.v === 2) {
+      return migrateV2(parsed);
     }
-
-    // Resolve global window: prefer persisted top-level window, else derive
-    // from the first legacy per-API window present, else default to FY 26-27.
-    let resolvedWindow: PlanWindow = {
-      startMs: FY_START_MS,
-      endMs: FY_END_MS,
-    };
-    if (
-      parsed.window &&
-      typeof parsed.window.startMs === "number" &&
-      typeof parsed.window.endMs === "number" &&
-      parsed.window.endMs > parsed.window.startMs
-    ) {
-      resolvedWindow = parsed.window;
-    } else {
-      const legacy = parsed.apis.find(
-        (a: any) =>
-          typeof a.startMs === "number" &&
-          typeof a.endMs === "number" &&
-          a.endMs > a.startMs
-      ) as { startMs?: number; endMs?: number } | undefined;
-      if (legacy && legacy.startMs && legacy.endMs) {
-        resolvedWindow = { startMs: legacy.startMs, endMs: legacy.endMs };
-      }
+    if (parsed.v === 1) {
+      return migrateV1(parsed);
     }
-
-    return { apis, reactors, window: resolvedWindow };
+    return null;
   } catch {
     return null;
   }
 }
 
+function migrateV2(v2: PersistedV2): PersistedSnapshot | null {
+  if (!Array.isArray(v2.projects) || v2.projects.length === 0) return null;
+  const projects = v2.projects
+    .map(normalizeProject)
+    .filter((p): p is Project => p !== null);
+  if (projects.length === 0) return null;
+  const activeProjectId = projects.some((p) => p.id === v2.activeProjectId)
+    ? v2.activeProjectId
+    : projects[0].id;
+  return { projects, activeProjectId };
+}
+
+function migrateV1(v1: PersistedV1): PersistedSnapshot | null {
+  if (!Array.isArray(v1.apis)) return null;
+  // Wrap the v1 single-namespace data as a single project named "Default".
+  const project = normalizeProject({
+    id: "default",
+    name: "Default",
+    createdAt: Date.now(),
+    apis: v1.apis,
+    reactors: v1.reactors ?? [],
+    window: v1.window ?? { startMs: FY_START_MS, endMs: FY_END_MS },
+  });
+  if (!project) return null;
+  return { projects: [project], activeProjectId: "default" };
+}
+
+/**
+ * Apply per-API / per-stage / window migrations to a single project.
+ * Returns null if the project is unsalvageable (e.g. malformed).
+ */
+function normalizeProject(p: any): Project | null {
+  if (!p || typeof p !== "object") return null;
+  if (!Array.isArray(p.apis)) return null;
+  if (
+    !p.apis.every(
+      (a: any) => a && typeof a.id === "string" && Array.isArray(a.stages)
+    )
+  ) {
+    return null;
+  }
+
+  const migratedApis = p.apis.map((a: any) => {
+    const priority = (a.priority ?? 3) as API["priority"];
+    let targetKg = a.targetKg;
+    if (typeof targetKg !== "number" || targetKg < 0) {
+      const stages = Array.isArray(a.stages) ? a.stages : [];
+      if (stages.length > 0) {
+        const finalStage = stages.reduce((acc: any, s: any) =>
+          s.stageNo > acc.stageNo ? s : acc
+        );
+        targetKg =
+          (finalStage.batchSizeKg ?? 0) * (finalStage.plannedBatches ?? 0);
+      } else {
+        targetKg = 0;
+      }
+    }
+    const stages = Array.isArray(a.stages)
+      ? a.stages.map((s: any) => ({
+          ...s,
+          inputKgPerBatch:
+            typeof s.inputKgPerBatch === "number" && s.inputKgPerBatch > 0
+              ? s.inputKgPerBatch
+              : s.batchSizeKg,
+        }))
+      : [];
+    const {
+      startMs: _legacyStart,
+      endMs: _legacyEnd,
+      ...rest
+    } = a as API & { startMs?: number; endMs?: number };
+    void _legacyStart;
+    void _legacyEnd;
+    return { ...rest, priority, targetKg, stages };
+  });
+  const apis = refreshPaletteColors(migratedApis as API[]) as API[];
+
+  const reactors: Reactor[] = Array.isArray(p.reactors)
+    ? p.reactors.map((r: any) => ({ ...r, name: r.name ?? r.id }))
+    : [];
+
+  let win: PlanWindow = { startMs: FY_START_MS, endMs: FY_END_MS };
+  if (
+    p.window &&
+    typeof p.window.startMs === "number" &&
+    typeof p.window.endMs === "number" &&
+    p.window.endMs > p.window.startMs
+  ) {
+    win = p.window;
+  }
+
+  return {
+    id: typeof p.id === "string" ? p.id : crypto.randomUUID(),
+    name:
+      typeof p.name === "string" && p.name.trim()
+        ? p.name.trim()
+        : "Untitled Project",
+    createdAt:
+      typeof p.createdAt === "number" && p.createdAt > 0
+        ? p.createdAt
+        : Date.now(),
+    apis,
+    reactors,
+    window: win,
+  };
+}
+
 export function savePersisted(
-  apis: API[],
-  reactors: Reactor[],
-  planWindow: PlanWindow
+  projects: Project[],
+  activeProjectId: string
 ): void {
   if (typeof window === "undefined") return;
   try {
-    const payload: PersistedShape = {
-      v: 1,
-      apis,
-      reactors,
-      window: planWindow,
+    const payload: PersistedV2 = {
+      v: 2,
+      projects,
+      activeProjectId,
       savedAt: Date.now(),
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
   } catch {
-    // localStorage may be full or unavailable in private mode - ignore.
+    // ignore quota / private mode
   }
 }
 

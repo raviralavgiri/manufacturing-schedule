@@ -1,40 +1,44 @@
-import type { API, PlanWindow, Reactor } from "../types";
+import type { API, PlanWindow, Project, Reactor } from "../types";
 import { getWorkspaceId, isSupabaseEnabled, supabase } from "./supabase";
 
 export type SyncStatus =
-  | "disabled" // Supabase not configured - localStorage only
-  | "idle" // Configured + nothing pending
-  | "syncing" // A write is in flight
-  | "synced" // Last write succeeded
-  | "error" // Last write failed
-  | "loading"; // Initial load in progress
+  | "disabled"
+  | "idle"
+  | "syncing"
+  | "synced"
+  | "error"
+  | "loading";
 
 const TABLE = "workspaces";
 
 export interface CloudSnapshot {
-  apis: API[];
-  reactors: Reactor[];
-  window: PlanWindow;
+  projects: Project[];
+  activeProjectId: string;
 }
 
 interface RowShape {
   id: string;
-  apis: API[];
+  // v2 shape
+  projects?: Project[];
+  active_project_id?: string;
+  // v1 legacy shape (for backwards compat read path)
+  apis?: API[];
   reactors?: Reactor[];
   window?: PlanWindow;
   updated_at?: string;
 }
 
 /**
- * Try to load workspace snapshot for this browser from Supabase.
- * Returns null if Supabase is disabled, the row doesn't exist, or any error.
+ * Load the workspace snapshot from Supabase. Handles both v2 (projects)
+ * and legacy v1 (apis/reactors/window) row shapes — v1 rows get auto-wrapped
+ * into a single Default project.
  */
 export async function loadFromCloud(): Promise<CloudSnapshot | null> {
   if (!isSupabaseEnabled || !supabase) return null;
   const id = getWorkspaceId();
   const { data, error } = await supabase
     .from(TABLE)
-    .select("apis, reactors, window")
+    .select("apis, reactors, window, projects, active_project_id")
     .eq("id", id)
     .maybeSingle();
   if (error) {
@@ -42,42 +46,88 @@ export async function loadFromCloud(): Promise<CloudSnapshot | null> {
     return null;
   }
   if (!data) return null;
-  const row = data as Pick<RowShape, "apis" | "reactors" | "window">;
-  if (!Array.isArray(row.apis)) return null;
-  const reactors = Array.isArray(row.reactors)
-    ? row.reactors.map((r) => ({ ...r, name: r.name ?? r.id }))
-    : [];
-  const window =
-    row.window &&
-    typeof row.window.startMs === "number" &&
-    typeof row.window.endMs === "number"
-      ? row.window
-      : { startMs: 0, endMs: 0 }; // caller will fall back to its own default
-  return { apis: row.apis, reactors, window };
+  const row = data as RowShape;
+
+  // v2: projects array present
+  if (Array.isArray(row.projects) && row.projects.length > 0) {
+    const projects = row.projects.map(normalize).filter((p): p is Project => !!p);
+    if (projects.length === 0) return null;
+    const activeProjectId =
+      typeof row.active_project_id === "string" &&
+      projects.some((p) => p.id === row.active_project_id)
+        ? row.active_project_id
+        : projects[0].id;
+    return { projects, activeProjectId };
+  }
+
+  // v1 fallback: wrap the legacy single namespace as a Default project
+  if (Array.isArray(row.apis)) {
+    const project: Project = {
+      id: "default",
+      name: "Default",
+      createdAt: Date.now(),
+      apis: row.apis,
+      reactors: Array.isArray(row.reactors)
+        ? row.reactors.map((r) => ({ ...r, name: r.name ?? r.id }))
+        : [],
+      window: row.window ?? { startMs: 0, endMs: 0 },
+    };
+    return { projects: [project], activeProjectId: "default" };
+  }
+
+  return null;
 }
 
-/**
- * Upsert the workspace snapshot to Supabase. Throws on error so caller can
- * mark sync status appropriately.
- */
+function normalize(p: any): Project | null {
+  if (!p || !Array.isArray(p.apis)) return null;
+  return {
+    id: typeof p.id === "string" ? p.id : crypto.randomUUID(),
+    name:
+      typeof p.name === "string" && p.name.trim()
+        ? p.name.trim()
+        : "Untitled Project",
+    createdAt:
+      typeof p.createdAt === "number" && p.createdAt > 0
+        ? p.createdAt
+        : Date.now(),
+    apis: p.apis,
+    reactors: Array.isArray(p.reactors)
+      ? p.reactors.map((r: any) => ({ ...r, name: r.name ?? r.id }))
+      : [],
+    window:
+      p.window &&
+      typeof p.window.startMs === "number" &&
+      typeof p.window.endMs === "number"
+        ? p.window
+        : { startMs: 0, endMs: 0 },
+  };
+}
+
+/** Upsert the workspace snapshot to Supabase. */
 export async function saveToCloud(snapshot: CloudSnapshot): Promise<void> {
   if (!isSupabaseEnabled || !supabase) {
     throw new Error("Supabase not configured");
   }
   const id = getWorkspaceId();
-  const { error } = await supabase
-    .from(TABLE)
-    .upsert(
-      {
-        id,
-        apis: snapshot.apis,
-        reactors: snapshot.reactors,
-        window: snapshot.window,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "id" }
-    );
+  const { error } = await supabase.from(TABLE).upsert(
+    {
+      id,
+      projects: snapshot.projects,
+      active_project_id: snapshot.activeProjectId,
+      // Mirror the active project's data into the legacy columns for any
+      // downstream tools that still read v1 shape.
+      apis: getActive(snapshot)?.apis ?? [],
+      reactors: getActive(snapshot)?.reactors ?? [],
+      window: getActive(snapshot)?.window ?? null,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "id" }
+  );
   if (error) throw new Error(error.message);
+}
+
+function getActive(snapshot: CloudSnapshot): Project | undefined {
+  return snapshot.projects.find((p) => p.id === snapshot.activeProjectId);
 }
 
 // ─── Debounced background sync ─────────────────────────────────────────────────
@@ -105,9 +155,6 @@ export function getSyncStatus(): SyncStatus {
   return lastStatus;
 }
 
-/**
- * Schedule a debounced cloud save. Coalesces rapid edits into a single write.
- */
 export function queueCloudSave(
   snapshot: CloudSnapshot,
   debounceMs = 800
