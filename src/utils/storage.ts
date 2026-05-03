@@ -129,7 +129,11 @@ function normalizeProject(p: any): Project | null {
   const apis = refreshPaletteColors(migratedApis as API[]) as API[];
 
   const reactors: Reactor[] = Array.isArray(p.reactors)
-    ? p.reactors.map((r: any) => ({ ...r, name: r.name ?? r.id }))
+    ? p.reactors.map((r: any) => ({
+        ...r,
+        name: r.name ?? r.id,
+        reactorClass: migrateReactorClass(r.reactorClass),
+      }))
     : [];
 
   let win: PlanWindow = { startMs: FY_START_MS, endMs: FY_END_MS };
@@ -192,4 +196,17 @@ export function isPersistedPresent(): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Map legacy reactor classes to the current Intermediate | Cleanroom union.
+ * "Small" + "Medium" → "Intermediate"; "Large" → "Cleanroom". Unknown values
+ * fall back to "Intermediate" (the more permissive class). Exported so
+ * services/sync.ts can apply the same migration on cloud reads.
+ */
+export function migrateReactorClass(value: unknown): Reactor["reactorClass"] {
+  if (value === "Intermediate" || value === "Cleanroom") return value;
+  if (value === "Large") return "Cleanroom";
+  // "Small" | "Medium" | anything-else → Intermediate
+  return "Intermediate";
 }

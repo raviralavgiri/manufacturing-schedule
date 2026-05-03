@@ -13,16 +13,24 @@ import { useStore } from "../store";
 import { Card, SectionHeader } from "../components/Primitives";
 import type { ReactorClass } from "../types";
 
+const CLASS_ORDER: ReactorClass[] = ["Intermediate", "Cleanroom"];
+const CLASS_LABEL: Record<ReactorClass, string> = {
+  Intermediate: "INT",
+  Cleanroom: "CR",
+};
+const CLASS_FULL: Record<ReactorClass, string> = {
+  Intermediate: "Intermediate",
+  Cleanroom: "Cleanroom",
+};
+
 /**
  * Master Reactor tab — single source of truth for the reactor fleet.
  *
- * What you can do here:
- *   • Add a new reactor (id, name, class, capacity).
- *   • Update an existing reactor's name, class, capacity. The id is
- *     immutable because it's referenced by every stage's `reactorPool`.
- *   • Delete a reactor with safety guards: blocked if it's the only
- *     reactor in some stage's pool; otherwise removed from all pools
- *     after confirmation, then schedule recomputes.
+ * Layout: a single sticky-header table grouped by class (Intermediate / Cleanroom).
+ *   • id is immutable (referenced by every stage's `reactorPool`).
+ *   • Click name / class toggle / capacity to edit.
+ *   • Trash → confirm-inline. Cannot delete a reactor that is the only
+ *     entry in some stage's pool — the store's removeReactor enforces it.
  */
 export default function MasterReactorTab() {
   const reactors = useStore((s) => s.reactors);
@@ -35,39 +43,40 @@ export default function MasterReactorTab() {
 
   const [showAdd, setShowAdd] = useState(false);
 
-  // For each stage pool, build a quick lookup: how many stages does this
-  // reactor appear in? Used to label the card and gate the delete UX.
+  // Live "used by N stages" count for each reactor.
   const usageByReactor = useMemo(() => {
-    const map: Record<string, { stagesUsing: number; isOnlyInSomePool: boolean }> = {};
-    reactors.forEach((r) => {
-      map[r.id] = { stagesUsing: 0, isOnlyInSomePool: false };
-    });
+    const map: Record<string, number> = {};
+    reactors.forEach((r) => (map[r.id] = 0));
     apis.forEach((a) =>
-      a.stages.forEach((s) => {
+      a.stages.forEach((s) =>
         s.reactorPool.forEach((rid) => {
-          if (!map[rid]) return;
-          map[rid].stagesUsing += 1;
-          if (s.reactorPool.length <= 1) map[rid].isOnlyInSomePool = true;
-        });
-      })
+          if (map[rid] !== undefined) map[rid] += 1;
+        })
+      )
     );
     return map;
   }, [reactors, apis]);
 
-  const reactorsByClass = useMemo(
-    () => ({
-      Small: reactors.filter((r) => r.reactorClass === "Small"),
-      Medium: reactors.filter((r) => r.reactorClass === "Medium"),
-      Large: reactors.filter((r) => r.reactorClass === "Large"),
-    }),
-    [reactors]
-  );
+  const groupedReactors = useMemo(() => {
+    const sorted = [...reactors].sort((a, b) => {
+      const aIdx = CLASS_ORDER.indexOf(a.reactorClass);
+      const bIdx = CLASS_ORDER.indexOf(b.reactorClass);
+      if (aIdx !== bIdx) return aIdx - bIdx;
+      return a.id.localeCompare(b.id);
+    });
+    const buckets: Record<ReactorClass, typeof sorted> = {
+      Intermediate: [],
+      Cleanroom: [],
+    };
+    sorted.forEach((r) => buckets[r.reactorClass].push(r));
+    return buckets;
+  }, [reactors]);
 
   return (
     <div className="space-y-4">
       <SectionHeader
         title="Master Reactor"
-        subtitle={`${reactors.length} reactors across the fleet. Click any name, class, or capacity to edit. ID is immutable.`}
+        subtitle={`${reactors.length} reactors across the fleet · ${groupedReactors.Intermediate.length} INT, ${groupedReactors.Cleanroom.length} CR. Click any name, class, or capacity to edit; ID is immutable.`}
         right={
           <button
             onClick={() => setShowAdd((v) => !v)}
@@ -86,7 +95,7 @@ export default function MasterReactorTab() {
       {showAdd && (
         <AddReactorForm
           existingIds={reactors.map((r) => r.id)}
-          existingByClass={reactorsByClass}
+          existingByClass={groupedReactors}
           onCancel={() => setShowAdd(false)}
           onAdd={(input) => {
             const result = addReactor(input);
@@ -97,48 +106,54 @@ export default function MasterReactorTab() {
       )}
 
       <Card className="overflow-hidden p-0">
-        <div className="space-y-4 p-4">
-          {(["Small", "Medium", "Large"] as const).map((cls) => (
-            <div key={cls}>
-              <div className="mb-1.5 flex items-center gap-2">
-                <span
-                  className="h-2.5 w-2.5 rounded-sm"
-                  style={{
-                    background: classColor(cls),
-                    boxShadow: `0 0 6px ${classColor(cls)}80`,
-                  }}
-                />
-                <span className="text-[10px] font-bold uppercase tracking-wider text-ink-300">
-                  {cls} ({reactorsByClass[cls].length})
-                </span>
-              </div>
-              {reactorsByClass[cls].length === 0 ? (
-                <div className="rounded-lg border border-dashed border-white/10 bg-white/[0.02] p-3 text-xs text-ink-400">
-                  No {cls.toLowerCase()} reactors. Add one above to make this
-                  class available to stage pools.
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                  {reactorsByClass[cls].map((r) => (
-                    <ReactorCard
-                      key={r.id}
-                      id={r.id}
-                      name={r.name}
-                      reactorClass={r.reactorClass}
-                      capacityKg={r.capacityKg}
-                      stagesUsing={usageByReactor[r.id]?.stagesUsing ?? 0}
-                      onName={(v) => setReactorName(r.id, v)}
-                      onClass={(c) => setReactorClass(r.id, c)}
-                      onCapacity={(v) => setReactorCapacity(r.id, v)}
-                      onDelete={(cascade) =>
-                        removeReactor(r.id, { cascade })
-                      }
-                    />
-                  ))}
-                </div>
+        <div className="max-h-[68vh] overflow-auto">
+          <table className="min-w-full text-sm">
+            <thead className="sticky top-0 z-10 bg-ink-900/90 backdrop-blur-md">
+              <tr className="text-left text-[11px] uppercase tracking-wider text-ink-300">
+                <Th className="w-8">&nbsp;</Th>
+                <Th className="w-24">ID</Th>
+                <Th yellow>Name</Th>
+                <Th yellow className="w-32">
+                  Class
+                </Th>
+                <Th yellow align="right" className="w-28">
+                  Capacity (L)
+                </Th>
+                <Th align="right" className="w-32">
+                  Used By
+                </Th>
+                <Th align="right" className="w-12">
+                  &nbsp;
+                </Th>
+              </tr>
+            </thead>
+            <tbody>
+              {CLASS_ORDER.map((cls) => {
+                const list = groupedReactors[cls];
+                return (
+                  <ReactorClassGroup
+                    key={cls}
+                    cls={cls}
+                    list={list}
+                    usageByReactor={usageByReactor}
+                    onName={setReactorName}
+                    onClass={setReactorClass}
+                    onCapacity={setReactorCapacity}
+                    onDelete={removeReactor}
+                  />
+                );
+              })}
+              {reactors.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="py-12 text-center text-sm text-ink-300">
+                    No reactors yet. Click{" "}
+                    <span className="font-bold text-cyan-300">+ Add Reactor</span>{" "}
+                    above to create one.
+                  </td>
+                </tr>
               )}
-            </div>
-          ))}
+            </tbody>
+          </table>
         </div>
       </Card>
 
@@ -165,9 +180,81 @@ export default function MasterReactorTab() {
   );
 }
 
-// ─── Single reactor card ─────────────────────────────────────────────────────
+// ─── Class group (subheader row + body rows) ─────────────────────────────────
 
-function ReactorCard({
+function ReactorClassGroup({
+  cls,
+  list,
+  usageByReactor,
+  onName,
+  onClass,
+  onCapacity,
+  onDelete,
+}: {
+  cls: ReactorClass;
+  list: { id: string; name: string; reactorClass: ReactorClass; capacityKg: number }[];
+  usageByReactor: Record<string, number>;
+  onName: (rid: string, v: string) => void;
+  onClass: (rid: string, c: ReactorClass) => void;
+  onCapacity: (rid: string, v: number) => void;
+  onDelete: (rid: string, opts?: { cascade?: boolean }) =>
+    | { ok: true }
+    | { ok: false; error: string; blockingStages?: string[] };
+}) {
+  return (
+    <>
+      <tr className="bg-white/[0.04]">
+        <td colSpan={7} className="px-3 py-1.5">
+          <div className="flex items-center gap-2">
+            <span
+              className="inline-block h-2 w-2 rounded-sm"
+              style={{
+                background: classColor(cls),
+                boxShadow: `0 0 6px ${classColor(cls)}80`,
+              }}
+            />
+            <span className="text-[10px] font-bold uppercase tracking-wider text-ink-200">
+              {CLASS_FULL[cls]} ({list.length})
+            </span>
+            <span className="text-[10px] text-ink-500">· {CLASS_LABEL[cls]}</span>
+          </div>
+        </td>
+      </tr>
+      {list.length === 0 ? (
+        <tr>
+          <td
+            colSpan={7}
+            className="border-t border-white/5 px-3 py-3 text-xs text-ink-400"
+          >
+            No {CLASS_FULL[cls].toLowerCase()} reactors. Add one above to make
+            this class available to stage pools.
+          </td>
+        </tr>
+      ) : (
+        list.map((r, i) => (
+          <ReactorRow
+            key={r.id}
+            zebra={i % 2 === 0}
+            id={r.id}
+            name={r.name}
+            reactorClass={r.reactorClass}
+            capacityKg={r.capacityKg}
+            stagesUsing={usageByReactor[r.id] ?? 0}
+            onName={(v) => onName(r.id, v)}
+            onClass={(c) => onClass(r.id, c)}
+            onCapacity={(v) => onCapacity(r.id, v)}
+            onDelete={(cascade) => onDelete(r.id, { cascade })}
+          />
+        ))
+      )}
+    </>
+  );
+}
+
+// ─── Single reactor row ──────────────────────────────────────────────────────
+
+function ReactorRow({
+  zebra,
   id,
   name,
   reactorClass,
@@ -178,6 +265,7 @@ function ReactorCard({
   onCapacity,
   onDelete,
 }: {
+  zebra: boolean;
   id: string;
   name: string;
   reactorClass: ReactorClass;
@@ -195,20 +283,12 @@ function ReactorCard({
 
   const tryDelete = () => {
     setError(null);
-    // First pass: no cascade. We expect this to fail with an in-use error if
-    // the reactor is referenced by ≥1 stage; or with a blocking error if any
-    // referencing pool would be left empty.
     const probe = onDelete(false);
-    if (probe.ok) {
-      // Reactor was unused — done.
-      return;
-    }
+    if (probe.ok) return;
     if (probe.blockingStages && probe.blockingStages.length > 0) {
-      // Hard block — surface error, do not enter confirm state.
       setError(probe.error);
       return;
     }
-    // In-use but safe to cascade — ask for confirmation.
     setConfirmDelete(true);
   };
 
@@ -219,116 +299,120 @@ function ReactorCard({
   };
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 transition hover:border-white/20">
-      <div className="mb-2 flex items-start gap-2">
-        <span
-          className="mt-1 h-2 w-2 shrink-0 rounded-sm"
-          style={{
-            background: classColor(reactorClass),
-            boxShadow: `0 0 6px ${classColor(reactorClass)}80`,
-          }}
-        />
-        <div className="flex-1 overflow-hidden">
+    <>
+      <tr
+        className={clsx(
+          "border-t border-white/5 transition hover:bg-white/[0.04]",
+          zebra && "bg-white/[0.01]"
+        )}
+      >
+        <td className="px-3 py-2.5">
+          <span
+            className="inline-block h-2 w-2 rounded-sm"
+            style={{
+              background: classColor(reactorClass),
+              boxShadow: `0 0 6px ${classColor(reactorClass)}80`,
+            }}
+          />
+        </td>
+        <td className="px-3 py-2.5 font-mono text-xs tabular-nums text-ink-200">
+          <span
+            className="inline-flex items-center gap-1.5"
+            title="Stable internal id (immutable)"
+          >
+            <Lock size={10} className="text-ink-500" />
+            {id}
+          </span>
+        </td>
+        <td className="px-3 py-2">
           <EditableTextCell
             value={name}
             onCommit={onName}
             placeholder={id}
             ariaLabel={`Reactor ${id} display name`}
           />
-          <div className="mt-1 flex items-center gap-1.5 text-[9px] uppercase tracking-wider text-ink-500">
-            <span title="Stable internal id (immutable)">
-              <Lock size={9} className="mr-0.5 inline opacity-70" /> id: {id}
+        </td>
+        <td className="px-3 py-2">
+          <ClassToggle value={reactorClass} onChange={onClass} />
+        </td>
+        <td className="px-3 py-2 text-right">
+          <EditableNumCell value={capacityKg} onChange={onCapacity} />
+        </td>
+        <td className="px-3 py-2.5 text-right text-xs">
+          {stagesUsing === 0 ? (
+            <span className="text-ink-500">unused</span>
+          ) : (
+            <span className="font-mono text-violet-300">
+              {stagesUsing} stage{stagesUsing === 1 ? "" : "s"}
             </span>
-            {stagesUsing > 0 && (
-              <>
-                <span>·</span>
-                <span className="text-violet-300">
-                  used by {stagesUsing} stage{stagesUsing === 1 ? "" : "s"}
-                </span>
-              </>
-            )}
-          </div>
-        </div>
-        {!confirmDelete && (
+          )}
+        </td>
+        <td className="px-2 py-2 text-right">
           <button
             onClick={tryDelete}
             className="rounded-md p-1.5 text-ink-400 transition hover:bg-rose-400/15 hover:text-rose-300"
-            title="Delete reactor"
+            title={`Delete ${id}`}
             aria-label={`Delete reactor ${id}`}
           >
             <Trash2 size={13} />
           </button>
-        )}
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <div className="mb-0.5 text-[9px] font-bold uppercase tracking-wider text-ink-400">
-            Class
-          </div>
-          <ClassToggle value={reactorClass} onChange={onClass} />
-        </div>
-        <div>
-          <div className="mb-0.5 text-[9px] font-bold uppercase tracking-wider text-ink-400">
-            Capacity (L)
-          </div>
-          <EditableNumCell value={capacityKg} onChange={onCapacity} />
-        </div>
-      </div>
-
-      {confirmDelete && (
-        <div className="mt-3 rounded-md border border-rose-300/30 bg-rose-400/10 p-2 text-[11px] text-rose-200">
-          <div className="mb-1.5 font-semibold">
-            Reactor <span className="font-mono">{id}</span> is in {stagesUsing}{" "}
-            stage pool{stagesUsing === 1 ? "" : "s"}. Confirming will remove it
-            from those pools and recompute the schedule.
-          </div>
-          <div className="flex justify-end gap-1.5">
-            <button
-              onClick={() => setConfirmDelete(false)}
-              className="rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-semibold text-ink-200 hover:bg-white/10"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={confirm}
-              className="rounded-md border border-rose-300/40 bg-rose-400/20 px-2 py-0.5 text-[10px] font-bold text-rose-200 hover:bg-rose-400/30"
-            >
-              Confirm delete
-            </button>
-          </div>
-        </div>
+        </td>
+      </tr>
+      {(confirmDelete || error) && (
+        <tr className={clsx("border-t border-white/5", zebra && "bg-white/[0.01]")}>
+          <td colSpan={7} className="px-3 pb-3">
+            {confirmDelete && (
+              <div className="rounded-md border border-rose-300/30 bg-rose-400/10 p-2 text-[11px] text-rose-200">
+                <div className="mb-1.5 font-semibold">
+                  Reactor <span className="font-mono">{id}</span> is in{" "}
+                  {stagesUsing} stage pool{stagesUsing === 1 ? "" : "s"}.
+                  Confirming will remove it from those pools and recompute the
+                  schedule.
+                </div>
+                <div className="flex justify-end gap-1.5">
+                  <button
+                    onClick={() => setConfirmDelete(false)}
+                    className="rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-semibold text-ink-200 hover:bg-white/10"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={confirm}
+                    className="rounded-md border border-rose-300/40 bg-rose-400/20 px-2 py-0.5 text-[10px] font-bold text-rose-200 hover:bg-rose-400/30"
+                  >
+                    Confirm delete
+                  </button>
+                </div>
+              </div>
+            )}
+            {error && (
+              <div className="mt-1 flex items-start gap-1.5 rounded-md border border-rose-300/30 bg-rose-400/10 p-2 text-[10px] text-rose-200">
+                <AlertCircle size={11} className="mt-0.5 shrink-0" />
+                <div className="flex-1">{error}</div>
+                <button
+                  onClick={() => setError(null)}
+                  className="shrink-0 text-rose-200/70 hover:text-rose-200"
+                  aria-label="Dismiss error"
+                >
+                  <X size={10} />
+                </button>
+              </div>
+            )}
+          </td>
+        </tr>
       )}
-
-      {error && (
-        <div className="mt-2 flex items-start gap-1.5 rounded-md border border-rose-300/30 bg-rose-400/10 p-2 text-[10px] text-rose-200">
-          <AlertCircle size={11} className="mt-0.5 shrink-0" />
-          <div className="flex-1">{error}</div>
-          <button
-            onClick={() => setError(null)}
-            className="shrink-0 text-rose-200/70 hover:text-rose-200"
-            aria-label="Dismiss error"
-          >
-            <X size={10} />
-          </button>
-        </div>
-      )}
-    </div>
+    </>
   );
 }
 
 // ─── Add Reactor form ────────────────────────────────────────────────────────
 
 const CLASS_PREFIX: Record<ReactorClass, string> = {
-  Small: "R1",
-  Medium: "R2",
-  Large: "R3",
+  Intermediate: "R1",
+  Cleanroom: "R3",
 };
 
-function suggestNextId(
-  cls: ReactorClass,
-  existingIds: string[]
-): string {
+function suggestNextId(cls: ReactorClass, existingIds: string[]): string {
   const prefix = CLASS_PREFIX[cls];
   // Pull numeric suffixes from existing ids that match the convention
   // (e.g. "R101" → 101). Free-form ids like "R-PILOT-1" are ignored.
@@ -339,8 +423,6 @@ function suggestNextId(
     const n = Number(tail);
     if (Number.isFinite(n)) usedNums.add(n);
   });
-  // Default starting numbers per class: Small=01, Medium=01, Large=01
-  // (combined with prefix R1/R2/R3 → R101, R201, R301).
   for (let n = 1; n < 1000; n++) {
     if (!usedNums.has(n)) {
       return `${prefix}${String(n).padStart(2, "0")}`;
@@ -356,10 +438,7 @@ function AddReactorForm({
   onAdd,
 }: {
   existingIds: string[];
-  existingByClass: Record<
-    ReactorClass,
-    { id: string; capacityKg: number }[]
-  >;
+  existingByClass: Record<ReactorClass, { id: string; capacityKg: number }[]>;
   onCancel: () => void;
   onAdd: (input: {
     id: string;
@@ -368,24 +447,19 @@ function AddReactorForm({
     capacityKg: number;
   }) => { ok: true; id: string } | { ok: false; error: string };
 }) {
-  const [cls, setCls] = useState<ReactorClass>("Small");
-  // Default capacity = mean capacity of the chosen class, or 200/500/1000
-  // fallback if the class is empty.
+  const [cls, setCls] = useState<ReactorClass>("Intermediate");
   const initialCapacity = useMemo(() => {
     const peers = existingByClass[cls];
-    if (peers.length === 0) return cls === "Small" ? 200 : cls === "Medium" ? 500 : 1000;
-    const mean =
-      peers.reduce((a, b) => a + b.capacityKg, 0) / peers.length;
+    if (peers.length === 0) return cls === "Cleanroom" ? 1000 : 200;
+    const mean = peers.reduce((a, b) => a + b.capacityKg, 0) / peers.length;
     return Math.round(mean);
   }, [cls, existingByClass]);
-  const [id, setId] = useState(() => suggestNextId("Small", existingIds));
+  const [id, setId] = useState(() => suggestNextId("Intermediate", existingIds));
   const [idTouched, setIdTouched] = useState(false);
   const [name, setName] = useState("");
   const [capacity, setCapacity] = useState(String(initialCapacity));
   const [error, setError] = useState<string | null>(null);
 
-  // When user changes class and hasn't typed a custom id, refresh the
-  // suggestion. Same for capacity.
   useEffect(() => {
     if (!idTouched) setId(suggestNextId(cls, existingIds));
     setCapacity(String(initialCapacity));
@@ -491,16 +565,16 @@ function ClassToggle({
   value: ReactorClass;
   onChange: (v: ReactorClass) => void;
 }) {
-  const options: ReactorClass[] = ["Small", "Medium", "Large"];
   return (
     <div className="inline-flex w-full overflow-hidden rounded-md border border-white/10 bg-white/5">
-      {options.map((opt) => {
+      {CLASS_ORDER.map((opt) => {
         const on = opt === value;
         return (
           <button
             key={opt}
             type="button"
             onClick={() => onChange(opt)}
+            title={CLASS_FULL[opt]}
             className={clsx(
               "flex-1 px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition",
               on
@@ -509,7 +583,7 @@ function ClassToggle({
             )}
             aria-pressed={on}
           >
-            {opt[0]}
+            {CLASS_LABEL[opt]}
           </button>
         );
       })}
@@ -522,6 +596,36 @@ function Label({ children }: { children: React.ReactNode }) {
     <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-ink-400">
       {children}
     </div>
+  );
+}
+
+function Th({
+  children,
+  align = "left",
+  yellow,
+  className,
+}: {
+  children: React.ReactNode;
+  align?: "left" | "right";
+  yellow?: boolean;
+  className?: string;
+}) {
+  return (
+    <th
+      className={clsx(
+        "border-b border-white/10 px-3 py-2 font-semibold",
+        align === "right" ? "text-right" : "text-left",
+        yellow && "text-amber-300",
+        className
+      )}
+    >
+      <span className="inline-flex items-center gap-1">
+        {yellow && (
+          <span className="inline-block h-2 w-2 rounded-sm bg-amber-300/80" />
+        )}
+        {children}
+      </span>
+    </th>
   );
 }
 
@@ -558,7 +662,7 @@ function EditableTextCell({
           (e.target as HTMLInputElement).blur();
         }
       }}
-      className="cell-yellow w-full rounded-md px-2 py-1 text-left font-mono text-xs transition"
+      className="cell-yellow w-full max-w-[220px] rounded-md px-2 py-1 text-left font-mono text-xs transition"
     />
   );
 }
@@ -602,7 +706,5 @@ function EditableNumCell({
 }
 
 function classColor(cls: ReactorClass): string {
-  if (cls === "Small") return "#00f0ff";
-  if (cls === "Medium") return "#a78bfa";
-  return "#f472b6";
+  return cls === "Cleanroom" ? "#f472b6" : "#00f0ff";
 }

@@ -422,7 +422,7 @@ export const useStore = create<AppState>((set, get) => ({
           }
         } else {
           const defaultPool = reactors
-            .filter((r) => r.reactorClass === "Medium")
+            .filter((r) => r.reactorClass === "Intermediate")
             .slice(0, 2)
             .map((r) => r.id);
           while (stages.length < target) {
@@ -472,7 +472,7 @@ export const useStore = create<AppState>((set, get) => ({
               batchSizeKg: 100,
               inputKgPerBatch: 100,
               reactorPool: p.reactors
-                .filter((r) => r.reactorClass === "Large")
+                .filter((r) => r.reactorClass === "Cleanroom")
                 .slice(0, 2)
                 .map((r) => r.id),
               cycleHours: 120,
@@ -517,7 +517,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   setReactorClass: (reactorId, cls) => {
-    if (cls !== "Small" && cls !== "Medium" && cls !== "Large") return;
+    if (cls !== "Intermediate" && cls !== "Cleanroom") return;
     mutateActive(set, get, (p) => ({
       ...p,
       reactors: p.reactors.map((r) =>
@@ -546,11 +546,10 @@ export const useStore = create<AppState>((set, get) => ({
     if (!Number.isFinite(cap) || cap <= 0)
       return { ok: false, error: "Capacity must be a positive number." };
     if (
-      input.reactorClass !== "Small" &&
-      input.reactorClass !== "Medium" &&
-      input.reactorClass !== "Large"
+      input.reactorClass !== "Intermediate" &&
+      input.reactorClass !== "Cleanroom"
     ) {
-      return { ok: false, error: "Class must be Small, Medium, or Large." };
+      return { ok: false, error: "Class must be Intermediate or Cleanroom." };
     }
     const state = get();
     const active = getActive(state);

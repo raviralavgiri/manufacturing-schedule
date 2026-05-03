@@ -5,7 +5,7 @@ import { clsx } from "clsx";
 export interface Option {
   value: string;
   label: string;
-  /** Optional grouping header (e.g. "Small" / "Medium" / "Large" for reactors). */
+  /** Optional grouping header (e.g. "Intermediate" / "Cleanroom" for reactors). */
   group?: string;
   /** Optional small color swatch (e.g. API color dot). */
   color?: string;

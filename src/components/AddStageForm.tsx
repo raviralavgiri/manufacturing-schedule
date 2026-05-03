@@ -43,15 +43,22 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
     setStageName(suggestedStageName);
   }, [suggestedStageName]);
 
-  // Default reactor pool suggestion: pick smalls if first stage, mediums otherwise
+  // Default reactor pool suggestion: intermediates for early stages,
+  // cleanroom for the (later, typically final) stages.
   useEffect(() => {
     const api = apis.find((a) => a.id === apiId);
     if (!api) return;
     if (reactorPool.length === 0) {
       const isFirst = api.stages.length === 0;
       const suggested = isFirst
-        ? reactors.filter((r) => r.reactorClass === "Small").slice(0, 4).map((r) => r.id)
-        : reactors.filter((r) => r.reactorClass === "Medium").slice(0, 3).map((r) => r.id);
+        ? reactors
+            .filter((r) => r.reactorClass === "Intermediate")
+            .slice(0, 4)
+            .map((r) => r.id)
+        : reactors
+            .filter((r) => r.reactorClass === "Intermediate")
+            .slice(0, 3)
+            .map((r) => r.id);
       setReactorPool(suggested);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -103,11 +110,15 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
 
   const reactorsByClass = useMemo(() => {
     return {
-      Small: reactors.filter((r) => r.reactorClass === "Small"),
-      Medium: reactors.filter((r) => r.reactorClass === "Medium"),
-      Large: reactors.filter((r) => r.reactorClass === "Large"),
+      Intermediate: reactors.filter((r) => r.reactorClass === "Intermediate"),
+      Cleanroom: reactors.filter((r) => r.reactorClass === "Cleanroom"),
     };
   }, [reactors]);
+
+  const classLabel: Record<keyof typeof reactorsByClass, string> = {
+    Intermediate: "INT",
+    Cleanroom: "CR",
+  };
 
   return (
     <div className="rounded-2xl border border-cyan-300/30 bg-gradient-to-br from-cyan-300/8 via-violet-400/5 to-pink-400/5 p-5 shadow-glow animate-slide-up">
@@ -219,10 +230,13 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
           </button>
         </div>
         <div className="space-y-2">
-          {(["Small", "Medium", "Large"] as const).map((cls) => (
+          {(["Intermediate", "Cleanroom"] as const).map((cls) => (
             <div key={cls} className="flex flex-wrap items-center gap-1.5">
-              <span className="mr-1 inline-block w-16 text-[10px] font-bold uppercase tracking-wider text-ink-400">
-                {cls}
+              <span
+                className="mr-1 inline-block w-16 text-[10px] font-bold uppercase tracking-wider text-ink-400"
+                title={cls}
+              >
+                {classLabel[cls]}
               </span>
               {reactorsByClass[cls].map((r) => {
                 const on = reactorPool.includes(r.id);

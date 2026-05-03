@@ -58,7 +58,9 @@ export function refreshPaletteColors<T extends { color?: string }>(
   }));
 }
 
-// Reactors: 20 total, with shared ones across stages.
+// Reactors: 20 total. Two classes:
+//   • Intermediate (R1xx + R2xx) — upstream / intermediate-stage equipment
+//   • Cleanroom    (R3xx)        — cleanroom-grade for the Final API stage
 // `id` is the stable internal reference; `name` is the editable display label.
 function r(
   id: string,
@@ -70,29 +72,30 @@ function r(
 }
 
 export const REACTORS: Reactor[] = [
-  // Small reactors R101..R108 — R105-R108 are shared across multiple intermediate stages
-  r("R101", "Small", 200, false),
-  r("R102", "Small", 200, false),
-  r("R103", "Small", 250, false),
-  r("R104", "Small", 250, false),
-  r("R105", "Small", 300, true),
-  r("R106", "Small", 300, true),
-  r("R107", "Small", 350, true),
-  r("R108", "Small", 350, true),
-  // Medium R201..R206 — R205, R206 shared
-  r("R201", "Medium", 500, false),
-  r("R202", "Medium", 500, false),
-  r("R203", "Medium", 600, false),
-  r("R204", "Medium", 600, false),
-  r("R205", "Medium", 700, true),
-  r("R206", "Medium", 700, true),
-  // Large R301..R306 — final-stage / large volume
-  r("R301", "Large", 1000, false),
-  r("R302", "Large", 1000, false),
-  r("R303", "Large", 1200, false),
-  r("R304", "Large", 1200, false),
-  r("R305", "Large", 1500, false),
-  r("R306", "Large", 1500, false),
+  // Intermediate R1xx — small/medium upstream reactors. R105-R108 are shared
+  // across multiple intermediate stages of different APIs.
+  r("R101", "Intermediate", 200, false),
+  r("R102", "Intermediate", 200, false),
+  r("R103", "Intermediate", 250, false),
+  r("R104", "Intermediate", 250, false),
+  r("R105", "Intermediate", 300, true),
+  r("R106", "Intermediate", 300, true),
+  r("R107", "Intermediate", 350, true),
+  r("R108", "Intermediate", 350, true),
+  // Intermediate R2xx — larger upstream reactors. R205, R206 shared.
+  r("R201", "Intermediate", 500, false),
+  r("R202", "Intermediate", 500, false),
+  r("R203", "Intermediate", 600, false),
+  r("R204", "Intermediate", 600, false),
+  r("R205", "Intermediate", 700, true),
+  r("R206", "Intermediate", 700, true),
+  // Cleanroom R3xx — final-API / large-volume cleanroom reactors.
+  r("R301", "Cleanroom", 1000, false),
+  r("R302", "Cleanroom", 1000, false),
+  r("R303", "Cleanroom", 1200, false),
+  r("R304", "Cleanroom", 1200, false),
+  r("R305", "Cleanroom", 1500, false),
+  r("R306", "Cleanroom", 1500, false),
 ];
 
 // Distribution of stage counts per API to total 82 stages over 20 APIs:

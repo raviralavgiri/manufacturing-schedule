@@ -1,5 +1,6 @@
 import type { API, PlanWindow, Project, Reactor } from "../types";
 import { getWorkspaceId, isSupabaseEnabled, supabase } from "./supabase";
+import { migrateReactorClass } from "../utils/storage";
 
 export type SyncStatus =
   | "disabled"
@@ -68,7 +69,11 @@ export async function loadFromCloud(): Promise<CloudSnapshot | null> {
       createdAt: Date.now(),
       apis: row.apis,
       reactors: Array.isArray(row.reactors)
-        ? row.reactors.map((r) => ({ ...r, name: r.name ?? r.id }))
+        ? row.reactors.map((r) => ({
+            ...r,
+            name: r.name ?? r.id,
+            reactorClass: migrateReactorClass(r.reactorClass),
+          }))
         : [],
       window: row.window ?? { startMs: 0, endMs: 0 },
     };
@@ -92,7 +97,11 @@ function normalize(p: any): Project | null {
         : Date.now(),
     apis: p.apis,
     reactors: Array.isArray(p.reactors)
-      ? p.reactors.map((r: any) => ({ ...r, name: r.name ?? r.id }))
+      ? p.reactors.map((r: any) => ({
+          ...r,
+          name: r.name ?? r.id,
+          reactorClass: migrateReactorClass(r.reactorClass),
+        }))
       : [],
     window:
       p.window &&

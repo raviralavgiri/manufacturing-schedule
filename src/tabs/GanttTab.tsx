@@ -561,8 +561,11 @@ export default function GanttTab() {
                       }}
                     />
                     <span className="truncate">{r.name}</span>
-                    <span className="shrink-0 text-[9px] uppercase text-ink-400">
-                      {r.reactorClass.charAt(0)}
+                    <span
+                      className="shrink-0 text-[9px] uppercase text-ink-400"
+                      title={r.reactorClass}
+                    >
+                      {r.reactorClass === "Cleanroom" ? "CR" : "INT"}
                     </span>
                     {r.shared && (
                       <Tag tone="violet" className="!px-1 !py-0 !text-[8px]">
@@ -904,7 +907,5 @@ function monthForBand(
 }
 
 function classColor(cls: Reactor["reactorClass"]): string {
-  if (cls === "Small") return "#00f0ff";
-  if (cls === "Medium") return "#a78bfa";
-  return "#f472b6";
+  return cls === "Cleanroom" ? "#f472b6" : "#00f0ff";
 }

@@ -1,4 +1,11 @@
-export type ReactorClass = "Small" | "Medium" | "Large";
+/**
+ * Reactor classification.
+ *
+ * - "Intermediate" (display: INT) — upstream / intermediate-stage equipment.
+ * - "Cleanroom"    (display: CR)  — cleanroom-grade equipment, typically
+ *                                   used for the final API stage.
+ */
+export type ReactorClass = "Intermediate" | "Cleanroom";
 
 export interface Reactor {
   id: string;            // stable internal reference (e.g. "R101")

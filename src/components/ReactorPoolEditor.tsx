@@ -37,12 +37,16 @@ export default function ReactorPoolEditor({
 
   const reactorsByClass = useMemo(
     () => ({
-      Small: reactors.filter((r) => r.reactorClass === "Small"),
-      Medium: reactors.filter((r) => r.reactorClass === "Medium"),
-      Large: reactors.filter((r) => r.reactorClass === "Large"),
+      Intermediate: reactors.filter((r) => r.reactorClass === "Intermediate"),
+      Cleanroom: reactors.filter((r) => r.reactorClass === "Cleanroom"),
     }),
     [reactors]
   );
+
+  const classLabel: Record<keyof typeof reactorsByClass, string> = {
+    Intermediate: "INT",
+    Cleanroom: "CR",
+  };
 
   const toggle = (rid: string) => {
     setDraft((p) => (p.includes(rid) ? p.filter((x) => x !== rid) : [...p, rid]));
@@ -100,10 +104,13 @@ export default function ReactorPoolEditor({
             </div>
           </div>
           <div className="space-y-2">
-            {(["Small", "Medium", "Large"] as const).map((cls) => (
+            {(["Intermediate", "Cleanroom"] as const).map((cls) => (
               <div key={cls} className="flex flex-wrap items-center gap-1">
-                <span className="mr-1 inline-block w-14 text-[9px] font-bold uppercase tracking-wider text-ink-400">
-                  {cls}
+                <span
+                  className="mr-1 inline-block w-14 text-[9px] font-bold uppercase tracking-wider text-ink-400"
+                  title={cls}
+                >
+                  {classLabel[cls]}
                 </span>
                 {reactorsByClass[cls].map((r) => {
                   const on = draft.includes(r.id);
