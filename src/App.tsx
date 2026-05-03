@@ -14,7 +14,6 @@ import {
 import { clsx } from "clsx";
 import { useStore } from "./store";
 import { Pill } from "./components/Primitives";
-import { fmtDate } from "./utils/dates";
 import SyncBadge from "./components/SyncBadge";
 import ThemeToggle from "./components/ThemeToggle";
 import ProjectSwitcher from "./components/ProjectSwitcher";
@@ -98,7 +97,6 @@ export default function App() {
   const schedule = useStore((s) => s.schedule);
   const reactors = useStore((s) => s.reactors);
   const apis = useStore((s) => s.apis);
-  const planWindow = useStore((s) => s.window);
   const isRecomputing = useStore((s) => s.isRecomputing);
 
   return (
@@ -116,7 +114,7 @@ export default function App() {
                 API Manufacturing Schedule
               </h1>
               <p className="-mt-0.5 text-[11px] uppercase tracking-[0.2em] text-ink-300">
-                Plan: {fmtDate(planWindow.startMs)} → {fmtDate(planWindow.endMs)} · Pharma Production Planner
+                Pharma Production Planner
               </p>
             </div>
             <div className="ml-3 hidden sm:block">
