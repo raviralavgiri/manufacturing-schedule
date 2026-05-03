@@ -115,6 +115,10 @@ function normalizeProject(p: any): Project | null {
             typeof s.inputKgPerBatch === "number" && s.inputKgPerBatch > 0
               ? s.inputKgPerBatch
               : s.batchSizeKg,
+          pcoHours:
+            typeof s.pcoHours === "number" && s.pcoHours >= 0
+              ? s.pcoHours
+              : 8,
         }))
       : [];
     const {
@@ -129,11 +133,19 @@ function normalizeProject(p: any): Project | null {
   const apis = refreshPaletteColors(migratedApis as API[]) as API[];
 
   const reactors: Reactor[] = Array.isArray(p.reactors)
-    ? p.reactors.map((r: any) => ({
-        ...r,
-        name: r.name ?? r.id,
-        reactorClass: migrateReactorClass(r.reactorClass),
-      }))
+    ? p.reactors.map((r: any) => {
+        // Drop the legacy `shared` field; it was a static seed-time hint
+        // that became stale once users could edit stage pools, and the
+        // scheduler never used it. Now derived live from pool memberships
+        // in the Clash tab.
+        const { shared: _shared, ...rest } = r;
+        void _shared;
+        return {
+          ...rest,
+          name: r.name ?? r.id,
+          reactorClass: migrateReactorClass(r.reactorClass),
+        };
+      })
     : [];
 
   let win: PlanWindow = { startMs: FY_START_MS, endMs: FY_END_MS };

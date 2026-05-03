@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useStore } from "../store";
-import { Card, SectionHeader, Tag } from "../components/Primitives";
+import { Card, SectionHeader } from "../components/Primitives";
 import { computeWeeks, type WeekBucket } from "../utils/dates";
 import { useChartTheme } from "../utils/chartTheme";
 import {
@@ -40,7 +40,6 @@ export default function EquipmentTab() {
         id: r.id,
         name: r.name,
         cls: r.reactorClass,
-        shared: r.shared,
         util: Math.min(util, 100),
         batchCount: schedule.reactorUsage[r.id]?.batchCount ?? 0,
         busyHours: total,
@@ -113,9 +112,8 @@ export default function EquipmentTab() {
                   >
                     <span className="truncate">{r.name}</span>
                     <span className="text-[9px] uppercase text-ink-400">
-                      {r.cls}
+                      {r.cls === "Cleanroom" ? "CR" : "INT"}
                     </span>
-                    {r.shared && <Tag tone="violet">SHARED</Tag>}
                   </span>
                   <span className="font-mono font-bold tabular-nums text-cyan-300">
                     {r.util.toFixed(1)}%

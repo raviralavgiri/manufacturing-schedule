@@ -177,6 +177,9 @@ export default function StagesTab() {
                 <Th align="right" yellow>
                   Analysis (h)
                 </Th>
+                <Th align="right" yellow>
+                  PCO (h)
+                </Th>
                 <Th align="right" locked>
                   Required (kg)
                 </Th>
@@ -277,6 +280,16 @@ export default function StagesTab() {
                         }
                       />
                     </td>
+                    <td
+                      className="px-3 py-2 text-right"
+                      title="PCO (Product Change Over) cleaning time — applied between consecutive different-campaign batches on the same reactor. Same-campaign batches incur 0h."
+                    >
+                      <EditableNumCell
+                        value={r.pcoHours}
+                        onChange={(v) => updateStageField(r.id, "pcoHours", v)}
+                        allowZero
+                      />
+                    </td>
                     <td className="px-3 py-2.5 text-right font-mono tabular-nums text-ink-200">
                       <span
                         className="inline-flex items-center gap-1"
@@ -339,7 +352,7 @@ export default function StagesTab() {
               {rows.length === 0 && (
                 <tr>
                   <td
-                    colSpan={13}
+                    colSpan={14}
                     className="py-12 text-center text-sm text-ink-300"
                   >
                     No stages match. Click{" "}
@@ -358,9 +371,15 @@ export default function StagesTab() {
           <span className="mr-1 font-bold">
             <Pencil size={12} className="inline" /> Editable here:
           </span>
-          Reactor names, Stage Name, Reactor Pool, Input/Batch (kg),
-          Output/Batch (kg), Cycle, Analysis. Set the API target on the{" "}
-          <span className="font-bold">APIs</span> tab.
+          Stage Name, Reactor Pool, Input/Batch (kg), Output/Batch (kg), Cycle,
+          Analysis, PCO. Reactors on the{" "}
+          <span className="font-bold">Master Reactor</span> tab; API target on
+          the <span className="font-bold">APIs</span> tab.
+          <span className="mt-1 block text-amber-300/80">
+            <span className="font-mono">PCO</span> = cleaning time required
+            before this stage runs on a reactor that previously held a
+            different (API, stage) campaign. Same-campaign batches → 0h.
+          </span>
         </div>
         <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs text-ink-300">
           <span className="mr-1 font-bold text-ink-100">
@@ -412,22 +431,29 @@ function Th({
 function EditableNumCell({
   value,
   onChange,
+  allowZero,
 }: {
   value: number;
   onChange: (v: number) => void;
+  /**
+   * If true, 0 is a valid input (e.g. PCO = 0 means "no cleaning required").
+   * Defaults to false, in which case the minimum is 1.
+   */
+  allowZero?: boolean;
 }) {
   // Local string state so transient empty/partial input isn't clamped on
   // every keystroke. Commit only on blur or Enter.
   const [local, setLocal] = useState(String(value));
   useEffect(() => setLocal(String(value)), [value]);
 
+  const min = allowZero ? 0 : 1;
   const commit = () => {
     const parsed = Number(local);
     if (!Number.isFinite(parsed)) {
       setLocal(String(value));
       return;
     }
-    const v = Math.max(1, parsed);
+    const v = Math.max(min, parsed);
     if (v !== value) onChange(v);
     setLocal(String(v));
   };
@@ -436,7 +462,7 @@ function EditableNumCell({
     <input
       type="number"
       value={local}
-      min={1}
+      min={min}
       onChange={(e) => setLocal(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {

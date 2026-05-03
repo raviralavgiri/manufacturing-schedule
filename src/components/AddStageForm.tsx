@@ -27,6 +27,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
   const [inputKgPerBatch, setInputKgPerBatch] = useState(100);
   const [cycleHours, setCycleHours] = useState(120);
   const [analysisHours, setAnalysisHours] = useState(48);
+  const [pcoHours, setPcoHours] = useState(8);
   const [plannedBatches, setPlannedBatches] = useState(10);
   const [reactorPool, setReactorPool] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -95,6 +96,10 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
       setError("All numbers must be ≥ 1");
       return;
     }
+    if (pcoHours < 0) {
+      setError("PCO must be ≥ 0");
+      return;
+    }
     const newId = addStage({
       apiId,
       stageName,
@@ -102,6 +107,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
       inputKgPerBatch,
       cycleHours,
       analysisHours,
+      pcoHours,
       plannedBatches,
       reactorPool,
     });
@@ -203,13 +209,22 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
           onChange={setAnalysisHours}
           className="sm:col-span-1"
         />
+        <NumField
+          label="PCO (h)"
+          value={pcoHours}
+          onChange={setPcoHours}
+          allowZero
+          className="sm:col-span-1"
+        />
       </div>
       <p className="mt-1 text-[10px] text-ink-400">
         <span className="font-semibold text-ink-300">Input/Batch</span> is what
         this stage consumes per batch (= upstream demand);{" "}
         <span className="font-semibold text-ink-300">Output/Batch</span> is what
-        it produces. Set them equal for 1:1 yield. Planned batches are
-        auto-computed after the cascade fires.
+        it produces. Set them equal for 1:1 yield.{" "}
+        <span className="font-semibold text-ink-300">PCO</span> is the cleaning
+        gap before this stage when its reactor previously held a different
+        (API, stage) campaign. Planned batches are auto-computed.
       </p>
 
       {/* Row 2: Reactor Pool */}
@@ -255,19 +270,12 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
                   >
                     <Beaker size={9} className="mr-1 inline opacity-70" />
                     {r.name}
-                    {r.shared && (
-                      <span className="ml-1 text-[8px] text-violet-300">★</span>
-                    )}
                   </button>
                 );
               })}
             </div>
           ))}
         </div>
-        <p className="mt-1 text-[10px] text-ink-400">
-          <span className="text-violet-300">★</span> = shared reactor (queued
-          across stages)
-        </p>
       </div>
 
       {/* Error + actions */}
@@ -328,24 +336,28 @@ function NumField({
   value,
   onChange,
   className,
+  allowZero,
 }: {
   label: string;
   value: number;
   onChange: (v: number) => void;
   className?: string;
+  /** Allow 0 as a valid value (e.g. PCO = 0 → no cleaning needed). */
+  allowZero?: boolean;
 }) {
   // Local string buffer so the user can clear the input and retype without
   // every transient keystroke clamping back to 1.
   const [local, setLocal] = useState(String(value));
   useEffect(() => setLocal(String(value)), [value]);
 
+  const min = allowZero ? 0 : 1;
   const commit = () => {
     const parsed = Number(local);
     if (!Number.isFinite(parsed)) {
       setLocal(String(value));
       return;
     }
-    const v = Math.max(1, parsed);
+    const v = Math.max(min, parsed);
     if (v !== value) onChange(v);
     setLocal(String(v));
   };
@@ -355,7 +367,7 @@ function NumField({
       <Label>{label}</Label>
       <input
         type="number"
-        min={1}
+        min={min}
         value={local}
         onChange={(e) => setLocal(e.target.value)}
         onBlur={commit}

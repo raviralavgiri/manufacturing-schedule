@@ -36,6 +36,7 @@ export interface NewStageInput {
   reactorPool: string[];
   cycleHours: number;
   analysisHours: number;
+  pcoHours: number;
   plannedBatches: number;
 }
 
@@ -67,6 +68,7 @@ interface AppState {
       | "inputKgPerBatch"
       | "cycleHours"
       | "analysisHours"
+      | "pcoHours"
       | "plannedBatches"
     >,
     value: number
@@ -240,12 +242,16 @@ export const useStore = create<AppState>((set, get) => ({
 
   // ─ Stage actions ────────────────────────────────────────────────
   updateStageField: (stageId, field, value) => {
+    // PCO is the only field where 0 is meaningful ("no cleaning needed");
+    // every other numeric stage field has a minimum of 1.
+    const minValue = field === "pcoHours" ? 0 : 1;
+    const clamped = Math.max(minValue, value);
     mutateActive(set, get, (p) => {
       const apis = p.apis.map((a) => {
         const idx = a.stages.findIndex((s) => s.id === stageId);
         if (idx < 0) return a;
         const updatedStages = a.stages.map((s) =>
-          s.id === stageId ? { ...s, [field]: Math.max(1, value) } : s
+          s.id === stageId ? { ...s, [field]: clamped } : s
         );
         const updated = { ...a, stages: updatedStages };
         if (
@@ -324,6 +330,7 @@ export const useStore = create<AppState>((set, get) => ({
         reactorPool: input.reactorPool.slice(),
         cycleHours: Math.max(1, input.cycleHours),
         analysisHours: Math.max(1, input.analysisHours),
+        pcoHours: Math.max(0, input.pcoHours),
         plannedBatches: Math.max(1, input.plannedBatches),
       };
       const apis = p.apis.map((a) =>
@@ -441,6 +448,7 @@ export const useStore = create<AppState>((set, get) => ({
                 defaultPool.length > 0 ? defaultPool : [reactors[0]?.id ?? ""],
               cycleHours: isFinal ? 120 : 72,
               analysisHours: isFinal ? 48 : 24,
+              pcoHours: isFinal ? 12 : 8,
               plannedBatches: 1,
             });
           }
@@ -477,6 +485,7 @@ export const useStore = create<AppState>((set, get) => ({
                 .map((r) => r.id),
               cycleHours: 120,
               analysisHours: 48,
+              pcoHours: 12,
               plannedBatches: 5,
             },
           ]
@@ -561,7 +570,6 @@ export const useStore = create<AppState>((set, get) => ({
       name: (input.name ?? "").trim() || trimmedId,
       reactorClass: input.reactorClass,
       capacityKg: cap,
-      shared: false,
     };
     mutateActive(set, get, (p) => ({
       ...p,

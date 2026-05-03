@@ -69,11 +69,15 @@ export async function loadFromCloud(): Promise<CloudSnapshot | null> {
       createdAt: Date.now(),
       apis: row.apis,
       reactors: Array.isArray(row.reactors)
-        ? row.reactors.map((r) => ({
-            ...r,
-            name: r.name ?? r.id,
-            reactorClass: migrateReactorClass(r.reactorClass),
-          }))
+        ? row.reactors.map((r) => {
+            const { shared: _shared, ...rest } = r as any;
+            void _shared;
+            return {
+              ...rest,
+              name: r.name ?? r.id,
+              reactorClass: migrateReactorClass(r.reactorClass),
+            };
+          })
         : [],
       window: row.window ?? { startMs: 0, endMs: 0 },
     };
@@ -97,11 +101,15 @@ function normalize(p: any): Project | null {
         : Date.now(),
     apis: p.apis,
     reactors: Array.isArray(p.reactors)
-      ? p.reactors.map((r: any) => ({
-          ...r,
-          name: r.name ?? r.id,
-          reactorClass: migrateReactorClass(r.reactorClass),
-        }))
+      ? p.reactors.map((r: any) => {
+          const { shared: _shared, ...rest } = r;
+          void _shared;
+          return {
+            ...rest,
+            name: r.name ?? r.id,
+            reactorClass: migrateReactorClass(r.reactorClass),
+          };
+        })
       : [],
     window:
       p.window &&

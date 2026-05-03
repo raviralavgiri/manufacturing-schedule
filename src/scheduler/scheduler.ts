@@ -17,10 +17,18 @@ interface BookedSlot {
   startMs: number;
   endMs: number; // includes analysis tail
   cycleEndMs: number; // physical reactor occupancy end (= endMs - analysis tail)
+  // Campaign metadata — used by PCO checks to decide whether a cleaning gap
+  // is needed before/after this slot when something else lands on the same
+  // reactor. Two slots are "same campaign" iff (apiId, stageId) match — i.e.
+  // the SAME stage of the SAME API. Same-campaign batches go back-to-back
+  // with no PCO; everything else needs a cleaning gap.
+  apiId: string;
+  stageId: string;
+  pcoMs: number;
 }
 
 /**
- * Equipment-availability sequencer — TRAIN model.
+ * Equipment-availability sequencer — TRAIN model + PCO.
  *
  * Each batch of a stage locks **every reactor in stage.reactorPool**
  * simultaneously for the cycle window [start, start + cycleHours]. Examples:
@@ -40,10 +48,16 @@ interface BookedSlot {
  *      transfer buffer.
  *   3. Priority ordering: APIs are processed in priority order (P1 first,
  *      P5 last) within each round so high-priority APIs grab earliest slots.
+ *   4. Product Change Over (PCO): when a reactor switches from one
+ *      (apiId, stageId) campaign to a different one, the new batch's start
+ *      must be >= prev.cycleEnd + newStage.pcoHours. Same-campaign batches
+ *      have zero PCO. The same rule applies in reverse for any successor
+ *      slot we'd land BEFORE: our cycleEnd must be <= next.start - next.pco
+ *      if we differ from `next`'s campaign.
  *
  * Reactor analysis windows (analysisHours) DO NOT lock the reactor — they
  * only delay the next stage of the SAME API. Other batches can use these
- * reactors as soon as cycleEnd.
+ * reactors as soon as cycleEnd (subject to PCO).
  */
 export function runScheduler(
   apis: API[],
@@ -99,52 +113,94 @@ export function runScheduler(
 
   /**
    * Find the EARLIEST time t >= earliest such that [t, t + cycleMs) is free
-   * on every reactor in the pool simultaneously.
+   * on every reactor in the pool simultaneously, INCLUDING the PCO cleaning
+   * gap before/after any campaign change.
    *
-   * Why this matters: a reactor R might have a booking at week 5-6 (because
-   * it's in API-01's stage-4 train, gated by stage-3 analysis). But R is
-   * IDLE in weeks 0-5 — and other APIs whose pool also contains R should
-   * be able to slot in there. A naive "look at last booking end" approach
-   * misses these earlier gaps; this gap-finder uses them.
+   * For each reactor R in the train, t is valid iff:
+   *   1. No booked slot on R overlaps [t, t+cycleMs).
+   *   2. (Predecessor PCO) For every booked slot S on R with S.cycleEnd <= t:
+   *        if S.campaign !== newCampaign → t >= S.cycleEnd + newPcoMs
+   *   3. (Successor PCO) For the first booked slot S on R with S.start
+   *      >= t+cycleMs: if S.campaign !== newCampaign → t+cycleMs <=
+   *        S.start - S.pcoMs (i.e. there's room for S's own cleaning gap
+   *        BEFORE S runs). If not, we treat S as a hard block and advance
+   *        past it (next iteration will use S as predecessor instead).
    *
-   * Algorithm: start at t=earliest. If any reactor in the pool has a
-   * booking that overlaps [t, t+cycleMs), jump t to that booking's end and
-   * retry. Repeats until a clean slot is found. O(B * P) where B is total
-   * bookings across the pool and P is pool size.
+   * If any check fails on any reactor, advance t to the maximum required
+   * advance across all checks and retry.
+   *
+   * Why predecessor + successor: a low-priority API may slot into an early
+   * gap — and we need the gap to be PCO-safe on BOTH ends, not just before
+   * us. Otherwise we'd be forcing whoever already booked the next slot to
+   * either wait or violate their own PCO requirement, which is worse.
+   *
+   * Worst case O(B * P * iters); B = total bookings across pool, P = pool
+   * size, iters bounded by the safety counter (5000).
    */
   function findTrainSlot(
     pool: string[],
     earliest: number,
-    cycleMs: number
+    cycleMs: number,
+    newApiId: string,
+    newStageId: string,
+    newPcoMs: number
   ): number {
     let t = earliest;
-    // Per-reactor sorted booking lists (we keep them sorted by sorted insert
-    // below, so this is just a reference, no copying).
     const lookups = pool.map((rid) => reactorBookings.get(rid)!);
 
     for (let safety = 0; safety < 5000; safety++) {
-      let conflictEnd = t;
-      let foundConflict = false;
+      let advance = t;
+      let needAdvance = false;
+
       for (const slots of lookups) {
+        let predRequired = -Infinity;
+        let conflictThisReactor = false;
+
         for (const slot of slots) {
-          // Slot ends before our window starts → no overlap, skip
-          if (slot.cycleEndMs <= t) continue;
-          // Slot starts at/after our window ends → no overlap, and since
-          // slots are sorted by startMs, no later slot in this reactor can
-          // overlap either.
-          if (slot.startMs >= t + cycleMs) break;
-          // Genuine overlap: must wait until this reactor frees
-          if (slot.cycleEndMs > conflictEnd) conflictEnd = slot.cycleEndMs;
-          foundConflict = true;
+          const sameCampaign =
+            slot.apiId === newApiId && slot.stageId === newStageId;
+
+          if (slot.cycleEndMs <= t) {
+            // Predecessor: enforce PCO before us if campaign differs.
+            const required =
+              slot.cycleEndMs + (sameCampaign ? 0 : newPcoMs);
+            if (required > predRequired) predRequired = required;
+            continue;
+          }
+
+          if (slot.startMs >= t + cycleMs) {
+            // Successor: we need to leave room for ITS cleaning gap before
+            // it runs (if its campaign differs from ours).
+            const requiredEnd =
+              slot.startMs - (sameCampaign ? 0 : slot.pcoMs);
+            if (t + cycleMs > requiredEnd) {
+              // Can't fit before this slot — jump past it. Next iteration
+              // will treat slot as the predecessor and apply newPcoMs.
+              if (slot.cycleEndMs > advance) advance = slot.cycleEndMs;
+              needAdvance = true;
+              conflictThisReactor = true;
+            }
+            // No later slot on this reactor can affect us (sorted by start).
+            break;
+          }
+
+          // Slot overlaps [t, t+cycleMs) — wait for it to free.
+          if (slot.cycleEndMs > advance) advance = slot.cycleEndMs;
+          needAdvance = true;
+          conflictThisReactor = true;
           break;
         }
-        if (foundConflict) break;
+
+        if (!conflictThisReactor && predRequired > t) {
+          if (predRequired > advance) advance = predRequired;
+          needAdvance = true;
+        }
       }
-      if (!foundConflict) return t;
-      t = conflictEnd;
+
+      if (!needAdvance) return t;
+      t = advance;
     }
-    // Safety fallback (should never hit unless something is malformed)
-    return t;
+    return t; // safety fallback
   }
 
   /** Insert a booking into a reactor's sorted slot list (by startMs). */
@@ -167,6 +223,14 @@ export function runScheduler(
         const cycleMs = hoursToMs(stage.cycleHours);
         const analysisMs = hoursToMs(stage.analysisHours);
         const bufferMs = hoursToMs(INTER_STAGE_BUFFER_HOURS);
+        // PCO defaults to 8h on legacy data via the storage migration; treat
+        // anything missing/invalid as 0 here (defensive — should never fire
+        // after migration).
+        const pcoMs = hoursToMs(
+          typeof stage.pcoHours === "number" && stage.pcoHours >= 0
+            ? stage.pcoHours
+            : 0
+        );
 
         // 1. Earliest possible start = max(prev stage's batch end + buffer,
         //    global plan window start)
@@ -177,10 +241,16 @@ export function runScheduler(
         const earliestStart = Math.max(prevStageReady, windowStart);
 
         // 2. Find the EARLIEST gap on the train where [t, t+cycle) is free on
-        //    every pool reactor simultaneously. This is the key fix: it lets
-        //    low-priority / late-stage trains slot into the early-week idle
-        //    windows that high-priority APIs leave behind on shared reactors.
-        const startMs = findTrainSlot(stage.reactorPool, earliestStart, cycleMs);
+        //    every pool reactor simultaneously, with PCO checks against
+        //    predecessor and successor campaigns on each reactor.
+        const startMs = findTrainSlot(
+          stage.reactorPool,
+          earliestStart,
+          cycleMs,
+          api.id,
+          stage.id,
+          pcoMs
+        );
         const cycleEndMs = startMs + cycleMs;
         const analysisEndMs = cycleEndMs + analysisMs;
 
@@ -201,7 +271,14 @@ export function runScheduler(
 
         // 4. Book the cycle on EVERY reactor in the train, inserting at the
         //    sorted position so future gap-finder scans walk slots in time order.
-        const newSlot: BookedSlot = { startMs, endMs: analysisEndMs, cycleEndMs };
+        const newSlot: BookedSlot = {
+          startMs,
+          endMs: analysisEndMs,
+          cycleEndMs,
+          apiId: api.id,
+          stageId: stage.id,
+          pcoMs,
+        };
         for (const rid of stage.reactorPool) {
           insertSorted(reactorBookings.get(rid)!, newSlot);
           reactorLoadHours.set(

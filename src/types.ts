@@ -12,7 +12,6 @@ export interface Reactor {
   name: string;          // editable display name (defaults to id)
   reactorClass: ReactorClass;
   capacityKg: number;
-  shared: boolean;
 }
 
 export interface StageMaster {
@@ -36,6 +35,13 @@ export interface StageMaster {
   reactorPool: string[];
   cycleHours: number;
   analysisHours: number;
+  /**
+   * Product Change Over (PCO) cleaning time in hours. Required BEFORE running
+   * this stage on a reactor whose previous occupant was a different
+   * (apiId, stageId) campaign. Same-campaign batches go back-to-back with no
+   * PCO. Defaults to 8h on legacy data via the storage loader.
+   */
+  pcoHours: number;
   plannedBatches: number;
 }
 

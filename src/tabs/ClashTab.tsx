@@ -5,25 +5,42 @@ import { Card, SectionHeader, Tag } from "../components/Primitives";
 
 export default function ClashTab() {
   const reactors = useStore((s) => s.reactors);
+  const apis = useStore((s) => s.apis);
   const schedule = useStore((s) => s.schedule);
 
-  const sharedReactors = reactors.filter((r) => r.shared);
-  const sharedStats = useMemo(
-    () =>
-      sharedReactors.map((r) => {
-        const batches = schedule.batches.filter((b) => b.reactorId === r.id);
-        const stages = new Set(
-          batches.map((b) => `${b.apiId}·S${b.stageNo}`)
-        );
+  // Derive "contended reactors" live from current pool memberships:
+  // a reactor is contended iff it appears in ≥ 2 distinct stage pools across
+  // all APIs. This replaces the old static `r.shared` flag, which went stale
+  // as soon as users edited stage pools.
+  const contendedStats = useMemo(() => {
+    const stagesUsingByReactor = new Map<string, Set<string>>();
+    apis.forEach((a) =>
+      a.stages.forEach((s) =>
+        s.reactorPool.forEach((rid) => {
+          const key = `${a.id}·S${s.stageNo}`;
+          if (!stagesUsingByReactor.has(rid))
+            stagesUsingByReactor.set(rid, new Set());
+          stagesUsingByReactor.get(rid)!.add(key);
+        })
+      )
+    );
+    return reactors
+      .filter((r) => (stagesUsingByReactor.get(r.id)?.size ?? 0) >= 2)
+      .map((r) => {
+        const stagesUsing = stagesUsingByReactor.get(r.id)?.size ?? 0;
+        const batches = schedule.batches.filter((b) =>
+          b.reactorIds.includes(r.id)
+        ).length;
         return {
           id: r.id,
+          name: r.name,
           cls: r.reactorClass,
-          batches: batches.length,
-          stagesUsing: stages.size,
+          batches,
+          stagesUsing,
         };
-      }),
-    [sharedReactors, schedule]
-  );
+      })
+      .sort((a, b) => b.stagesUsing - a.stagesUsing || a.id.localeCompare(b.id));
+  }, [reactors, apis, schedule]);
 
   return (
     <div className="space-y-4">
@@ -51,10 +68,10 @@ export default function ClashTab() {
           <p className="mt-2 max-w-xl text-sm text-ink-200">
             All <span className="font-bold text-white">{schedule.totalBatches}</span>{" "}
             batches are scheduled on{" "}
-            <span className="font-bold text-white">{reactors.length}</span> reactors
-            with no overlapping cycle windows. Shared reactors (R105–R108, R205–R206)
-            were automatically queued by the equipment-availability sequencer with no
-            manual intervention.
+            <span className="font-bold text-white">{reactors.length}</span>{" "}
+            reactors with no overlapping cycle windows. Reactors that appear in
+            multiple stage pools are automatically queued by the
+            equipment-availability sequencer — no manual intervention needed.
           </p>
         </div>
       </Card>
@@ -82,72 +99,89 @@ export default function ClashTab() {
           <Step
             n={2}
             icon={<Zap size={14} />}
-            title="Greedy earliest-free pick"
+            title="Earliest-free gap finder"
             body={
               <>
-                For each batch, the sequencer scans every reactor in its allowed pool
-                and picks the one that becomes free <span className="font-bold">earliest</span>. Shared reactors are naturally queued — no special-case logic.
+                For each batch the sequencer searches every reactor in its
+                allowed pool and picks the one that frees up{" "}
+                <span className="font-bold">earliest</span>. Contended reactors
+                are naturally queued — no special-case logic.
               </>
             }
           />
           <Step
             n={3}
             icon={<CheckCircle2 size={14} />}
-            title="Stage ordering enforced"
+            title="Stage ordering & PCO"
             body={
               <>
-                For an API, stage <span className="font-mono">N+1</span>'s batches cannot start
-                before stage <span className="font-mono">N</span>'s analysis ends. A 4-hour
-                inter-stage buffer models material transfer + QC release.
+                For an API, stage <span className="font-mono">N+1</span>'s
+                batches cannot start before stage{" "}
+                <span className="font-mono">N</span>'s analysis ends (+ 4h
+                inter-stage transfer). When a reactor switches campaign, a
+                stage-defined PCO cleaning gap is enforced.
               </>
             }
           />
         </div>
       </Card>
 
-      {/* Shared reactor proof */}
+      {/* Contended reactors — derived live from current pool memberships */}
       <Card>
         <div className="mb-3 flex items-center gap-2">
           <h3 className="text-sm font-bold uppercase tracking-wider text-white">
-            Shared Reactor Queue Proof
+            Contended Reactors
           </h3>
           <Tag tone="violet">Auto-queued</Tag>
+          <span className="text-[11px] text-ink-400">
+            {contendedStats.length} reactor
+            {contendedStats.length === 1 ? "" : "s"} in ≥ 2 stage pools
+          </span>
         </div>
         <p className="mb-3 text-xs text-ink-300">
-          These reactors are listed in multiple stages' allowed pools. Despite being
-          contended, the sequencer assigns them sequentially.
+          Computed live from current stage reactor pools. When a reactor
+          appears in multiple stages, the sequencer queues batches serially on
+          it — guaranteeing zero overlaps and applying PCO cleaning gaps when
+          the campaign changes.
         </p>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          {sharedStats.map((s) => (
-            <div
-              key={s.id}
-              className="rounded-xl border border-violet-300/20 bg-gradient-to-br from-violet-500/10 to-cyan-400/5 p-3"
-            >
-              <div className="font-mono text-base font-bold text-white">
-                {s.id}
-              </div>
-              <div className="mb-2 text-[10px] uppercase tracking-wider text-violet-300">
-                {s.cls} · Shared
-              </div>
-              <div className="space-y-0.5 font-mono text-[11px] text-ink-200">
-                <div>
-                  <span className="text-ink-400">batches: </span>
-                  <span className="font-bold text-cyan-300">{s.batches}</span>
+        {contendedStats.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-white/10 bg-white/[0.02] p-4 text-center text-xs text-ink-400">
+            No contended reactors right now. Every reactor is exclusive to a
+            single stage pool.
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            {contendedStats.map((s) => (
+              <div
+                key={s.id}
+                className="rounded-xl border border-violet-300/20 bg-gradient-to-br from-violet-500/10 to-cyan-400/5 p-3"
+              >
+                <div className="font-mono text-base font-bold text-white">
+                  {s.name}
                 </div>
-                <div>
-                  <span className="text-ink-400">stages: </span>
-                  <span className="font-bold text-violet-300">
-                    {s.stagesUsing}
-                  </span>
+                <div className="mb-2 text-[10px] uppercase tracking-wider text-violet-300">
+                  {s.cls === "Cleanroom" ? "CR" : "INT"} · contended
+                </div>
+                <div className="space-y-0.5 font-mono text-[11px] text-ink-200">
+                  <div>
+                    <span className="text-ink-400">batches: </span>
+                    <span className="font-bold text-cyan-300">{s.batches}</span>
+                  </div>
+                  <div>
+                    <span className="text-ink-400">stages: </span>
+                    <span className="font-bold text-violet-300">
+                      {s.stagesUsing}
+                    </span>
+                  </div>
+                </div>
+                <div className="mt-2 text-[10px] text-lime-300">
+                  <CheckCircle2 size={10} className="mr-0.5 inline" />
+                  no overlaps
                 </div>
               </div>
-              <div className="mt-2 text-[10px] text-lime-300">
-                <CheckCircle2 size={10} className="mr-0.5 inline" />
-                no overlaps
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </Card>
     </div>
   );

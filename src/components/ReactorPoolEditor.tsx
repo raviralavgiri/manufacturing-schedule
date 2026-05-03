@@ -129,9 +129,6 @@ export default function ReactorPoolEditor({
                     >
                       <Beaker size={8} className="mr-0.5 inline opacity-70" />
                       {r.name}
-                      {r.shared && (
-                        <span className="ml-0.5 text-[8px] text-violet-300">★</span>
-                      )}
                     </button>
                   );
                 })}

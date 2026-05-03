@@ -62,40 +62,40 @@ export function refreshPaletteColors<T extends { color?: string }>(
 //   • Intermediate (R1xx + R2xx) — upstream / intermediate-stage equipment
 //   • Cleanroom    (R3xx)        — cleanroom-grade for the Final API stage
 // `id` is the stable internal reference; `name` is the editable display label.
+// (Whether a reactor is "shared" across stages is no longer a stored flag —
+// it's derived live from current pool memberships in the Clash tab.)
 function r(
   id: string,
   cls: Reactor["reactorClass"],
-  capacityKg: number,
-  shared: boolean
+  capacityKg: number
 ): Reactor {
-  return { id, name: id, reactorClass: cls, capacityKg, shared };
+  return { id, name: id, reactorClass: cls, capacityKg };
 }
 
 export const REACTORS: Reactor[] = [
-  // Intermediate R1xx — small/medium upstream reactors. R105-R108 are shared
-  // across multiple intermediate stages of different APIs.
-  r("R101", "Intermediate", 200, false),
-  r("R102", "Intermediate", 200, false),
-  r("R103", "Intermediate", 250, false),
-  r("R104", "Intermediate", 250, false),
-  r("R105", "Intermediate", 300, true),
-  r("R106", "Intermediate", 300, true),
-  r("R107", "Intermediate", 350, true),
-  r("R108", "Intermediate", 350, true),
-  // Intermediate R2xx — larger upstream reactors. R205, R206 shared.
-  r("R201", "Intermediate", 500, false),
-  r("R202", "Intermediate", 500, false),
-  r("R203", "Intermediate", 600, false),
-  r("R204", "Intermediate", 600, false),
-  r("R205", "Intermediate", 700, true),
-  r("R206", "Intermediate", 700, true),
+  // Intermediate R1xx — small/medium upstream reactors.
+  r("R101", "Intermediate", 200),
+  r("R102", "Intermediate", 200),
+  r("R103", "Intermediate", 250),
+  r("R104", "Intermediate", 250),
+  r("R105", "Intermediate", 300),
+  r("R106", "Intermediate", 300),
+  r("R107", "Intermediate", 350),
+  r("R108", "Intermediate", 350),
+  // Intermediate R2xx — larger upstream reactors.
+  r("R201", "Intermediate", 500),
+  r("R202", "Intermediate", 500),
+  r("R203", "Intermediate", 600),
+  r("R204", "Intermediate", 600),
+  r("R205", "Intermediate", 700),
+  r("R206", "Intermediate", 700),
   // Cleanroom R3xx — final-API / large-volume cleanroom reactors.
-  r("R301", "Cleanroom", 1000, false),
-  r("R302", "Cleanroom", 1000, false),
-  r("R303", "Cleanroom", 1200, false),
-  r("R304", "Cleanroom", 1200, false),
-  r("R305", "Cleanroom", 1500, false),
-  r("R306", "Cleanroom", 1500, false),
+  r("R301", "Cleanroom", 1000),
+  r("R302", "Cleanroom", 1000),
+  r("R303", "Cleanroom", 1200),
+  r("R304", "Cleanroom", 1200),
+  r("R305", "Cleanroom", 1500),
+  r("R306", "Cleanroom", 1500),
 ];
 
 // Distribution of stage counts per API to total 82 stages over 20 APIs:
@@ -207,6 +207,9 @@ export function buildSeed(): { apis: API[]; reactors: Reactor[] } {
       // be shorter than the parallel-pool model to fit ~848 batches in a year.
       const cycleHours = isFinal ? ri(96, 168) : ri(48, 96);
       const analysisHours = isFinal ? ri(36, 72) : ri(24, 48);
+      // PCO (Product Change Over) cleaning time. Cleanroom equipment is held
+      // to a stricter standard, so finals get a longer scrub than intermediates.
+      const pcoHours = isFinal ? 12 : 8;
       const plannedBatches = batchAllocations[stageCursor];
       stageCursor++;
 
@@ -221,6 +224,7 @@ export function buildSeed(): { apis: API[]; reactors: Reactor[] } {
         reactorPool: pool,
         cycleHours,
         analysisHours,
+        pcoHours,
         plannedBatches,
       });
     }

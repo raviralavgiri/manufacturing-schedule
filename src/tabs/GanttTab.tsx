@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
-import { Card, SectionHeader, Tag } from "../components/Primitives";
+import { Card, SectionHeader } from "../components/Primitives";
 import PriorityPill from "../components/PriorityPill";
 import MultiSelectPopover, {
   ClearFiltersButton,
@@ -116,7 +116,7 @@ export default function GanttTab() {
         value: r.id,
         label: r.name,
         group: r.reactorClass,
-        secondary: r.name === r.id ? (r.shared ? "★" : undefined) : `id: ${r.id}`,
+        secondary: r.name === r.id ? undefined : `id: ${r.id}`,
       })),
     [reactors]
   );
@@ -154,7 +154,6 @@ export default function GanttTab() {
       stageNo?: number;
       color: string;
       reactorClass?: Reactor["reactorClass"];
-      shared?: boolean;
     }[] = [];
 
     if (mode === "by-reactor") {
@@ -165,7 +164,6 @@ export default function GanttTab() {
           label: r.name,
           color: classColor(r.reactorClass),
           reactorClass: r.reactorClass,
-          shared: r.shared,
         });
       });
       return out;
@@ -567,11 +565,6 @@ export default function GanttTab() {
                     >
                       {r.reactorClass === "Cleanroom" ? "CR" : "INT"}
                     </span>
-                    {r.shared && (
-                      <Tag tone="violet" className="!px-1 !py-0 !text-[8px]">
-                        ★
-                      </Tag>
-                    )}
                     <span className="ml-auto font-mono text-[10px] text-ink-400 tabular-nums">
                       {batchCount}
                     </span>
