@@ -1,4 +1,4 @@
-import { addDays, differenceInHours, startOfWeek, addWeeks, format } from "date-fns";
+import { addDays, differenceInHours, format } from "date-fns";
 
 // Default fiscal year, used as a fallback for legacy data and as the seed
 // default for new APIs. There is no longer a single global FY — each API
@@ -24,23 +24,23 @@ export interface WeekBucket {
 }
 
 /**
- * Compute weekly buckets between two timestamps. The first bucket is aligned
- * to the Monday on/before `startMs`; subsequent buckets are 7 days each. The
- * range is divided evenly into 4 quarters (Q1..Q4) regardless of calendar
- * months — this matches user expectations of "first quarter / second
- * quarter / ..." within whatever range they configured.
+ * Compute weekly buckets between two timestamps. Anchors EXACTLY at
+ * `startMs` — does not snap back to the Monday of that week — so the chart
+ * never displays dates before the user's plan start. Subsequent buckets are
+ * 7 days each. The range is divided evenly into 4 quarters (Q1..Q4)
+ * regardless of calendar months.
  */
 export function computeWeeks(startMs: number, endMs: number): WeekBucket[] {
   if (endMs <= startMs) return [];
   const out: WeekBucket[] = [];
-  const anchor = startOfWeek(new Date(startMs), { weekStartsOn: 1 });
   const totalWeeks = Math.max(
     1,
-    Math.ceil((endMs - anchor.getTime()) / MS_PER_WEEK)
+    Math.ceil((endMs - startMs) / MS_PER_WEEK)
   );
 
   for (let i = 0; i < totalWeeks; i++) {
-    const start = addWeeks(anchor, i);
+    const startTime = startMs + i * MS_PER_WEEK;
+    const start = new Date(startTime);
     const end = addDays(start, 6);
     // Quarter = which 25%-bucket this week falls in
     const ratio = (i + 0.5) / totalWeeks;
@@ -53,8 +53,8 @@ export function computeWeeks(startMs: number, endMs: number): WeekBucket[] {
       index: i,
       start,
       end,
-      startMs: start.getTime(),
-      endMs: start.getTime() + MS_PER_WEEK,
+      startMs: startTime,
+      endMs: startTime + MS_PER_WEEK,
       label: format(start, "dd MMM"),
       quarter: q,
     });

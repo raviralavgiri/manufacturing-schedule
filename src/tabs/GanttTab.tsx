@@ -630,14 +630,24 @@ export default function GanttTab() {
                     </div>
                   );
                 })()}
-                {/* Day-of-week ticks - only at zooms where they're readable */}
+                {/* Day-of-week ticks - only at zooms where they're readable.
+                    Labels rotate based on the actual start day-of-week so a
+                    plan starting on a Wednesday shows W T F S S M T, etc. */}
                 {pxPerWeek >= 100 &&
                   (() => {
-                    // Use full short names when each day cell is wide enough
                     const useShortNames = pxPerWeek >= 180;
-                    const dayLabels = useShortNames
-                      ? ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-                      : ["M", "T", "W", "T", "F", "S", "S"];
+                    // Standard week starting Sunday
+                    const allShort = [
+                      "Sun",
+                      "Mon",
+                      "Tue",
+                      "Wed",
+                      "Thu",
+                      "Fri",
+                      "Sat",
+                    ];
+                    const allLetter = ["S", "M", "T", "W", "T", "F", "S"];
+                    const startDow = new Date(planWindow.startMs).getDay();
                     return (
                       <div
                         className="relative flex h-5 border-b border-white/10 bg-white/[0.015]"
@@ -649,25 +659,30 @@ export default function GanttTab() {
                             className="flex shrink-0 border-r border-white/10"
                             style={{ width: pxPerWeek }}
                           >
-                            {dayLabels.map((d, dayIdx) => (
-                              <div
-                                key={dayIdx}
-                                style={{ width: pxPerWeek / 7 }}
-                                className={clsx(
-                                  "text-center font-mono text-[9px] leading-5",
-                                  // Weekend (Sat=5, Sun=6) muted further
-                                  dayIdx >= 5
-                                    ? "text-ink-500/70"
-                                    : "text-ink-400",
-                                  // Subtle vertical day separators between
-                                  // weekdays - skip the last one (week boundary
-                                  // already drawn by the parent border-r)
-                                  dayIdx < 6 && "border-r border-white/[0.04]"
-                                )}
-                              >
-                                {d}
-                              </div>
-                            ))}
+                            {Array.from({ length: 7 }).map((_, dayIdx) => {
+                              const dow = (startDow + dayIdx) % 7;
+                              const isWeekend = dow === 0 || dow === 6;
+                              const label = useShortNames
+                                ? allShort[dow]
+                                : allLetter[dow];
+                              return (
+                                <div
+                                  key={dayIdx}
+                                  style={{ width: pxPerWeek / 7 }}
+                                  className={clsx(
+                                    "text-center font-mono text-[9px] leading-5",
+                                    isWeekend
+                                      ? "text-ink-500/70"
+                                      : "text-ink-400",
+                                    // subtle vertical day separators
+                                    dayIdx < 6 &&
+                                      "border-r border-white/[0.04]"
+                                  )}
+                                >
+                                  {label}
+                                </div>
+                              );
+                            })}
                           </div>
                         ))}
                       </div>
