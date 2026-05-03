@@ -261,7 +261,7 @@ export default function ApisTab() {
                         <EditableNumCell
                           value={api.stages.length}
                           min={1}
-                          max={10}
+                          max={24}
                           width="w-20"
                           onChange={(v) => setApiStageCount(api.id, v)}
                         />
@@ -365,7 +365,7 @@ export default function ApisTab() {
           <span className="mr-1 font-bold">
             <Pencil size={12} className="inline" /> Editable here:
           </span>
-          API Name, Priority, Stages (1–10),{" "}
+          API Name, Priority, Stages (1–24),{" "}
           <span className="font-bold">Start Date / End Date</span>, Target.
           Each API has its own production window — batches cannot start
           before Start Date; any batch finishing after End Date is flagged

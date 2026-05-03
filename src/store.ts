@@ -302,7 +302,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   setApiStageCount: (apiId, count) => {
-    const target = Math.max(1, Math.min(10, Math.round(count)));
+    const target = Math.max(1, Math.min(24, Math.round(count)));
     const reactors = get().reactors;
     const apis = get().apis.map((a) => {
       if (a.id !== apiId) return a;
