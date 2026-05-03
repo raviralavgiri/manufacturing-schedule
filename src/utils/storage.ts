@@ -2,61 +2,23 @@ import type { API, PlanWindow, Project, Reactor } from "../types";
 import { FY_END_MS, FY_START_MS } from "./dates";
 import { refreshPaletteColors } from "../data/seed";
 
-// We bump version when the persisted shape changes incompatibly.
-// v1: single-namespace { apis, reactors, window }
-// v2: multi-project namespace { projects, activeProjectId }
-const STORAGE_KEY = "pharma:apis:v1"; // kept the same to avoid orphaning data
-// Migration is performed inline based on the `v` field within the JSON.
+// Persisted shapes over time.
+//   v1: { v: 1, apis, reactors?, window? }                           — legacy single-namespace
+//   v2: { v: 2, projects, activeProjectId }                          — multi-project flat
+//   v3: split into TWO keys —
+//        pharma:projects:v3      = Project[] (the same set as in cloud)
+//        pharma:activeProjectId  = string    (per-browser preference)
+//   We keep the v1/v2 reader for one-shot migration to v3.
+const PROJECTS_KEY = "pharma:projects:v3";
+const ACTIVE_KEY = "pharma:activeProjectId:v3";
+
+// Legacy combined key (v1 + v2). We try this on first boot if the v3 keys
+// are absent so existing users automatically migrate.
+const LEGACY_KEY = "pharma:apis:v1";
 
 const DATA_SOURCE_KEY = "pharma:dataSource:v1";
 
 export type DataSource = "cloud" | "local";
-
-/** Get the user's preferred data source. Defaults to "cloud". */
-export function getDataSourceMode(): DataSource {
-  if (typeof window === "undefined") return "cloud";
-  try {
-    const v = window.localStorage.getItem(DATA_SOURCE_KEY);
-    if (v === "local") return "local";
-    return "cloud";
-  } catch {
-    return "cloud";
-  }
-}
-
-/** Persist the user's data source preference. */
-export function setDataSourceMode(mode: DataSource): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(DATA_SOURCE_KEY, mode);
-  } catch {
-    // ignore quota / private mode
-  }
-}
-
-/** Bytes occupied by the workspace JSON in localStorage (UTF-16 → x2 estimate). */
-export function persistedSizeBytes(): number {
-  if (typeof window === "undefined") return 0;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw ? raw.length * 2 : 0;
-  } catch {
-    return 0;
-  }
-}
-
-/** Wall-clock timestamp from the persisted blob's `savedAt`. null if absent. */
-export function persistedSavedAt(): number | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return typeof parsed?.savedAt === "number" ? parsed.savedAt : null;
-  } catch {
-    return null;
-  }
-}
 
 interface PersistedV1 {
   v: 1;
@@ -73,28 +35,64 @@ interface PersistedV2 {
   savedAt?: number;
 }
 
-type AnyPersisted = PersistedV1 | PersistedV2;
+interface PersistedV3Body {
+  v: 3;
+  projects: Project[];
+  savedAt?: number;
+}
+
+type AnyLegacy = PersistedV1 | PersistedV2;
 
 export interface PersistedSnapshot {
   projects: Project[];
   activeProjectId: string;
 }
 
-/** Try to load the persisted state. Performs v1 → v2 migration in memory. */
+// ─── Load ──────────────────────────────────────────────────────────────────
+
 export function loadPersisted(): PersistedSnapshot | null {
   if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as AnyPersisted;
-    if (!parsed || typeof parsed !== "object") return null;
+  // Try v3 first.
+  const v3 = readV3();
+  if (v3) return v3;
+  // Fall back to v1/v2 and migrate forward.
+  const legacy = readLegacy();
+  if (!legacy) return null;
+  // Persist as v3 immediately so subsequent boots take the fast path.
+  saveProjects(legacy.projects);
+  saveActiveProjectId(legacy.activeProjectId);
+  return legacy;
+}
 
-    if (parsed.v === 2) {
-      return migrateV2(parsed);
-    }
-    if (parsed.v === 1) {
-      return migrateV1(parsed);
-    }
+function readV3(): PersistedSnapshot | null {
+  try {
+    const rawProjects = window.localStorage.getItem(PROJECTS_KEY);
+    if (!rawProjects) return null;
+    const parsed = JSON.parse(rawProjects) as PersistedV3Body;
+    if (parsed?.v !== 3 || !Array.isArray(parsed.projects)) return null;
+    const projects = parsed.projects
+      .map(normalizeProject)
+      .filter((p): p is Project => p !== null);
+    if (projects.length === 0) return null;
+    const rawActive = window.localStorage.getItem(ACTIVE_KEY);
+    const activeProjectId =
+      rawActive && projects.some((p) => p.id === rawActive)
+        ? rawActive
+        : projects[0].id;
+    return { projects, activeProjectId };
+  } catch {
+    return null;
+  }
+}
+
+function readLegacy(): PersistedSnapshot | null {
+  try {
+    const raw = window.localStorage.getItem(LEGACY_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as AnyLegacy;
+    if (!parsed || typeof parsed !== "object") return null;
+    if ((parsed as any).v === 2) return migrateV2(parsed as PersistedV2);
+    if ((parsed as any).v === 1) return migrateV1(parsed as PersistedV1);
     return null;
   } catch {
     return null;
@@ -115,7 +113,6 @@ function migrateV2(v2: PersistedV2): PersistedSnapshot | null {
 
 function migrateV1(v1: PersistedV1): PersistedSnapshot | null {
   if (!Array.isArray(v1.apis)) return null;
-  // Wrap the v1 single-namespace data as a single project named "Default".
   const project = normalizeProject({
     id: "default",
     name: "Default",
@@ -128,10 +125,6 @@ function migrateV1(v1: PersistedV1): PersistedSnapshot | null {
   return { projects: [project], activeProjectId: "default" };
 }
 
-/**
- * Apply per-API / per-stage / window migrations to a single project.
- * Returns null if the project is unsalvageable (e.g. malformed).
- */
 function normalizeProject(p: any): Project | null {
   if (!p || typeof p !== "object") return null;
   if (!Array.isArray(p.apis)) return null;
@@ -184,10 +177,6 @@ function normalizeProject(p: any): Project | null {
 
   const reactors: Reactor[] = Array.isArray(p.reactors)
     ? p.reactors.map((r: any) => {
-        // Drop the legacy `shared` field; it was a static seed-time hint
-        // that became stale once users could edit stage pools, and the
-        // scheduler never used it. Now derived live from pool memberships
-        // in the Clash tab.
         const { shared: _shared, ...rest } = r;
         void _shared;
         return {
@@ -224,28 +213,45 @@ function normalizeProject(p: any): Project | null {
   };
 }
 
+// ─── Save ──────────────────────────────────────────────────────────────────
+
 export function savePersisted(
   projects: Project[],
   activeProjectId: string
 ): void {
   if (typeof window === "undefined") return;
+  saveProjects(projects);
+  saveActiveProjectId(activeProjectId);
+}
+
+function saveProjects(projects: Project[]): void {
   try {
-    const payload: PersistedV2 = {
-      v: 2,
+    const payload: PersistedV3Body = {
+      v: 3,
       projects,
-      activeProjectId,
       savedAt: Date.now(),
     };
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    window.localStorage.setItem(PROJECTS_KEY, JSON.stringify(payload));
   } catch {
     // ignore quota / private mode
+  }
+}
+
+function saveActiveProjectId(id: string): void {
+  try {
+    window.localStorage.setItem(ACTIVE_KEY, id);
+  } catch {
+    // ignore
   }
 }
 
 export function clearPersisted(): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.removeItem(STORAGE_KEY);
+    window.localStorage.removeItem(PROJECTS_KEY);
+    window.localStorage.removeItem(ACTIVE_KEY);
+    // Also drop the legacy v1/v2 blob if it's still hanging around.
+    window.localStorage.removeItem(LEGACY_KEY);
   } catch {
     // ignore
   }
@@ -254,21 +260,68 @@ export function clearPersisted(): void {
 export function isPersistedPresent(): boolean {
   if (typeof window === "undefined") return false;
   try {
-    return window.localStorage.getItem(STORAGE_KEY) !== null;
+    return (
+      window.localStorage.getItem(PROJECTS_KEY) !== null ||
+      window.localStorage.getItem(LEGACY_KEY) !== null
+    );
   } catch {
     return false;
   }
 }
 
-/**
- * Map legacy reactor classes to the current Intermediate | Cleanroom union.
- * "Small" + "Medium" → "Intermediate"; "Large" → "Cleanroom". Unknown values
- * fall back to "Intermediate" (the more permissive class). Exported so
- * services/sync.ts can apply the same migration on cloud reads.
- */
+// ─── Mode preference ───────────────────────────────────────────────────────
+
+export function getDataSourceMode(): DataSource {
+  if (typeof window === "undefined") return "cloud";
+  try {
+    const v = window.localStorage.getItem(DATA_SOURCE_KEY);
+    if (v === "local") return "local";
+    return "cloud";
+  } catch {
+    return "cloud";
+  }
+}
+
+export function setDataSourceMode(mode: DataSource): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(DATA_SOURCE_KEY, mode);
+  } catch {
+    // ignore
+  }
+}
+
+// ─── Stats helpers (for Admin tab) ─────────────────────────────────────────
+
+export function persistedSizeBytes(): number {
+  if (typeof window === "undefined") return 0;
+  try {
+    const raw = window.localStorage.getItem(PROJECTS_KEY);
+    return raw ? raw.length * 2 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function persistedSavedAt(): number | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(PROJECTS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.savedAt === "number" ? parsed.savedAt : null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── Reactor class migration helper ────────────────────────────────────────
+//
+// "Small" + "Medium" → "Intermediate"; "Large" → "Cleanroom". Unknown values
+// fall back to "Intermediate". Exported because services/sync.ts also uses
+// it on cloud reads.
 export function migrateReactorClass(value: unknown): Reactor["reactorClass"] {
   if (value === "Intermediate" || value === "Cleanroom") return value;
   if (value === "Large") return "Cleanroom";
-  // "Small" | "Medium" | anything-else → Intermediate
   return "Intermediate";
 }

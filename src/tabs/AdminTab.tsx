@@ -41,7 +41,6 @@ export default function AdminTab() {
   const dataSource = useStore((s) => s.dataSource);
   const isHydrating = useStore((s) => s.isHydrating);
   const cloudError = useStore((s) => s.cloudError);
-  const workspaceId = useStore((s) => s.workspaceId);
   const projects = useStore((s) => s.projects);
   const lastCloudRead = useStore((s) => s.lastCloudRead);
   const setDataSource = useStore((s) => s.setDataSource);
@@ -141,8 +140,8 @@ export default function AdminTab() {
         ? {
             tone: "ok",
             text: result.info.isEmpty
-              ? "Refreshed — Supabase has no row for this workspace yet."
-              : `Refreshed — ${result.info.projects.length} project${result.info.projects.length === 1 ? "" : "s"} in cloud.`,
+              ? "Refreshed — public.projects is empty."
+              : `Refreshed — ${result.info.projects.length} project${result.info.projects.length === 1 ? "" : "s"} in public.projects.`,
           }
         : { tone: "err", text: `Refresh failed: ${result.error}` }
     );
@@ -219,11 +218,12 @@ export default function AdminTab() {
             <div className="mt-3 flex items-start gap-2 rounded-md border border-amber-300/30 bg-amber-300/5 p-2.5 text-xs text-amber-200">
               <Inbox size={14} className="mt-0.5 shrink-0" />
               <div className="flex-1">
-                <span className="font-bold">Cloud is empty for this workspace.</span>{" "}
-                You're seeing the local cache below. Click{" "}
+                <span className="font-bold">Cloud table is empty.</span>{" "}
+                <code className="font-mono">public.projects</code> has no rows
+                yet. You're seeing your local cache below. Click{" "}
                 <span className="font-bold">Push local → cloud</span> to seed
-                the Supabase row with what's currently in this browser, or
-                clear local cache to start clean.
+                the table with what's currently in this browser, or clear
+                local cache to start clean.
               </div>
             </div>
           )}
@@ -239,14 +239,6 @@ export default function AdminTab() {
             </h3>
             {dataSource === "local" && <Tag tone="cyan">Active source</Tag>}
           </div>
-          <Stat
-            label="Workspace ID"
-            value={
-              <code className="break-all font-mono text-[10px]">
-                {workspaceId}
-              </code>
-            }
-          />
           <Stat
             label="Size"
             value={
@@ -296,14 +288,25 @@ export default function AdminTab() {
                 : <span className="text-lime-300">connected</span>
             }
           />
-          <Stat label="Workspace row id" value={<code className="font-mono text-[10px]">{workspaceId}</code>} />
           <Stat
             label="Mode"
             value={dataSource === "cloud" ? "writes go to cloud" : "writes paused"}
           />
           <Stat
             label="Backing table"
-            value={<code className="font-mono text-[11px]">public.workspaces</code>}
+            value={<code className="font-mono text-[11px]">public.projects</code>}
+          />
+          <Stat
+            label="Cloud rows"
+            value={
+              !isSupabaseEnabled
+                ? "—"
+                : !lastCloudRead
+                ? "(unknown — refreshing)"
+                : lastCloudRead.isEmpty
+                ? "0"
+                : `${lastCloudRead.projects.length}`
+            }
           />
           <Stat
             label="Last cloud read"
@@ -383,7 +386,7 @@ export default function AdminTab() {
             tone="violet"
             disabled={!isSupabaseEnabled || busy !== null}
             label="Push local → cloud"
-            description="Overwrite the Supabase row with everything currently in this browser. Use before switching local → cloud if you want to keep your local edits."
+            description="Reconcile cloud with local: upsert every local project into public.projects and delete any cloud rows whose ids are not in your local set."
             onClick={handlePush}
             loading={busy === "push"}
           />
@@ -392,7 +395,7 @@ export default function AdminTab() {
             tone="cyan"
             disabled={!isSupabaseEnabled || busy !== null}
             label="Pull cloud → local"
-            description="Replace in-memory + local cache with whatever's in Supabase. Discards local edits."
+            description="Replace in-memory + local cache with the full set of rows from public.projects. Discards local-only projects and edits."
             onClick={handlePull}
             loading={busy === "pull"}
           />
@@ -423,7 +426,7 @@ export default function AdminTab() {
               tone="rose"
               disabled={busy !== null}
               label="Clear local cache"
-              description="Remove the workspace JSON from this browser's localStorage. Your workspaceId and mode preference are preserved."
+              description="Remove the projects JSON from this browser's localStorage. Your data source mode preference is preserved."
               onClick={() => setConfirmClear(true)}
               loading={busy === "clear"}
             />
@@ -578,10 +581,9 @@ function ProjectsComparison({
     return (
       <div className="rounded-md border border-amber-300/30 bg-amber-300/5 p-3 text-xs text-amber-200">
         <Inbox size={12} className="mr-1 inline" />
-        No row exists in <code className="font-mono">public.workspaces</code>{" "}
-        for this workspace yet. Local has{" "}
-        <span className="font-bold">{local.length} project(s)</span>. Push them
-        up to seed the cloud row.
+        <code className="font-mono">public.projects</code> has no rows yet.
+        Local has <span className="font-bold">{local.length} project(s)</span>.
+        Push them up to seed the cloud table.
       </div>
     );
   }

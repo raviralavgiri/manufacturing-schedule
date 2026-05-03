@@ -57,7 +57,10 @@ export default function SyncBadge() {
   const [status, setStatus] = useState<SyncStatus>(getSyncStatus());
   const [copied, setCopied] = useState(false);
   const cloudEnabled = useStore((s) => s.cloudEnabled);
-  const workspaceId = useStore((s) => s.workspaceId);
+  // Each row in `public.projects` is keyed by project id. Sharing a project
+  // across browsers / users = sharing this id. Copying it is the new
+  // "share" affordance (replaces the old workspace-id copy button).
+  const activeProjectId = useStore((s) => s.activeProjectId);
 
   useEffect(() => {
     return subscribeSyncStatus((s) => setStatus(s));
@@ -67,7 +70,7 @@ export default function SyncBadge() {
 
   const copyId = async () => {
     try {
-      await navigator.clipboard.writeText(workspaceId);
+      await navigator.clipboard.writeText(activeProjectId);
       setCopied(true);
       setTimeout(() => setCopied(false), 1400);
     } catch {
@@ -83,7 +86,7 @@ export default function SyncBadge() {
       )}
       title={
         cloudEnabled
-          ? `Cloud sync ${status} · workspace ${workspaceId.slice(0, 8)}…`
+          ? `Cloud sync ${status} · active project ${activeProjectId}`
           : "Cloud sync disabled. Set VITE_SUPABASE_URL & VITE_SUPABASE_ANON_KEY to enable."
       }
     >
@@ -95,7 +98,7 @@ export default function SyncBadge() {
         <button
           onClick={copyId}
           className="ml-1 rounded px-1 text-[9px] font-bold uppercase tracking-wider opacity-50 hover:opacity-100"
-          title="Copy workspace ID"
+          title="Copy active project id"
         >
           {copied ? "Copied!" : <Copy size={9} />}
         </button>

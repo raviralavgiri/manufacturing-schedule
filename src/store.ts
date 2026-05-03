@@ -23,13 +23,12 @@ import {
 } from "./utils/storage";
 import { isSupabaseEnabled } from "./services/supabase";
 import {
-  loadFromCloud,
+  loadAllProjectsFromCloud,
   queueCloudSave,
-  saveToCloud,
+  syncAllProjectsToCloud,
   setIdleStatus,
   setLoadingStatus,
 } from "./services/sync";
-import { getWorkspaceId } from "./services/supabase";
 import { FY_END_MS, FY_START_MS } from "./utils/dates";
 
 /**
@@ -85,7 +84,6 @@ interface AppState {
   recentlyAddedStageId: string | null;
   hasPersistedChanges: boolean;
   cloudEnabled: boolean;
-  workspaceId: string;
 
   // ─ Data source mode ─────────────────────────────────────────────
   /** Where to read on boot: "cloud" (Supabase) or "local" (browser). Writes
@@ -284,8 +282,11 @@ let recomputeTimer: number | undefined;
 
 /**
  * Persistence dispatcher. Always writes localStorage (it's free, sync, and
- * acts as backup). Only queues a cloud upsert when the user is in "cloud"
+ * acts as backup). Only queues a cloud reconcile when the user is in "cloud"
  * mode AND Supabase is actually enabled.
+ *
+ * Cloud reconcile = upsert every local project + delete any cloud rows
+ * whose id is no longer in the local set. See syncAllProjectsToCloud.
  */
 function persistAndSync(
   projects: Project[],
@@ -294,7 +295,7 @@ function persistAndSync(
 ) {
   savePersisted(projects, activeProjectId);
   if (mode === "cloud" && isSupabaseEnabled) {
-    queueCloudSave({ projects, activeProjectId });
+    queueCloudSave(projects);
   }
 }
 
@@ -360,7 +361,6 @@ export const useStore = create<AppState>((set, get) => ({
   recentlyAddedStageId: null,
   hasPersistedChanges: isPersistedPresent(),
   cloudEnabled: isSupabaseEnabled,
-  workspaceId: getWorkspaceId(),
 
   // ─ Data source defaults ─────────────────────────────────────────
   dataSource: initialMode,
@@ -839,14 +839,11 @@ export const useStore = create<AppState>((set, get) => ({
     }
     setDataSourceMode(mode);
     set({ dataSource: mode, cloudError: null });
-    // If we just switched TO cloud, push current state up so the cloud row
-    // at least matches what the user is seeing right now.
+    // If we just switched TO cloud, push current state up so the cloud
+    // table reflects what the user is seeing right now.
     if (mode === "cloud") {
       const state = get();
-      queueCloudSave({
-        projects: state.projects,
-        activeProjectId: state.activeProjectId,
-      });
+      queueCloudSave(state.projects);
     }
   },
 
@@ -856,10 +853,7 @@ export const useStore = create<AppState>((set, get) => ({
     }
     const state = get();
     try {
-      await saveToCloud({
-        projects: state.projects,
-        activeProjectId: state.activeProjectId,
-      });
+      await syncAllProjectsToCloud(state.projects);
       set({ cloudError: null });
       return { ok: true };
     } catch (e) {
@@ -875,8 +869,8 @@ export const useStore = create<AppState>((set, get) => ({
     }
     set({ isHydrating: true, cloudError: null });
     try {
-      const cloud = await loadFromCloud();
-      if (!cloud || cloud.projects.length === 0) {
+      const cloudProjects = await loadAllProjectsFromCloud();
+      if (!cloudProjects || cloudProjects.length === 0) {
         set({
           isHydrating: false,
           lastCloudRead: {
@@ -887,14 +881,18 @@ export const useStore = create<AppState>((set, get) => ({
             projects: [],
           },
         });
-        return { ok: false, error: "No data found in Supabase." };
+        return { ok: false, error: "No projects found in Supabase." };
       }
-      const projects = cloud.projects.map((p) => ({
+      const projects = cloudProjects.map((p) => ({
         ...p,
         apis: refreshPaletteColors(p.apis).map(cascadePlannedBatches),
       }));
-      const activeId = projects.some((p) => p.id === cloud.activeProjectId)
-        ? cloud.activeProjectId
+      // Active project is purely a per-browser preference. If the previously
+      // active id is still in the new set, keep it; otherwise fall back to
+      // the first project.
+      const prevActive = get().activeProjectId;
+      const activeId = projects.some((p) => p.id === prevActive)
+        ? prevActive
         : projects[0].id;
       const active = projects.find((p) => p.id === activeId)!;
       const sched = runScheduler(active.apis, active.reactors, active.window);
@@ -942,8 +940,8 @@ export const useStore = create<AppState>((set, get) => ({
       return { ok: false, error: info.error! };
     }
     try {
-      const cloud = await loadFromCloud();
-      if (!cloud || cloud.projects.length === 0) {
+      const cloudProjects = await loadAllProjectsFromCloud();
+      if (!cloudProjects || cloudProjects.length === 0) {
         const info: CloudReadInfo = {
           at: Date.now(),
           error: null,
@@ -958,8 +956,10 @@ export const useStore = create<AppState>((set, get) => ({
         at: Date.now(),
         error: null,
         isEmpty: false,
-        activeProjectId: cloud.activeProjectId,
-        projects: cloud.projects.map((p) => ({
+        // active project is a browser-local concept now; the cloud rows
+        // themselves don't carry it.
+        activeProjectId: null,
+        projects: cloudProjects.map((p) => ({
           id: p.id,
           name: p.name,
           apiCount: p.apis.length,
@@ -1022,17 +1022,14 @@ export const useStore = create<AppState>((set, get) => ({
 // In LOCAL mode: we never call Supabase on boot.
 if (initialMode === "cloud" && isSupabaseEnabled) {
   setLoadingStatus();
-  void loadFromCloud()
-    .then((cloud) => {
-      if (!cloud || cloud.projects.length === 0) {
-        // No row yet — first time on this workspace. Push the local-seeded
-        // state up so the cloud has something to read on next boot, and
-        // leave the user looking at the seed.
+  void loadAllProjectsFromCloud()
+    .then((cloudProjects) => {
+      if (!cloudProjects || cloudProjects.length === 0) {
+        // No projects in cloud yet — seed it from whatever we have locally
+        // so the table is bootstrapped on next boot. Leave the user looking
+        // at the local seed for now.
         const state = useStore.getState();
-        queueCloudSave({
-          projects: state.projects,
-          activeProjectId: state.activeProjectId,
-        });
+        queueCloudSave(state.projects);
         useStore.setState({
           isHydrating: false,
           lastCloudRead: {
@@ -1046,12 +1043,15 @@ if (initialMode === "cloud" && isSupabaseEnabled) {
         setIdleStatus();
         return;
       }
-      const projects = cloud.projects.map((p) => ({
+      const projects = cloudProjects.map((p) => ({
         ...p,
         apis: refreshPaletteColors(p.apis).map(cascadePlannedBatches),
       }));
-      const activeId = projects.some((p) => p.id === cloud.activeProjectId)
-        ? cloud.activeProjectId
+      // Active project is a per-browser preference; preserve it if still
+      // valid, otherwise fall back to the first project in the cloud set.
+      const state = useStore.getState();
+      const activeId = projects.some((p) => p.id === state.activeProjectId)
+        ? state.activeProjectId
         : projects[0].id;
       const active = projects.find((p) => p.id === activeId)!;
       const sched = runScheduler(active.apis, active.reactors, active.window);

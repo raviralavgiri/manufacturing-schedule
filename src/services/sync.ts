@@ -1,5 +1,5 @@
-import type { API, PlanWindow, Project, Reactor } from "../types";
-import { getWorkspaceId, isSupabaseEnabled, supabase } from "./supabase";
+import type { Project } from "../types";
+import { isSupabaseEnabled, supabase } from "./supabase";
 import { migrateReactorClass } from "../utils/storage";
 
 export type SyncStatus =
@@ -10,145 +10,153 @@ export type SyncStatus =
   | "error"
   | "loading";
 
-const TABLE = "workspaces";
+const TABLE = "projects";
 
-export interface CloudSnapshot {
-  projects: Project[];
-  activeProjectId: string;
-}
-
-interface RowShape {
+// ─── DB row shape ───────────────────────────────────────────────────────────
+//
+// Each row in `public.projects` is exactly one project. Active-project
+// preference is per-browser and NOT stored here.
+interface ProjectRow {
   id: string;
-  // v2 shape
-  projects?: Project[];
-  active_project_id?: string;
-  // v1 legacy shape (for backwards compat read path)
-  apis?: API[];
-  reactors?: Reactor[];
-  window?: PlanWindow;
+  name: string;
+  created_at?: number;
+  apis: any;
+  reactors: any;
+  window: any;
   updated_at?: string;
 }
 
-/**
- * Load the workspace snapshot from Supabase. Handles both v2 (projects)
- * and legacy v1 (apis/reactors/window) row shapes — v1 rows get auto-wrapped
- * into a single Default project.
- */
-export async function loadFromCloud(): Promise<CloudSnapshot | null> {
-  if (!isSupabaseEnabled || !supabase) return null;
-  const id = getWorkspaceId();
-  const { data, error } = await supabase
-    .from(TABLE)
-    .select("apis, reactors, window, projects, active_project_id")
-    .eq("id", id)
-    .maybeSingle();
-  if (error) {
-    console.warn("[sync] loadFromCloud error:", error.message);
-    return null;
-  }
-  if (!data) return null;
-  const row = data as RowShape;
-
-  // v2: projects array present
-  if (Array.isArray(row.projects) && row.projects.length > 0) {
-    const projects = row.projects.map(normalize).filter((p): p is Project => !!p);
-    if (projects.length === 0) return null;
-    const activeProjectId =
-      typeof row.active_project_id === "string" &&
-      projects.some((p) => p.id === row.active_project_id)
-        ? row.active_project_id
-        : projects[0].id;
-    return { projects, activeProjectId };
-  }
-
-  // v1 fallback: wrap the legacy single namespace as a Default project
-  if (Array.isArray(row.apis)) {
-    const project: Project = {
-      id: "default",
-      name: "Default",
-      createdAt: Date.now(),
-      apis: row.apis,
-      reactors: Array.isArray(row.reactors)
-        ? row.reactors.map((r) => {
-            const { shared: _shared, ...rest } = r as any;
-            void _shared;
-            return {
-              ...rest,
-              name: r.name ?? r.id,
-              reactorClass: migrateReactorClass(r.reactorClass),
-            };
-          })
-        : [],
-      window: row.window ?? { startMs: 0, endMs: 0 },
-    };
-    return { projects: [project], activeProjectId: "default" };
-  }
-
-  return null;
-}
-
-function normalize(p: any): Project | null {
-  if (!p || !Array.isArray(p.apis)) return null;
+function rowToProject(row: ProjectRow): Project {
+  // Defensive — strip the legacy `shared` flag and migrate class names if
+  // they survived from the old workspace shape.
+  const reactors = Array.isArray(row.reactors)
+    ? row.reactors.map((r: any) => {
+        const { shared: _shared, ...rest } = r;
+        void _shared;
+        return {
+          ...rest,
+          name: r.name ?? r.id,
+          reactorClass: migrateReactorClass(r.reactorClass),
+        };
+      })
+    : [];
+  const apis = Array.isArray(row.apis) ? row.apis : [];
+  const window =
+    row.window &&
+    typeof row.window === "object" &&
+    typeof row.window.startMs === "number" &&
+    typeof row.window.endMs === "number"
+      ? row.window
+      : { startMs: 0, endMs: 0 };
   return {
-    id: typeof p.id === "string" ? p.id : crypto.randomUUID(),
-    name:
-      typeof p.name === "string" && p.name.trim()
-        ? p.name.trim()
-        : "Untitled Project",
+    id: row.id,
+    name: row.name,
     createdAt:
-      typeof p.createdAt === "number" && p.createdAt > 0
-        ? p.createdAt
+      typeof row.created_at === "number" && row.created_at > 0
+        ? row.created_at
         : Date.now(),
-    apis: p.apis,
-    reactors: Array.isArray(p.reactors)
-      ? p.reactors.map((r: any) => {
-          const { shared: _shared, ...rest } = r;
-          void _shared;
-          return {
-            ...rest,
-            name: r.name ?? r.id,
-            reactorClass: migrateReactorClass(r.reactorClass),
-          };
-        })
-      : [],
-    window:
-      p.window &&
-      typeof p.window.startMs === "number" &&
-      typeof p.window.endMs === "number"
-        ? p.window
-        : { startMs: 0, endMs: 0 },
+    apis,
+    reactors,
+    window,
   };
 }
 
-/** Upsert the workspace snapshot to Supabase. */
-export async function saveToCloud(snapshot: CloudSnapshot): Promise<void> {
+function projectToRow(p: Project): ProjectRow {
+  return {
+    id: p.id,
+    name: p.name,
+    created_at: p.createdAt,
+    apis: p.apis,
+    reactors: p.reactors,
+    window: p.window,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+// ─── Reads ─────────────────────────────────────────────────────────────────
+
+/**
+ * Fetch the entire shared set of projects from Supabase. Anyone with the
+ * publishable key sees the same list — there is no per-browser scope.
+ */
+export async function loadAllProjectsFromCloud(): Promise<Project[] | null> {
+  if (!isSupabaseEnabled || !supabase) return null;
+  const { data, error } = await supabase
+    .from(TABLE)
+    .select("id, name, created_at, apis, reactors, window, updated_at")
+    .order("created_at", { ascending: true });
+  if (error) {
+    console.warn("[sync] loadAllProjectsFromCloud error:", error.message);
+    throw new Error(error.message);
+  }
+  if (!Array.isArray(data)) return [];
+  return data.map((row) => rowToProject(row as ProjectRow));
+}
+
+// ─── Writes ────────────────────────────────────────────────────────────────
+
+/** Upsert one project's row. */
+export async function saveProjectToCloud(project: Project): Promise<void> {
   if (!isSupabaseEnabled || !supabase) {
     throw new Error("Supabase not configured");
   }
-  const id = getWorkspaceId();
-  const { error } = await supabase.from(TABLE).upsert(
-    {
-      id,
-      projects: snapshot.projects,
-      active_project_id: snapshot.activeProjectId,
-      // Mirror the active project's data into the legacy columns for any
-      // downstream tools that still read v1 shape.
-      apis: getActive(snapshot)?.apis ?? [],
-      reactors: getActive(snapshot)?.reactors ?? [],
-      window: getActive(snapshot)?.window ?? null,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "id" }
-  );
+  const row = projectToRow(project);
+  const { error } = await supabase.from(TABLE).upsert(row, { onConflict: "id" });
   if (error) throw new Error(error.message);
 }
 
-function getActive(snapshot: CloudSnapshot): Project | undefined {
-  return snapshot.projects.find((p) => p.id === snapshot.activeProjectId);
+/** Delete one project's row by id. */
+export async function deleteProjectFromCloud(id: string): Promise<void> {
+  if (!isSupabaseEnabled || !supabase) {
+    throw new Error("Supabase not configured");
+  }
+  const { error } = await supabase.from(TABLE).delete().eq("id", id);
+  if (error) throw new Error(error.message);
 }
 
-// ─── Debounced background sync ─────────────────────────────────────────────────
-let pending: CloudSnapshot | null = null;
+/**
+ * Reconcile cloud with the local set: upsert every local project, then
+ * delete any cloud rows whose id is no longer present locally.
+ *
+ * Caller passes the COMPLETE local set, not a delta. Trade-off: O(N) writes
+ * per sync, but the bookkeeping is dead simple and idempotent.
+ */
+export async function syncAllProjectsToCloud(local: Project[]): Promise<void> {
+  if (!isSupabaseEnabled || !supabase) {
+    throw new Error("Supabase not configured");
+  }
+  // Upsert all local rows in one round-trip.
+  if (local.length > 0) {
+    const rows = local.map(projectToRow);
+    const { error: upErr } = await supabase
+      .from(TABLE)
+      .upsert(rows, { onConflict: "id" });
+    if (upErr) throw new Error(upErr.message);
+  }
+  // Delete any cloud rows whose ids aren't in the local set.
+  const { data: cloudIds, error: idErr } = await supabase
+    .from(TABLE)
+    .select("id");
+  if (idErr) throw new Error(idErr.message);
+  const localIds = new Set(local.map((p) => p.id));
+  const toDelete = (cloudIds ?? [])
+    .map((r: { id: string }) => r.id)
+    .filter((id) => !localIds.has(id));
+  if (toDelete.length > 0) {
+    const { error: delErr } = await supabase
+      .from(TABLE)
+      .delete()
+      .in("id", toDelete);
+    if (delErr) throw new Error(delErr.message);
+  }
+}
+
+// ─── Debounced background sync ─────────────────────────────────────────────
+//
+// Every mutation in the store calls `queueCloudSave(localProjects)`. We
+// debounce 800 ms and reconcile against cloud (upsert all + delete missing).
+
+let pending: Project[] | null = null;
 let inflight = false;
 let timer: number | undefined;
 
@@ -172,12 +180,17 @@ export function getSyncStatus(): SyncStatus {
   return lastStatus;
 }
 
+/**
+ * Queue a debounced cloud reconcile. Called by the store's persistence
+ * dispatcher whenever any mutation lands. Subsequent calls within the
+ * debounce window collapse into a single sync of the latest snapshot.
+ */
 export function queueCloudSave(
-  snapshot: CloudSnapshot,
+  localProjects: Project[],
   debounceMs = 800
 ): void {
   if (!isSupabaseEnabled) return;
-  pending = snapshot;
+  pending = localProjects;
   if (timer) window.clearTimeout(timer);
   timer = window.setTimeout(flush, debounceMs);
 }
@@ -189,14 +202,14 @@ async function flush() {
   inflight = true;
   emit("syncing");
   try {
-    await saveToCloud(snapshot);
+    await syncAllProjectsToCloud(snapshot);
     lastSyncedAt = Date.now();
     emit("synced");
     if (pending) {
       window.setTimeout(flush, 0);
     }
   } catch (err) {
-    console.error("[sync] saveToCloud failed:", err);
+    console.error("[sync] syncAllProjectsToCloud failed:", err);
     emit("error");
   } finally {
     inflight = false;
