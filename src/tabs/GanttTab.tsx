@@ -630,6 +630,49 @@ export default function GanttTab() {
                     </div>
                   );
                 })()}
+                {/* Day-of-week ticks - only at zooms where they're readable */}
+                {pxPerWeek >= 100 &&
+                  (() => {
+                    // Use full short names when each day cell is wide enough
+                    const useShortNames = pxPerWeek >= 180;
+                    const dayLabels = useShortNames
+                      ? ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+                      : ["M", "T", "W", "T", "F", "S", "S"];
+                    return (
+                      <div
+                        className="relative flex h-5 border-b border-white/10 bg-white/[0.015]"
+                        style={{ width: totalWeeks * pxPerWeek }}
+                      >
+                        {weeks.map((_, weekIdx) => (
+                          <div
+                            key={weekIdx}
+                            className="flex shrink-0 border-r border-white/10"
+                            style={{ width: pxPerWeek }}
+                          >
+                            {dayLabels.map((d, dayIdx) => (
+                              <div
+                                key={dayIdx}
+                                style={{ width: pxPerWeek / 7 }}
+                                className={clsx(
+                                  "text-center font-mono text-[9px] leading-5",
+                                  // Weekend (Sat=5, Sun=6) muted further
+                                  dayIdx >= 5
+                                    ? "text-ink-500/70"
+                                    : "text-ink-400",
+                                  // Subtle vertical day separators between
+                                  // weekdays - skip the last one (week boundary
+                                  // already drawn by the parent border-r)
+                                  dayIdx < 6 && "border-r border-white/[0.04]"
+                                )}
+                              >
+                                {d}
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
               </div>
 
               {/* Body grid + bars */}
