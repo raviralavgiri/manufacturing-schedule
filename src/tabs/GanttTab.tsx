@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { Fragment, useMemo, useRef, useState } from "react";
 import {
   ZoomIn,
   ZoomOut,
@@ -680,9 +680,26 @@ export default function GanttTab() {
                 {/* Row backgrounds with vertical week guides */}
                 {visibleRows.map((row, idx) => {
                   const batches = grouped.get(row.key) || [];
+                  // In by-stage mode the rail renders an API-header button
+                  // before each API's first stage row. The body must emit a
+                  // matching empty row of the same height so the rail and
+                  // body stay vertically aligned. Without this, every bar
+                  // visually appears one row ABOVE its labeled position.
+                  const prevRow = idx > 0 ? visibleRows[idx - 1] : null;
+                  const isFirstStageOfApi =
+                    mode === "by-stage" &&
+                    !!row.apiId &&
+                    (!prevRow || prevRow.apiId !== row.apiId);
                   return (
+                    <Fragment key={row.key}>
+                      {isFirstStageOfApi && (
+                        <div
+                          aria-hidden
+                          style={{ height: 28 }}
+                          className="border-b border-white/5 bg-white/[0.02]"
+                        />
+                      )}
                     <div
-                      key={row.key}
                       style={{ height: rowH }}
                       className={clsx(
                         "relative border-b border-white/5",
@@ -798,6 +815,7 @@ export default function GanttTab() {
                         );
                       })}
                     </div>
+                    </Fragment>
                   );
                 })}
               </div>
