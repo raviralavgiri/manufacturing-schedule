@@ -4,7 +4,6 @@ import {
   Plus,
   Trash2,
   Pencil,
-  Save,
   Search,
   Lock,
   CalendarRange,
@@ -175,16 +174,6 @@ export default function ApisTab() {
           </div>
         }
       />
-
-      {hasPersistedChanges && (
-        <div className="flex items-center gap-2 rounded-xl border border-cyan-300/20 bg-cyan-300/5 px-3 py-2 text-xs text-cyan-200">
-          <Save size={12} className="text-cyan-300" />
-          <span>
-            <span className="font-bold">Saved locally.</span> Edits persist in
-            this browser; cloud sync runs if Supabase is configured.
-          </span>
-        </div>
-      )}
 
       {/* Global plan window — applies to every API */}
       <PlanWindowStrip
