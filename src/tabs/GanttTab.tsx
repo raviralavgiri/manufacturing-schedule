@@ -43,6 +43,15 @@ export default function GanttTab() {
       ),
     [apisRaw]
   );
+
+  // Live lookup: apiId → current color. Bars consult this instead of the
+  // possibly-stale apiColor baked into the schedule when it was last computed.
+  // Guarantees bar color always reflects the current api state.
+  const apiColorById = useMemo(() => {
+    const m = new Map<string, string>();
+    apisRaw.forEach((a) => m.set(a.id, a.color));
+    return m;
+  }, [apisRaw]);
   const [pxPerWeek, setPxPerWeek] = useState(64); // default = "Quarter view": ~13 weeks visible per ~830px
   const [mode, setMode] = useState<Mode>("by-stage");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -668,6 +677,11 @@ export default function GanttTab() {
                         if (startWk >= totalWeeks) return null;
                         const barH = rowH - 6;
 
+                        // Live color lookup - guarantees the bar uses the
+                        // CURRENT api.color, never a stale snapshot from when
+                        // the schedule was last computed.
+                        const barColor =
+                          apiColorById.get(b.apiId) ?? b.apiColor;
                         return (
                           <div
                             key={b.batchId}
@@ -684,8 +698,8 @@ export default function GanttTab() {
                                 style={{
                                   width: cycleWidth,
                                   height: barH,
-                                  background: b.apiColor,
-                                  boxShadow: `0 0 6px ${b.apiColor}99, inset 0 1px 0 rgba(255,255,255,0.25)`,
+                                  background: barColor,
+                                  boxShadow: `0 0 6px ${barColor}99, inset 0 1px 0 rgba(255,255,255,0.25)`,
                                 }}
                                 className="rounded-l-sm border border-white/20 transition-all group-hover:brightness-125 group-hover:saturate-150"
                               />
@@ -694,8 +708,8 @@ export default function GanttTab() {
                                   style={{
                                     width: tailWidth,
                                     height: barH,
-                                    background: `linear-gradient(90deg, ${b.apiColor}88, ${b.apiColor}22)`,
-                                    border: `1px dashed ${b.apiColor}80`,
+                                    background: `linear-gradient(90deg, ${barColor}88, ${barColor}22)`,
+                                    border: `1px dashed ${barColor}80`,
                                     borderLeft: "none",
                                   }}
                                   className="rounded-r-sm opacity-80"

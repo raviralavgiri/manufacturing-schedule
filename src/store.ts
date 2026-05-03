@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { API_PALETTE, buildSeed } from "./data/seed";
+import { API_PALETTE, buildSeed, refreshPaletteColors } from "./data/seed";
 import { runScheduler } from "./scheduler/scheduler";
 import { cascadePlannedBatches } from "./scheduler/cascade";
 import type {
@@ -486,15 +486,18 @@ if (isSupabaseEnabled) {
           cloud.window.endMs > cloud.window.startMs
             ? cloud.window
             : state.window;
-        const sched = runScheduler(cloud.apis, reactors, cloudWindow);
+        // Refresh API colors from the current palette so cloud-saved
+        // entries with stale colors pick up the latest palette automatically
+        const cloudApis = refreshPaletteColors(cloud.apis);
+        const sched = runScheduler(cloudApis, reactors, cloudWindow);
         useStore.setState({
-          apis: cloud.apis,
+          apis: cloudApis,
           reactors,
           window: cloudWindow,
           schedule: sched,
           hasPersistedChanges: true,
         });
-        savePersisted(cloud.apis, reactors, cloudWindow);
+        savePersisted(cloudApis, reactors, cloudWindow);
       }
       setIdleStatus();
     })

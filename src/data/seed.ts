@@ -43,6 +43,21 @@ export const API_PALETTE: string[] = (() => {
   return out;
 })();
 
+/**
+ * Refresh `api.color` for every API based on its position in the array,
+ * using the current palette. Used both when loading from localStorage and
+ * when hydrating from the cloud, so every load picks up the latest palette
+ * regardless of what was previously saved.
+ */
+export function refreshPaletteColors<T extends { color?: string }>(
+  apis: T[]
+): T[] {
+  return apis.map((a, idx) => ({
+    ...a,
+    color: API_PALETTE[idx % API_PALETTE.length],
+  }));
+}
+
 // Reactors: 20 total, with shared ones across stages.
 // `id` is the stable internal reference; `name` is the editable display label.
 function r(
