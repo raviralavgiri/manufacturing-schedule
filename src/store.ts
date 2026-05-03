@@ -2,7 +2,14 @@ import { create } from "zustand";
 import { API_PALETTE, buildSeed } from "./data/seed";
 import { runScheduler } from "./scheduler/scheduler";
 import { cascadePlannedBatches } from "./scheduler/cascade";
-import type { API, Priority, Reactor, ScheduleResult, StageMaster } from "./types";
+import type {
+  API,
+  PlanWindow,
+  Priority,
+  Reactor,
+  ScheduleResult,
+  StageMaster,
+} from "./types";
 import {
   clearPersisted,
   isPersistedPresent,
@@ -33,6 +40,8 @@ export interface NewStageInput {
 interface AppState {
   apis: API[];
   reactors: Reactor[];
+  /** Single global plan window applied to every API. */
+  window: PlanWindow;
   schedule: ScheduleResult;
   isRecomputing: boolean;
   lastRecomputeMs: number;
@@ -65,8 +74,8 @@ interface AppState {
   setApiName: (apiId: string, name: string) => void;
   /** Sets the API target output (kg). Triggers cascade across all stages. */
   setApiTargetOutput: (apiId: string, targetKg: number) => void;
-  /** Set the API's production window (start + end as epoch ms). */
-  setApiWindow: (apiId: string, startMs: number, endMs: number) => void;
+  /** Set the global plan window (epoch ms). Applies to every API. */
+  setWindow: (startMs: number, endMs: number) => void;
   /** Add or remove trailing stages so the API has exactly `count` stages. */
   setApiStageCount: (apiId: string, count: number) => void;
   /**
@@ -93,21 +102,29 @@ const initialApisRaw = persisted?.apis ?? seed.apis;
 // and current batch sizes. Idempotent on the seed (numbers don't change).
 const initialApis = initialApisRaw.map(cascadePlannedBatches);
 const initialReactors = persisted?.reactors ?? seed.reactors;
-const initialSchedule = runScheduler(initialApis, initialReactors);
+const initialWindow: PlanWindow = persisted?.window ?? {
+  startMs: FY_START_MS,
+  endMs: FY_END_MS,
+};
+const initialSchedule = runScheduler(initialApis, initialReactors, initialWindow);
 
 let recomputeTimer: number | undefined;
 
-function persistAndSync(apis: API[], reactors: Reactor[]) {
-  savePersisted(apis, reactors);
-  queueCloudSave({ apis, reactors });
+function persistAndSync(
+  apis: API[],
+  reactors: Reactor[],
+  planWindow: PlanWindow
+) {
+  savePersisted(apis, reactors, planWindow);
+  queueCloudSave({ apis, reactors, window: planWindow });
 }
 
 function scheduleRecompute(set: any, get: any, immediate = false) {
   if (recomputeTimer) window.clearTimeout(recomputeTimer);
   set({ isRecomputing: true });
   const run = () => {
-    const { apis: latestApis, reactors } = get();
-    const sched = runScheduler(latestApis, reactors);
+    const { apis: latestApis, reactors, window: planWindow } = get();
+    const sched = runScheduler(latestApis, reactors, planWindow);
     set({ schedule: sched, isRecomputing: false, lastRecomputeMs: Date.now() });
   };
   if (immediate) {
@@ -120,6 +137,7 @@ function scheduleRecompute(set: any, get: any, immediate = false) {
 export const useStore = create<AppState>((set, get) => ({
   apis: initialApis,
   reactors: initialReactors,
+  window: initialWindow,
   schedule: initialSchedule,
   isRecomputing: false,
   lastRecomputeMs: Date.now(),
@@ -149,7 +167,7 @@ export const useStore = create<AppState>((set, get) => ({
       return updated;
     });
     set({ apis, hasPersistedChanges: true });
-    persistAndSync(apis, get().reactors);
+    persistAndSync(apis, get().reactors, get().window);
     scheduleRecompute(set, get);
   },
 
@@ -178,7 +196,7 @@ export const useStore = create<AppState>((set, get) => ({
       ),
     }));
     set({ apis, hasPersistedChanges: true });
-    persistAndSync(apis, get().reactors);
+    persistAndSync(apis, get().reactors, get().window);
   },
 
   setStageReactorPool: (stageId, pool) => {
@@ -190,7 +208,7 @@ export const useStore = create<AppState>((set, get) => ({
       ),
     }));
     set({ apis, hasPersistedChanges: true });
-    persistAndSync(apis, get().reactors);
+    persistAndSync(apis, get().reactors, get().window);
     scheduleRecompute(set, get, true);
   },
 
@@ -231,7 +249,7 @@ export const useStore = create<AppState>((set, get) => ({
       recentlyAddedStageId: newId,
       hasPersistedChanges: true,
     });
-    persistAndSync(updatedApis, get().reactors);
+    persistAndSync(updatedApis, get().reactors, get().window);
     scheduleRecompute(set, get, true);
     return newId;
   },
@@ -245,7 +263,7 @@ export const useStore = create<AppState>((set, get) => ({
       });
     });
     set({ apis, hasPersistedChanges: true });
-    persistAndSync(apis, get().reactors);
+    persistAndSync(apis, get().reactors, get().window);
     scheduleRecompute(set, get, true);
   },
 
@@ -255,7 +273,7 @@ export const useStore = create<AppState>((set, get) => ({
       a.id === apiId ? { ...a, priority } : a
     );
     set({ apis, hasPersistedChanges: true });
-    persistAndSync(apis, get().reactors);
+    persistAndSync(apis, get().reactors, get().window);
     scheduleRecompute(set, get, true);
   },
 
@@ -272,7 +290,7 @@ export const useStore = create<AppState>((set, get) => ({
         : a
     );
     set({ apis, hasPersistedChanges: true });
-    persistAndSync(apis, get().reactors);
+    persistAndSync(apis, get().reactors, get().window);
     scheduleRecompute(set, get);
   },
 
@@ -282,22 +300,20 @@ export const useStore = create<AppState>((set, get) => ({
       a.id === apiId ? cascadePlannedBatches({ ...a, targetKg: target }) : a
     );
     set({ apis, hasPersistedChanges: true });
-    persistAndSync(apis, get().reactors);
+    persistAndSync(apis, get().reactors, get().window);
     scheduleRecompute(set, get);
   },
 
-  setApiWindow: (apiId, startMs, endMs) => {
+  setWindow: (startMs, endMs) => {
     if (
       !Number.isFinite(startMs) ||
       !Number.isFinite(endMs) ||
       endMs <= startMs
     )
       return;
-    const apis = get().apis.map((a) =>
-      a.id === apiId ? { ...a, startMs, endMs } : a
-    );
-    set({ apis, hasPersistedChanges: true });
-    persistAndSync(apis, get().reactors);
+    const planWindow: PlanWindow = { startMs, endMs };
+    set({ window: planWindow, hasPersistedChanges: true });
+    persistAndSync(get().apis, get().reactors, planWindow);
     scheduleRecompute(set, get, true);
   },
 
@@ -352,7 +368,7 @@ export const useStore = create<AppState>((set, get) => ({
       return cascadePlannedBatches({ ...a, stages });
     });
     set({ apis, hasPersistedChanges: true });
-    persistAndSync(apis, get().reactors);
+    persistAndSync(apis, get().reactors, get().window);
     scheduleRecompute(set, get, true);
   },
 
@@ -393,14 +409,12 @@ export const useStore = create<AppState>((set, get) => ({
       color,
       priority: 3,
       targetKg: withDefaultFinalStage ? 500 : 0,
-      startMs: FY_START_MS,
-      endMs: FY_END_MS,
       projectionKg: 0,
       stages,
     });
     const updated = [...apis, newApi];
     set({ apis: updated, hasPersistedChanges: true });
-    persistAndSync(updated, reactors);
+    persistAndSync(updated, reactors, get().window);
     scheduleRecompute(set, get, true);
     return newId;
   },
@@ -408,7 +422,7 @@ export const useStore = create<AppState>((set, get) => ({
   removeAPI: (apiId) => {
     const apis = get().apis.filter((a) => a.id !== apiId);
     set({ apis, hasPersistedChanges: true });
-    persistAndSync(apis, get().reactors);
+    persistAndSync(apis, get().reactors, get().window);
     scheduleRecompute(set, get, true);
   },
 
@@ -420,7 +434,7 @@ export const useStore = create<AppState>((set, get) => ({
       r.id === reactorId ? { ...r, name: trimmed } : r
     );
     set({ reactors, hasPersistedChanges: true });
-    persistAndSync(get().apis, reactors);
+    persistAndSync(get().apis, reactors, get().window);
     // Names don't affect schedule numbers, only labels - skip recompute
   },
 
@@ -430,17 +444,23 @@ export const useStore = create<AppState>((set, get) => ({
   resetToSeed: () => {
     clearPersisted();
     const fresh = buildSeed();
-    const sched = runScheduler(fresh.apis, fresh.reactors);
+    const freshWindow: PlanWindow = { startMs: FY_START_MS, endMs: FY_END_MS };
+    const sched = runScheduler(fresh.apis, fresh.reactors, freshWindow);
     set({
       apis: fresh.apis,
       reactors: fresh.reactors,
+      window: freshWindow,
       schedule: sched,
       isRecomputing: false,
       lastRecomputeMs: Date.now(),
       recentlyAddedStageId: null,
       hasPersistedChanges: false,
     });
-    queueCloudSave({ apis: fresh.apis, reactors: fresh.reactors });
+    queueCloudSave({
+      apis: fresh.apis,
+      reactors: fresh.reactors,
+      window: freshWindow,
+    });
   },
 }));
 
@@ -459,14 +479,22 @@ if (isSupabaseEnabled) {
           cloud.reactors && cloud.reactors.length > 0
             ? cloud.reactors
             : state.reactors;
-        const sched = runScheduler(cloud.apis, reactors);
+        const cloudWindow: PlanWindow =
+          cloud.window &&
+          typeof cloud.window.startMs === "number" &&
+          typeof cloud.window.endMs === "number" &&
+          cloud.window.endMs > cloud.window.startMs
+            ? cloud.window
+            : state.window;
+        const sched = runScheduler(cloud.apis, reactors, cloudWindow);
         useStore.setState({
           apis: cloud.apis,
           reactors,
+          window: cloudWindow,
           schedule: sched,
           hasPersistedChanges: true,
         });
-        savePersisted(cloud.apis, reactors);
+        savePersisted(cloud.apis, reactors, cloudWindow);
       }
       setIdleStatus();
     })

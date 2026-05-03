@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useStore } from "../store";
 import { Card, SectionHeader } from "../components/Primitives";
-import { computeWeeks, quarterIn, unionRange } from "../utils/dates";
+import { computeWeeks, quarterIn } from "../utils/dates";
 import { useChartTheme } from "../utils/chartTheme";
 import {
   ResponsiveContainer,
@@ -46,11 +46,12 @@ export default function QuarterlyTab() {
     return m;
   }, [apis]);
 
-  // Quarters span the union of all APIs' windows, divided into 4 equal slices
-  const weeks = useMemo(() => {
-    const r = unionRange(apis);
-    return computeWeeks(r.startMs, r.endMs);
-  }, [apis]);
+  // Quarters span the global plan window, divided into 4 equal slices
+  const planWindow = useStore((s) => s.window);
+  const weeks = useMemo(
+    () => computeWeeks(planWindow.startMs, planWindow.endMs),
+    [planWindow]
+  );
 
   const pivot: PivotRow[] = useMemo(() => {
     const map = new Map<string, PivotRow>();

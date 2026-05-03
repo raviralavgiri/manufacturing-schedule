@@ -1,5 +1,4 @@
 import { addDays, differenceInHours, startOfWeek, addWeeks, format } from "date-fns";
-import type { API } from "../types";
 
 // Default fiscal year, used as a fallback for legacy data and as the seed
 // default for new APIs. There is no longer a single global FY — each API
@@ -66,35 +65,6 @@ export function computeWeeks(startMs: number, endMs: number): WeekBucket[] {
 /** Pre-built default 52-week FY bucket array (kept for legacy callers). */
 export const FY_WEEKS: WeekBucket[] = computeWeeks(FY_START_MS, FY_END_MS);
 export const WEEKS_IN_FY = FY_WEEKS.length;
-
-/**
- * Return the union [start, end] across all APIs' windows. Falls back to the
- * default FY range if no APIs have explicit windows. Used by Gantt and
- * Equipment heatmap to size their timelines dynamically.
- */
-export function unionRange(apis: API[]): { startMs: number; endMs: number } {
-  if (apis.length === 0) return { startMs: FY_START_MS, endMs: FY_END_MS };
-  let s = Number.POSITIVE_INFINITY;
-  let e = Number.NEGATIVE_INFINITY;
-  for (const a of apis) {
-    if (typeof a.startMs === "number" && a.startMs < s) s = a.startMs;
-    if (typeof a.endMs === "number" && a.endMs > e) e = a.endMs;
-  }
-  if (!Number.isFinite(s) || !Number.isFinite(e) || s >= e) {
-    return { startMs: FY_START_MS, endMs: FY_END_MS };
-  }
-  return { startMs: s, endMs: e };
-}
-
-/**
- * Per-API window check. A batch is "in window" if BOTH its cycle start and
- * cycle end fall inside the API's [startMs, endMs]. Otherwise it overflows.
- */
-export function isInApiWindow(api: API, ms: number): boolean {
-  const s = typeof api.startMs === "number" ? api.startMs : FY_START_MS;
-  const e = typeof api.endMs === "number" ? api.endMs : FY_END_MS;
-  return ms >= s && ms <= e;
-}
 
 /** Default fiscal-year window check (used by legacy callers). */
 export function isInFY(ms: number): boolean {

@@ -19,7 +19,7 @@ import MultiSelectPopover, {
   type Option as MsOption,
 } from "../components/MultiSelectPopover";
 import ExportMenu from "../components/ExportMenu";
-import { computeWeeks, fmtDateTime, unionRange } from "../utils/dates";
+import { computeWeeks, fmtDateTime } from "../utils/dates";
 import {
   downloadCsv,
   downloadElementAsPng,
@@ -180,11 +180,12 @@ export default function GanttTab() {
     return out;
   }, [apis, reactors, mode]);
 
-  // Dynamic timeline range = union of every API's [startMs, endMs]
-  const weeks = useMemo(() => {
-    const r = unionRange(apisRaw);
-    return computeWeeks(r.startMs, r.endMs);
-  }, [apisRaw]);
+  // Timeline range = global plan window from the store
+  const planWindow = useStore((s) => s.window);
+  const weeks = useMemo(
+    () => computeWeeks(planWindow.startMs, planWindow.endMs),
+    [planWindow]
+  );
   const fyStartMs = weeks.length > 0 ? weeks[0].startMs : Date.now();
   const totalWeeks = weeks.length;
   const rowH = mode === "by-api" ? 40 : mode === "by-reactor" ? 30 : 28;

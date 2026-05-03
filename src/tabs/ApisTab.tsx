@@ -5,9 +5,9 @@ import {
   Trash2,
   Pencil,
   Save,
-  FlaskConical,
   Search,
   Lock,
+  CalendarRange,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
@@ -31,7 +31,8 @@ export default function ApisTab() {
   const setApiName = useStore((s) => s.setApiName);
   const setApiPriority = useStore((s) => s.setApiPriority);
   const setApiTargetOutput = useStore((s) => s.setApiTargetOutput);
-  const setApiWindow = useStore((s) => s.setApiWindow);
+  const planWindow = useStore((s) => s.window);
+  const setWindow = useStore((s) => s.setWindow);
   const setApiStageCount = useStore((s) => s.setApiStageCount);
   const addAPI = useStore((s) => s.addAPI);
   const removeAPI = useStore((s) => s.removeAPI);
@@ -185,6 +186,13 @@ export default function ApisTab() {
         </div>
       )}
 
+      {/* Global plan window — applies to every API */}
+      <PlanWindowStrip
+        startMs={planWindow.startMs}
+        endMs={planWindow.endMs}
+        onChange={(s, e) => setWindow(s, e)}
+      />
+
       <Card className="overflow-hidden p-0">
         <div className="max-h-[68vh] overflow-auto">
           <table className="min-w-full text-sm">
@@ -195,8 +203,6 @@ export default function ApisTab() {
                 <Th align="right" yellow>
                   Stages
                 </Th>
-                <Th yellow>Start Date</Th>
-                <Th yellow>End Date</Th>
                 <Th align="right" yellow>
                   Target (kg)
                 </Th>
@@ -266,23 +272,6 @@ export default function ApisTab() {
                           onChange={(v) => setApiStageCount(api.id, v)}
                         />
                       </td>
-                      <td className="px-3 py-2">
-                        <DateCell
-                          value={api.startMs}
-                          onChange={(ms) =>
-                            setApiWindow(api.id, ms, api.endMs)
-                          }
-                        />
-                      </td>
-                      <td className="px-3 py-2">
-                        <DateCell
-                          value={api.endMs}
-                          onChange={(ms) =>
-                            setApiWindow(api.id, api.startMs, ms)
-                          }
-                          min={api.startMs}
-                        />
-                      </td>
                       <td className="px-3 py-2 text-right">
                         {finalStage ? (
                           <EditableNumCell
@@ -346,7 +335,7 @@ export default function ApisTab() {
               {filteredApis.length === 0 && (
                 <tr>
                   <td
-                    colSpan={10}
+                    colSpan={8}
                     className="py-12 text-center text-sm text-ink-300"
                   >
                     No APIs match. Click{" "}
@@ -365,11 +354,10 @@ export default function ApisTab() {
           <span className="mr-1 font-bold">
             <Pencil size={12} className="inline" /> Editable here:
           </span>
-          API Name, Priority, Stages (1–24),{" "}
-          <span className="font-bold">Start Date / End Date</span>, Target.
-          Each API has its own production window — batches cannot start
-          before Start Date; any batch finishing after End Date is flagged
-          "Ovr".
+          API Name, Priority, Stages (1–24), Target Output. The{" "}
+          <span className="font-bold">Plan Window</span> above the table sets
+          the production span for every API — batches cannot start before its
+          Start Date; any batch finishing after the End Date is flagged "Ovr".
         </div>
         <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs text-ink-300">
           <span className="mr-1 font-bold text-ink-100">
@@ -384,6 +372,71 @@ export default function ApisTab() {
           </span>
           .
         </div>
+      </div>
+    </div>
+  );
+}
+
+function PlanWindowStrip({
+  startMs,
+  endMs,
+  onChange,
+}: {
+  startMs: number;
+  endMs: number;
+  onChange: (startMs: number, endMs: number) => void;
+}) {
+  const startIso = fmtIsoDate(startMs);
+  const endIso = fmtIsoDate(endMs);
+  const days = Math.max(1, Math.round((endMs - startMs) / (24 * 3600 * 1000)));
+  const weeks = Math.max(1, Math.round(days / 7));
+  const months = Math.max(1, Math.round(days / 30));
+
+  return (
+    <div
+      className="flex flex-wrap items-center gap-3 rounded-2xl border border-cyan-300/30 px-4 py-3 shadow-glow ring-1 ring-cyan-300/20"
+      style={{
+        background:
+          "linear-gradient(90deg, rgba(0,240,255,0.10) 0%, rgba(167,139,250,0.06) 50%, rgba(244,114,182,0.06) 100%)",
+      }}
+    >
+      <div className="flex items-center gap-2">
+        <CalendarRange size={16} className="text-cyan-300" />
+        <span className="text-[11px] font-bold uppercase tracking-[0.2em] text-cyan-200">
+          Plan Window
+        </span>
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          type="date"
+          value={startIso}
+          max={endIso}
+          onChange={(e) => {
+            const next = parseIsoDate(e.target.value);
+            if (Number.isFinite(next) && next < endMs) onChange(next, endMs);
+          }}
+          className="cell-yellow rounded-lg px-3 py-1.5 font-mono text-sm tabular-nums transition"
+        />
+        <span className="text-cyan-300/70">→</span>
+        <input
+          type="date"
+          value={endIso}
+          min={startIso}
+          onChange={(e) => {
+            const next = parseIsoDate(e.target.value);
+            if (Number.isFinite(next) && next > startMs) onChange(startMs, next);
+          }}
+          className="cell-yellow rounded-lg px-3 py-1.5 font-mono text-sm tabular-nums transition"
+        />
+      </div>
+      <div className="ml-auto flex items-center gap-3 text-[11px] font-semibold text-ink-300">
+        <span className="font-mono tabular-nums text-cyan-200">
+          {weeks} weeks
+        </span>
+        <span className="text-ink-400">·</span>
+        <span className="font-mono tabular-nums text-violet-200">
+          ~{months} months
+        </span>
       </div>
     </div>
   );
@@ -466,31 +519,6 @@ function EditableNumCell({
         }
       }}
       className={`cell-yellow ${width} rounded-md px-2 py-1 text-right font-mono text-sm tabular-nums transition`}
-    />
-  );
-}
-
-function DateCell({
-  value,
-  onChange,
-  min,
-}: {
-  value: number;
-  onChange: (ms: number) => void;
-  min?: number;
-}) {
-  const iso = Number.isFinite(value) ? fmtIsoDate(value) : "";
-  const minIso = typeof min === "number" ? fmtIsoDate(min) : undefined;
-  return (
-    <input
-      type="date"
-      value={iso}
-      min={minIso}
-      onChange={(e) => {
-        const next = parseIsoDate(e.target.value);
-        if (Number.isFinite(next)) onChange(next);
-      }}
-      className="cell-yellow w-36 rounded-md px-2 py-1 text-left font-mono text-xs transition"
     />
   );
 }

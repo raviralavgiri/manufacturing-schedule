@@ -1,4 +1,4 @@
-import type { API, Reactor } from "../types";
+import type { API, PlanWindow, Reactor } from "../types";
 import { FY_END_MS, FY_START_MS } from "./dates";
 
 // Bump if schema changes - old data is then ignored & seed is used.
@@ -7,14 +7,17 @@ const STORAGE_KEY = "pharma:apis:v1";
 export interface PersistedShape {
   v: 1;
   apis: API[];
-  /** Optional - older saves don't have this; we fall back to the seed in that case. */
+  /** Older saves don't have this; we fall back to the seed in that case. */
   reactors?: Reactor[];
+  /** Single global plan window. Older saves stored per-API windows. */
+  window?: PlanWindow;
   savedAt: number;
 }
 
 export interface PersistedSnapshot {
   apis: API[];
   reactors: Reactor[] | null;
+  window: PlanWindow;
 }
 
 export function loadPersisted(): PersistedSnapshot | null {
@@ -27,11 +30,10 @@ export function loadPersisted(): PersistedSnapshot | null {
     if (!parsed.apis.every((a) => a && a.id && Array.isArray(a.stages))) {
       return null;
     }
-    // Migrate: ensure priority + targetKg + inputKgPerBatch fields exist
+    // Migrate: ensure priority + targetKg + per-stage inputKgPerBatch fields
+    // exist. Strip any legacy per-API startMs/endMs (now global).
     const apis = parsed.apis.map((a) => {
       const priority = (a.priority ?? 3) as API["priority"];
-      // If targetKg is missing (old save), derive it from the final stage's
-      // actual output. This keeps the cascade idempotent on first load.
       let targetKg = a.targetKg;
       if (typeof targetKg !== "number" || targetKg <= 0) {
         const stages = Array.isArray(a.stages) ? a.stages : [];
@@ -45,8 +47,6 @@ export function loadPersisted(): PersistedSnapshot | null {
           targetKg = 0;
         }
       }
-      // Ensure every stage has inputKgPerBatch (defaults to batchSizeKg for
-      // 1:1 yield - matches old behavior for back-compat)
       const stages = Array.isArray(a.stages)
         ? a.stages.map((s) => ({
             ...s,
@@ -56,15 +56,17 @@ export function loadPersisted(): PersistedSnapshot | null {
                 : s.batchSizeKg,
           }))
         : [];
-      // Per-API production window: default to FY 2026-27 if missing
-      const startMs =
-        typeof a.startMs === "number" && a.startMs > 0 ? a.startMs : FY_START_MS;
-      const endMs =
-        typeof a.endMs === "number" && a.endMs > startMs ? a.endMs : FY_END_MS;
-      return { ...a, priority, targetKg, startMs, endMs, stages };
+      // Drop the deprecated per-API window fields (kept by destructure).
+      const {
+        startMs: _legacyStart,
+        endMs: _legacyEnd,
+        ...rest
+      } = a as API & { startMs?: number; endMs?: number };
+      void _legacyStart;
+      void _legacyEnd;
+      return { ...rest, priority, targetKg, stages };
     });
-    // Migrate: reactors may be missing in old saves; if present, ensure each
-    // has a `name` field (default to id).
+
     let reactors: Reactor[] | null = null;
     if (Array.isArray(parsed.reactors)) {
       reactors = parsed.reactors.map((r) => ({
@@ -72,19 +74,50 @@ export function loadPersisted(): PersistedSnapshot | null {
         name: r.name ?? r.id,
       }));
     }
-    return { apis, reactors };
+
+    // Resolve global window: prefer persisted top-level window, else derive
+    // from the first legacy per-API window present, else default to FY 26-27.
+    let resolvedWindow: PlanWindow = {
+      startMs: FY_START_MS,
+      endMs: FY_END_MS,
+    };
+    if (
+      parsed.window &&
+      typeof parsed.window.startMs === "number" &&
+      typeof parsed.window.endMs === "number" &&
+      parsed.window.endMs > parsed.window.startMs
+    ) {
+      resolvedWindow = parsed.window;
+    } else {
+      const legacy = parsed.apis.find(
+        (a: any) =>
+          typeof a.startMs === "number" &&
+          typeof a.endMs === "number" &&
+          a.endMs > a.startMs
+      ) as { startMs?: number; endMs?: number } | undefined;
+      if (legacy && legacy.startMs && legacy.endMs) {
+        resolvedWindow = { startMs: legacy.startMs, endMs: legacy.endMs };
+      }
+    }
+
+    return { apis, reactors, window: resolvedWindow };
   } catch {
     return null;
   }
 }
 
-export function savePersisted(apis: API[], reactors: Reactor[]): void {
+export function savePersisted(
+  apis: API[],
+  reactors: Reactor[],
+  planWindow: PlanWindow
+): void {
   if (typeof window === "undefined") return;
   try {
     const payload: PersistedShape = {
       v: 1,
       apis,
       reactors,
+      window: planWindow,
       savedAt: Date.now(),
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));

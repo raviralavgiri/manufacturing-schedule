@@ -1,4 +1,4 @@
-import type { API, Reactor } from "../types";
+import type { API, PlanWindow, Reactor } from "../types";
 import { getWorkspaceId, isSupabaseEnabled, supabase } from "./supabase";
 
 export type SyncStatus =
@@ -14,12 +14,14 @@ const TABLE = "workspaces";
 export interface CloudSnapshot {
   apis: API[];
   reactors: Reactor[];
+  window: PlanWindow;
 }
 
 interface RowShape {
   id: string;
   apis: API[];
   reactors?: Reactor[];
+  window?: PlanWindow;
   updated_at?: string;
 }
 
@@ -32,7 +34,7 @@ export async function loadFromCloud(): Promise<CloudSnapshot | null> {
   const id = getWorkspaceId();
   const { data, error } = await supabase
     .from(TABLE)
-    .select("apis, reactors")
+    .select("apis, reactors, window")
     .eq("id", id)
     .maybeSingle();
   if (error) {
@@ -40,13 +42,18 @@ export async function loadFromCloud(): Promise<CloudSnapshot | null> {
     return null;
   }
   if (!data) return null;
-  const row = data as Pick<RowShape, "apis" | "reactors">;
+  const row = data as Pick<RowShape, "apis" | "reactors" | "window">;
   if (!Array.isArray(row.apis)) return null;
-  // Migrate reactors entries to ensure they have a name field
   const reactors = Array.isArray(row.reactors)
     ? row.reactors.map((r) => ({ ...r, name: r.name ?? r.id }))
     : [];
-  return { apis: row.apis, reactors };
+  const window =
+    row.window &&
+    typeof row.window.startMs === "number" &&
+    typeof row.window.endMs === "number"
+      ? row.window
+      : { startMs: 0, endMs: 0 }; // caller will fall back to its own default
+  return { apis: row.apis, reactors, window };
 }
 
 /**
@@ -65,6 +72,7 @@ export async function saveToCloud(snapshot: CloudSnapshot): Promise<void> {
         id,
         apis: snapshot.apis,
         reactors: snapshot.reactors,
+        window: snapshot.window,
         updated_at: new Date().toISOString(),
       },
       { onConflict: "id" }

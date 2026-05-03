@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useStore } from "../store";
 import { Card, SectionHeader, Tag } from "../components/Primitives";
-import { computeWeeks, unionRange, type WeekBucket } from "../utils/dates";
+import { computeWeeks, type WeekBucket } from "../utils/dates";
 import { useChartTheme } from "../utils/chartTheme";
 import {
   ResponsiveContainer,
@@ -19,15 +19,15 @@ const HOURS_PER_WEEK = 7 * 24;
 
 export default function EquipmentTab() {
   const reactors = useStore((s) => s.reactors);
-  const apis = useStore((s) => s.apis);
+  const planWindow = useStore((s) => s.window);
   const schedule = useStore((s) => s.schedule);
   const chartTheme = useChartTheme();
 
-  // Dynamic timeline range = union of every API's window
-  const weeks = useMemo(() => {
-    const r = unionRange(apis);
-    return computeWeeks(r.startMs, r.endMs);
-  }, [apis]);
+  // Timeline range = global plan window
+  const weeks = useMemo(
+    () => computeWeeks(planWindow.startMs, planWindow.endMs),
+    [planWindow]
+  );
   const weeksCount = weeks.length;
 
   const utilByReactor = useMemo(() => {

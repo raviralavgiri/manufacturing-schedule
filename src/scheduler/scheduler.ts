@@ -1,11 +1,15 @@
-import type { API, BatchScheduleEntry, Reactor, ScheduleResult } from "../types";
+import type {
+  API,
+  BatchScheduleEntry,
+  PlanWindow,
+  Reactor,
+  ScheduleResult,
+} from "../types";
 import {
   FY_END_MS,
   FY_START_MS,
   computeWeeks,
   hoursToMs,
-  isInApiWindow,
-  unionRange,
   weekIndexIn,
 } from "../utils/dates";
 
@@ -41,7 +45,21 @@ interface BookedSlot {
  * only delay the next stage of the SAME API. Other batches can use these
  * reactors as soon as cycleEnd.
  */
-export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
+export function runScheduler(
+  apis: API[],
+  reactors: Reactor[],
+  planWindow?: PlanWindow
+): ScheduleResult {
+  // Global plan window applied to every API. Falls back to FY 26-27 if not
+  // provided (e.g. legacy callers).
+  const windowStart =
+    planWindow && Number.isFinite(planWindow.startMs)
+      ? planWindow.startMs
+      : FY_START_MS;
+  const windowEnd =
+    planWindow && Number.isFinite(planWindow.endMs)
+      ? planWindow.endMs
+      : FY_END_MS;
   const reactorBookings = new Map<string, BookedSlot[]>();
   const reactorLoadHours = new Map<string, number>();
   const reactorBatchCount = new Map<string, number>();
@@ -69,18 +87,13 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
     })
   );
 
-  // Per-API horizon = the API's own startMs (or the FY default as fallback)
-  const apiHorizon = (api: API): number =>
-    typeof api.startMs === "number" && api.startMs > 0
-      ? api.startMs
-      : FY_START_MS;
-
-  // Per-API per-stage end tracker: latest analysis end so stage N+1 can wait
+  // Per-API per-stage end tracker: latest analysis end so stage N+1 can wait.
+  // All APIs share the global window's start as their initial horizon.
   const apiStageLastEnd = new Map<string, number[]>();
   apis.forEach((a) =>
     apiStageLastEnd.set(
       a.id,
-      a.stages.map(() => apiHorizon(a))
+      a.stages.map(() => windowStart)
     )
   );
 
@@ -156,13 +169,12 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
         const bufferMs = hoursToMs(INTER_STAGE_BUFFER_HOURS);
 
         // 1. Earliest possible start = max(prev stage's batch end + buffer,
-        //    THIS api's own start date)
-        const horizon = apiHorizon(api);
+        //    global plan window start)
         const prevStageReady =
           sIdx === 0
-            ? horizon
+            ? windowStart
             : apiStageLastEnd.get(api.id)![sIdx - 1] + bufferMs;
-        const earliestStart = Math.max(prevStageReady, horizon);
+        const earliestStart = Math.max(prevStageReady, windowStart);
 
         // 2. Find the EARLIEST gap on the train where [t, t+cycle) is free on
         //    every pool reactor simultaneously. This is the key fix: it lets
@@ -222,8 +234,10 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
           startMs,
           endMs: cycleEndMs,
           analysisEndMs,
-          // "In FY" now means "within THIS api's own production window"
-          inFY: isInApiWindow(api, startMs) && isInApiWindow(api, cycleEndMs),
+          // "In FY" = batch fits within the global plan window
+          inFY:
+            startMs >= windowStart &&
+            cycleEndMs <= windowEnd,
           clash,
           outputKg: stage.batchSizeKg,
           inputKg:
@@ -253,9 +267,8 @@ export function runScheduler(apis: API[], reactors: Reactor[]): ScheduleResult {
   });
 
   // Weekly occupancy: bill every reactor in the train for the cycle window.
-  // Range = union of all APIs' windows so the heatmap covers the whole plan.
-  const range = unionRange(apis);
-  const weeks = computeWeeks(range.startMs, range.endMs);
+  // Range = the global plan window so the heatmap mirrors the planning span.
+  const weeks = computeWeeks(windowStart, windowEnd);
   const weekCount = weeks.length;
   const weeklyReactorOccupancy: number[][] = reactors.map(() =>
     new Array(weekCount).fill(0)
