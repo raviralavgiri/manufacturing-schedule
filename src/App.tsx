@@ -11,7 +11,6 @@ import {
   Gauge,
   LayoutGrid,
   Loader2,
-  Settings,
   Sparkles,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -28,7 +27,6 @@ import GanttTab from "./tabs/GanttTab";
 import EquipmentTab from "./tabs/EquipmentTab";
 import ClashTab from "./tabs/ClashTab";
 import QuarterlyTab from "./tabs/QuarterlyTab";
-import AdminTab from "./tabs/AdminTab";
 
 type TabId =
   | "apis"
@@ -38,8 +36,7 @@ type TabId =
   | "gantt"
   | "equipment"
   | "clash"
-  | "quarterly"
-  | "admin";
+  | "quarterly";
 
 const TABS: {
   id: TabId;
@@ -103,13 +100,6 @@ const TABS: {
     icon: <BarChart3 size={18} />,
     accent: "lime",
     desc: "Q1–Q4 + FY totals",
-  },
-  {
-    id: "admin",
-    label: "Admin",
-    icon: <Settings size={18} />,
-    accent: "violet",
-    desc: "Data source: Cloud or Local",
   },
 ];
 
@@ -248,7 +238,6 @@ export default function App() {
           {active === "equipment" && <EquipmentTab />}
           {active === "clash" && <ClashTab />}
           {active === "quarterly" && <QuarterlyTab />}
-          {active === "admin" && <AdminTab />}
         </div>
       </main>
 
