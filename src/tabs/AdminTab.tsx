@@ -6,7 +6,9 @@ import {
   CheckCircle2,
   Cloud,
   HardDrive,
+  Inbox,
   Loader2,
+  RefreshCw,
   ShieldAlert,
   Trash2,
 } from "lucide-react";
@@ -41,16 +43,31 @@ export default function AdminTab() {
   const cloudError = useStore((s) => s.cloudError);
   const workspaceId = useStore((s) => s.workspaceId);
   const projects = useStore((s) => s.projects);
+  const lastCloudRead = useStore((s) => s.lastCloudRead);
   const setDataSource = useStore((s) => s.setDataSource);
   const pushToCloud = useStore((s) => s.pushToCloud);
   const pullFromCloud = useStore((s) => s.pullFromCloud);
+  const refreshCloudSnapshot = useStore((s) => s.refreshCloudSnapshot);
   const clearLocalCache = useStore((s) => s.clearLocalCache);
 
-  const [busy, setBusy] = useState<null | "push" | "pull" | "clear">(null);
+  const [busy, setBusy] = useState<
+    null | "push" | "pull" | "clear" | "refresh"
+  >(null);
   const [opMessage, setOpMessage] = useState<
     null | { tone: "ok" | "err"; text: string }
   >(null);
   const [confirmClear, setConfirmClear] = useState(false);
+
+  // Auto-refresh the cloud snapshot when the Admin tab mounts so the
+  // comparison panel below always shows fresh numbers. Only fires when
+  // Supabase is configured — local-only deployments skip the call.
+  useEffect(() => {
+    if (!isSupabaseEnabled) return;
+    void refreshCloudSnapshot();
+    // We deliberately only run on mount — manual Refresh button covers
+    // re-runs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Local cache stats — recomputed cheaply on every render; storage reads
   // are sync and tiny (~few KB).
@@ -113,6 +130,22 @@ export default function AdminTab() {
       tone: "ok",
       text: "Local cache cleared. Reload to re-fetch from cloud.",
     });
+  };
+
+  const handleRefreshCloud = async () => {
+    setBusy("refresh");
+    const result = await refreshCloudSnapshot();
+    setBusy(null);
+    setOpMessage(
+      result.ok
+        ? {
+            tone: "ok",
+            text: result.info.isEmpty
+              ? "Refreshed — Supabase has no row for this workspace yet."
+              : `Refreshed — ${result.info.projects.length} project${result.info.projects.length === 1 ? "" : "s"} in cloud.`,
+          }
+        : { tone: "err", text: `Refresh failed: ${result.error}` }
+    );
   };
 
   return (
@@ -178,6 +211,22 @@ export default function AdminTab() {
             <div>{opMessage.text}</div>
           </div>
         )}
+        {dataSource === "cloud" &&
+          isSupabaseEnabled &&
+          lastCloudRead &&
+          lastCloudRead.isEmpty &&
+          !lastCloudRead.error && (
+            <div className="mt-3 flex items-start gap-2 rounded-md border border-amber-300/30 bg-amber-300/5 p-2.5 text-xs text-amber-200">
+              <Inbox size={14} className="mt-0.5 shrink-0" />
+              <div className="flex-1">
+                <span className="font-bold">Cloud is empty for this workspace.</span>{" "}
+                You're seeing the local cache below. Click{" "}
+                <span className="font-bold">Push local → cloud</span> to seed
+                the Supabase row with what's currently in this browser, or
+                clear local cache to start clean.
+              </div>
+            </div>
+          )}
       </Card>
 
       {/* Side-by-side stats */}
@@ -256,8 +305,67 @@ export default function AdminTab() {
             label="Backing table"
             value={<code className="font-mono text-[11px]">public.workspaces</code>}
           />
+          <Stat
+            label="Last cloud read"
+            value={
+              !isSupabaseEnabled
+                ? "—"
+                : lastCloudRead
+                ? renderLastReadSummary(lastCloudRead)
+                : "never"
+            }
+          />
+          <Stat
+            label="Cloud APIs"
+            value={
+              !isSupabaseEnabled || !lastCloudRead || lastCloudRead.isEmpty
+                ? "—"
+                : `${lastCloudRead.projects.reduce((a, p) => a + p.apiCount, 0)} across ${lastCloudRead.projects.length} project${lastCloudRead.projects.length === 1 ? "" : "s"}`
+            }
+          />
         </Card>
       </div>
+
+      {/* Local vs Cloud comparison */}
+      {isSupabaseEnabled && (
+        <Card className="!p-5">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-white">
+                Projects: Local vs Cloud
+              </h3>
+              <span className="text-[11px] text-ink-400">
+                Project-by-project drift detector
+              </span>
+            </div>
+            <button
+              onClick={handleRefreshCloud}
+              disabled={busy !== null}
+              className={clsx(
+                "inline-flex items-center gap-1.5 rounded-md border border-cyan-300/30 bg-cyan-300/10 px-2.5 py-1 text-[11px] font-bold text-cyan-200 transition hover:bg-cyan-300/20",
+                busy !== null && "cursor-not-allowed opacity-50"
+              )}
+              title="Re-fetch the cloud row without touching in-memory state"
+            >
+              {busy === "refresh" ? (
+                <Loader2 size={11} className="animate-spin" />
+              ) : (
+                <RefreshCw size={11} />
+              )}
+              Refresh cloud snapshot
+            </button>
+          </div>
+          <ProjectsComparison
+            local={projects.map((p) => ({
+              id: p.id,
+              name: p.name,
+              apiCount: p.apis.length,
+              reactorCount: p.reactors.length,
+            }))}
+            cloud={lastCloudRead}
+          />
+        </Card>
+      )}
 
       {/* Actions */}
       <Card className="!p-5">
@@ -430,6 +538,183 @@ function ActionButton({
       <span className="text-[10px] text-ink-300">{description}</span>
     </button>
   );
+}
+
+// ─── Comparison panel ───────────────────────────────────────────────────────
+
+interface ProjectSummary {
+  id: string;
+  name: string;
+  apiCount: number;
+  reactorCount: number;
+}
+
+function ProjectsComparison({
+  local,
+  cloud,
+}: {
+  local: ProjectSummary[];
+  cloud: import("../store").CloudReadInfo | null;
+}) {
+  // Build the union of project ids across both sides, then render side-by-side.
+  const cloudProjects = cloud?.projects ?? [];
+  const cloudByIdMap = new Map(cloudProjects.map((p) => [p.id, p]));
+  const localByIdMap = new Map(local.map((p) => [p.id, p]));
+  const allIds = Array.from(
+    new Set([...local.map((p) => p.id), ...cloudProjects.map((p) => p.id)])
+  );
+
+  if (cloud && cloud.error) {
+    return (
+      <div className="rounded-md border border-rose-300/30 bg-rose-400/10 p-3 text-xs text-rose-200">
+        <AlertCircle size={12} className="mr-1 inline" />
+        Cloud read failed: {cloud.error}. Click{" "}
+        <span className="font-bold">Refresh cloud snapshot</span> to retry.
+      </div>
+    );
+  }
+
+  if (cloud && cloud.isEmpty) {
+    return (
+      <div className="rounded-md border border-amber-300/30 bg-amber-300/5 p-3 text-xs text-amber-200">
+        <Inbox size={12} className="mr-1 inline" />
+        No row exists in <code className="font-mono">public.workspaces</code>{" "}
+        for this workspace yet. Local has{" "}
+        <span className="font-bold">{local.length} project(s)</span>. Push them
+        up to seed the cloud row.
+      </div>
+    );
+  }
+
+  if (allIds.length === 0) {
+    return (
+      <div className="rounded-md border border-white/10 bg-white/[0.03] p-3 text-xs text-ink-300">
+        Both stores are empty.
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-white/10">
+      <table className="min-w-full text-xs">
+        <thead className="bg-white/[0.04] text-[10px] uppercase tracking-wider text-ink-300">
+          <tr>
+            <th className="px-3 py-2 text-left font-semibold">Project</th>
+            <th className="px-3 py-2 text-right font-semibold text-cyan-300">
+              Local APIs
+            </th>
+            <th className="px-3 py-2 text-right font-semibold text-violet-300">
+              Cloud APIs
+            </th>
+            <th className="px-3 py-2 text-right font-semibold">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {allIds.map((id, i) => {
+            const l = localByIdMap.get(id);
+            const c = cloudByIdMap.get(id);
+            const status = computeStatus(l, c);
+            return (
+              <tr
+                key={id}
+                className={clsx(
+                  "border-t border-white/5",
+                  i % 2 === 0 && "bg-white/[0.01]"
+                )}
+              >
+                <td className="px-3 py-2 font-mono text-[11px] text-ink-100">
+                  <div className="font-semibold text-white">
+                    {l?.name ?? c?.name ?? id}
+                  </div>
+                  <div className="text-[9px] text-ink-500">id: {id}</div>
+                </td>
+                <td className="px-3 py-2 text-right font-mono tabular-nums text-cyan-300">
+                  {l ? l.apiCount : <span className="text-ink-600">—</span>}
+                </td>
+                <td className="px-3 py-2 text-right font-mono tabular-nums text-violet-300">
+                  {c ? c.apiCount : <span className="text-ink-600">—</span>}
+                </td>
+                <td className="px-3 py-2 text-right">
+                  <StatusChip status={status} />
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div className="flex items-center justify-between gap-3 border-t border-white/10 bg-white/[0.02] px-3 py-2 text-[10px] uppercase tracking-wider text-ink-400">
+        <span>
+          local total:{" "}
+          <span className="font-bold text-cyan-300">
+            {local.reduce((a, p) => a + p.apiCount, 0)}
+          </span>{" "}
+          APIs · cloud total:{" "}
+          <span className="font-bold text-violet-300">
+            {cloudProjects.reduce((a, p) => a + p.apiCount, 0)}
+          </span>{" "}
+          APIs
+        </span>
+        {cloud && (
+          <span>
+            cloud snapshot taken {formatRelative(cloud.at)}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+type DriftStatus = "match" | "drift" | "local-only" | "cloud-only";
+
+function computeStatus(
+  l: ProjectSummary | undefined,
+  c: { id: string; name: string; apiCount: number; reactorCount: number } | undefined
+): DriftStatus {
+  if (l && c) {
+    return l.apiCount === c.apiCount && l.reactorCount === c.reactorCount
+      ? "match"
+      : "drift";
+  }
+  if (l && !c) return "local-only";
+  return "cloud-only";
+}
+
+function StatusChip({ status }: { status: DriftStatus }) {
+  if (status === "match") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md border border-lime-300/30 bg-lime-400/10 px-1.5 py-0.5 text-[10px] font-bold text-lime-300">
+        <CheckCircle2 size={10} /> match
+      </span>
+    );
+  }
+  if (status === "drift") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md border border-amber-300/30 bg-amber-400/10 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">
+        <AlertCircle size={10} /> drift
+      </span>
+    );
+  }
+  if (status === "local-only") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md border border-cyan-300/30 bg-cyan-400/10 px-1.5 py-0.5 text-[10px] font-bold text-cyan-300">
+        local only
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-md border border-violet-300/30 bg-violet-400/10 px-1.5 py-0.5 text-[10px] font-bold text-violet-300">
+      cloud only
+    </span>
+  );
+}
+
+function renderLastReadSummary(
+  info: import("../store").CloudReadInfo
+): string {
+  const when = formatRelative(info.at);
+  if (info.error) return `${when} · error`;
+  if (info.isEmpty) return `${when} · no row`;
+  return `${when} · ${info.projects.length} project${info.projects.length === 1 ? "" : "s"}`;
 }
 
 function formatRelative(ms: number): string {

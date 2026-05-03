@@ -32,6 +32,30 @@ import {
 import { getWorkspaceId } from "./services/supabase";
 import { FY_END_MS, FY_START_MS } from "./utils/dates";
 
+/**
+ * Snapshot of what the most-recent cloud read returned. Lightweight by design
+ * (no full project payloads) — just enough for the Admin tab to render a
+ * comparison against the local cache and show freshness.
+ */
+export interface CloudReadInfo {
+  /** Timestamp when the read completed. */
+  at: number;
+  /** Reason if the read failed; null on success. */
+  error: string | null;
+  /** True if the row was missing OR present-but-empty (no projects). */
+  isEmpty: boolean;
+  /** Active project id from cloud, or null if the row didn't have one. */
+  activeProjectId: string | null;
+  /** Per-project summary, mirroring what the Admin tab compares against
+   *  the local store. Empty array when isEmpty is true. */
+  projects: Array<{
+    id: string;
+    name: string;
+    apiCount: number;
+    reactorCount: number;
+  }>;
+}
+
 export interface NewStageInput {
   apiId: string;
   stageName: string;
@@ -71,6 +95,10 @@ interface AppState {
   isHydrating: boolean;
   /** Last cloud read/write error message, if any. */
   cloudError: string | null;
+  /** Most-recent cloud read result. Used by the Admin tab to render
+   *  comparison + freshness info. Updated on boot, on pullFromCloud,
+   *  and on explicit refreshCloudSnapshot calls. */
+  lastCloudRead: CloudReadInfo | null;
 
   // ─ Stage actions (operate on active project) ────────────────────
   updateStageField: (
@@ -138,6 +166,11 @@ interface AppState {
   /** Replace in-memory state with whatever's in Supabase. Useful when
    *  switching from local→cloud and you want to discard local edits. */
   pullFromCloud: () => Promise<{ ok: true } | { ok: false; error: string }>;
+  /** Re-read the cloud row WITHOUT touching in-memory state. Updates
+   *  `lastCloudRead` so the Admin tab can show freshness + comparison.
+   *  Used to answer "is what I'm seeing actually what's in the cloud?". */
+  refreshCloudSnapshot: () =>
+    Promise<{ ok: true; info: CloudReadInfo } | { ok: false; error: string }>;
   /** Wipe localStorage workspace data (keeps the workspaceId + mode). */
   clearLocalCache: () => void;
 
@@ -179,6 +212,25 @@ function getActive(state: { projects: Project[]; activeProjectId: string }): Pro
     state.projects.find((p) => p.id === state.activeProjectId) ??
     state.projects[0]
   );
+}
+
+/** Compress a list of projects into the lightweight CloudReadInfo summary. */
+function summarizeProjects(
+  projects: Project[],
+  activeProjectId: string | null
+): CloudReadInfo {
+  return {
+    at: Date.now(),
+    error: null,
+    isEmpty: projects.length === 0,
+    activeProjectId,
+    projects: projects.map((p) => ({
+      id: p.id,
+      name: p.name,
+      apiCount: p.apis.length,
+      reactorCount: p.reactors.length,
+    })),
+  };
 }
 
 // ─── Initial hydration ─────────────────────────────────────────────────────────
@@ -314,6 +366,7 @@ export const useStore = create<AppState>((set, get) => ({
   dataSource: initialMode,
   isHydrating: initialMode === "cloud" && isSupabaseEnabled,
   cloudError: null,
+  lastCloudRead: null,
 
   // ─ Stage actions ────────────────────────────────────────────────
   updateStageField: (stageId, field, value) => {
@@ -824,7 +877,16 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const cloud = await loadFromCloud();
       if (!cloud || cloud.projects.length === 0) {
-        set({ isHydrating: false });
+        set({
+          isHydrating: false,
+          lastCloudRead: {
+            at: Date.now(),
+            error: null,
+            isEmpty: true,
+            activeProjectId: null,
+            projects: [],
+          },
+        });
         return { ok: false, error: "No data found in Supabase." };
       }
       const projects = cloud.projects.map((p) => ({
@@ -845,13 +907,77 @@ export const useStore = create<AppState>((set, get) => ({
         schedule: sched,
         hasPersistedChanges: true,
         isHydrating: false,
+        lastCloudRead: summarizeProjects(projects, activeId),
       });
       // Mirror to local cache so a subsequent local-mode boot has fresh data.
       savePersisted(projects, activeId);
       return { ok: true };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      set({ isHydrating: false, cloudError: msg });
+      set({
+        isHydrating: false,
+        cloudError: msg,
+        lastCloudRead: {
+          at: Date.now(),
+          error: msg,
+          isEmpty: true,
+          activeProjectId: null,
+          projects: [],
+        },
+      });
+      return { ok: false, error: msg };
+    }
+  },
+
+  refreshCloudSnapshot: async () => {
+    if (!isSupabaseEnabled) {
+      const info: CloudReadInfo = {
+        at: Date.now(),
+        error: "Supabase is not configured.",
+        isEmpty: true,
+        activeProjectId: null,
+        projects: [],
+      };
+      set({ lastCloudRead: info });
+      return { ok: false, error: info.error! };
+    }
+    try {
+      const cloud = await loadFromCloud();
+      if (!cloud || cloud.projects.length === 0) {
+        const info: CloudReadInfo = {
+          at: Date.now(),
+          error: null,
+          isEmpty: true,
+          activeProjectId: null,
+          projects: [],
+        };
+        set({ lastCloudRead: info });
+        return { ok: true, info };
+      }
+      const info: CloudReadInfo = {
+        at: Date.now(),
+        error: null,
+        isEmpty: false,
+        activeProjectId: cloud.activeProjectId,
+        projects: cloud.projects.map((p) => ({
+          id: p.id,
+          name: p.name,
+          apiCount: p.apis.length,
+          reactorCount: p.reactors.length,
+        })),
+      };
+      set({ lastCloudRead: info });
+      return { ok: true, info };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const info: CloudReadInfo = {
+        at: Date.now(),
+        error: msg,
+        isEmpty: true,
+        activeProjectId: null,
+        projects: [],
+      };
+      set({ lastCloudRead: info });
       return { ok: false, error: msg };
     }
   },
@@ -907,7 +1033,16 @@ if (initialMode === "cloud" && isSupabaseEnabled) {
           projects: state.projects,
           activeProjectId: state.activeProjectId,
         });
-        useStore.setState({ isHydrating: false });
+        useStore.setState({
+          isHydrating: false,
+          lastCloudRead: {
+            at: Date.now(),
+            error: null,
+            isEmpty: true,
+            activeProjectId: null,
+            projects: [],
+          },
+        });
         setIdleStatus();
         return;
       }
@@ -929,6 +1064,7 @@ if (initialMode === "cloud" && isSupabaseEnabled) {
         schedule: sched,
         hasPersistedChanges: true,
         isHydrating: false,
+        lastCloudRead: summarizeProjects(projects, activeId),
       });
       // Mirror cloud → local so a future LOCAL-mode boot has fresh data.
       savePersisted(projects, activeId);
@@ -940,6 +1076,13 @@ if (initialMode === "cloud" && isSupabaseEnabled) {
       useStore.setState({
         isHydrating: false,
         cloudError: `Cloud unavailable: ${msg}. Showing last local cache.`,
+        lastCloudRead: {
+          at: Date.now(),
+          error: msg,
+          isEmpty: true,
+          activeProjectId: null,
+          projects: [],
+        },
       });
       setIdleStatus();
     });
