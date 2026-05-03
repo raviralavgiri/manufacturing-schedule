@@ -223,6 +223,7 @@ export default function ApisTab() {
                 ({ api, finalStage, actualOutputKg, plannedBatchesAcrossStages }, i) => {
                   const isNew = api.id === recentlyAddedApiId;
                   const isConfirming = api.id === confirmDeleteId;
+                  const isParked = api.targetKg === 0;
                   return (
                     <tr
                       key={api.id}
@@ -230,8 +231,10 @@ export default function ApisTab() {
                       className={clsx(
                         "group border-t border-white/5 transition hover:bg-white/[0.04]",
                         i % 2 === 0 ? "bg-white/[0.01]" : "",
-                        isNew && "row-flash"
+                        isNew && "row-flash",
+                        isParked && "opacity-50"
                       )}
+                      title={isParked ? "Target = 0 · this API is parked, no batches scheduled" : undefined}
                     >
                       <td className="px-3 py-2.5 font-semibold text-white">
                         <div className="flex items-start gap-2">
@@ -276,6 +279,7 @@ export default function ApisTab() {
                         {finalStage ? (
                           <EditableNumCell
                             value={api.targetKg}
+                            min={0}
                             onChange={(v) => setApiTargetOutput(api.id, v)}
                           />
                         ) : (

@@ -295,7 +295,8 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   setApiTargetOutput: (apiId, targetKg) => {
-    const target = Math.max(1, targetKg);
+    // 0 is allowed - signals "park this API, don't schedule any batches"
+    const target = Math.max(0, targetKg);
     const apis = get().apis.map((a) =>
       a.id === apiId ? cascadePlannedBatches({ ...a, targetKg: target }) : a
     );

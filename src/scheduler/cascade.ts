@@ -37,9 +37,15 @@ export function cascadePlannedBatches(api: API): API {
         ? s.inputKgPerBatch
         : s.batchSizeKg
     );
-    const planned = Math.max(1, Math.ceil(outputDemandKg / outputPerBatch));
+    // Zero demand → zero batches for this stage and all upstream stages.
+    // This is how an API with targetKg=0 gets "parked": no batches scheduled.
+    const planned =
+      outputDemandKg <= 0
+        ? 0
+        : Math.max(1, Math.ceil(outputDemandKg / outputPerBatch));
     updatedStages[i] = { ...s, plannedBatches: planned };
-    // What this stage requires from upstream = planned × input/batch
+    // What this stage requires from upstream = planned × input/batch.
+    // When planned=0, demand becomes 0 → cascade naturally stops upstream too.
     outputDemandKg = inputPerBatch * planned;
   }
 
