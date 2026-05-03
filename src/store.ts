@@ -14,14 +14,18 @@ import type {
 } from "./types";
 import {
   clearPersisted,
+  getDataSourceMode,
   isPersistedPresent,
   loadPersisted,
   savePersisted,
+  setDataSourceMode,
+  type DataSource,
 } from "./utils/storage";
 import { isSupabaseEnabled } from "./services/supabase";
 import {
   loadFromCloud,
   queueCloudSave,
+  saveToCloud,
   setIdleStatus,
   setLoadingStatus,
 } from "./services/sync";
@@ -58,6 +62,15 @@ interface AppState {
   hasPersistedChanges: boolean;
   cloudEnabled: boolean;
   workspaceId: string;
+
+  // ─ Data source mode ─────────────────────────────────────────────
+  /** Where to read on boot: "cloud" (Supabase) or "local" (browser). Writes
+   *  always go to the active source; cloud writes also mirror to local. */
+  dataSource: DataSource;
+  /** True while the initial cloud fetch is in flight (cloud mode boot). */
+  isHydrating: boolean;
+  /** Last cloud read/write error message, if any. */
+  cloudError: string | null;
 
   // ─ Stage actions (operate on active project) ────────────────────
   updateStageField: (
@@ -113,6 +126,21 @@ interface AppState {
   renameProject: (id: string, name: string) => void;
   deleteProject: (id: string) => void;
 
+  // ─ Data source actions ──────────────────────────────────────────
+  /** Switch the data source. For local→cloud, prefer pushToCloud /
+   *  pullFromCloud first; this method only flips the flag and starts /
+   *  stops the cloud write queue. */
+  setDataSource: (mode: DataSource) => void;
+  /** Push the current in-memory state to Supabase, overwriting whatever's
+   *  there. Useful before switching from local→cloud to preserve local
+   *  edits. */
+  pushToCloud: () => Promise<{ ok: true } | { ok: false; error: string }>;
+  /** Replace in-memory state with whatever's in Supabase. Useful when
+   *  switching from local→cloud and you want to discard local edits. */
+  pullFromCloud: () => Promise<{ ok: true } | { ok: false; error: string }>;
+  /** Wipe localStorage workspace data (keeps the workspaceId + mode). */
+  clearLocalCache: () => void;
+
   // ─ Misc ─────────────────────────────────────────────────────────
   clearRecentlyAdded: () => void;
   resetToSeed: () => void;
@@ -154,26 +182,68 @@ function getActive(state: { projects: Project[]; activeProjectId: string }): Pro
 }
 
 // ─── Initial hydration ─────────────────────────────────────────────────────────
-const persisted = loadPersisted();
-const initialProjects: Project[] = persisted?.projects ?? [freshDefaultProject()];
-const initialActiveId =
-  persisted && initialProjects.some((p) => p.id === persisted.activeProjectId)
-    ? persisted.activeProjectId
-    : initialProjects[0].id;
-const initialActive = initialProjects.find((p) => p.id === initialActiveId)!;
-const initialApis = initialActive.apis.map(cascadePlannedBatches);
-const initialReactors = initialActive.reactors;
-const initialWindow = initialActive.window;
-const initialSchedule = runScheduler(initialApis, initialReactors, initialWindow);
+//
+// Boot path branches on the user-selected dataSource mode:
+//
+//   • "local" — read localStorage synchronously (same as legacy behaviour).
+//               No cloud calls happen on boot or on subsequent writes.
+//
+//   • "cloud" — start with an empty placeholder so React can render the
+//               loading splash, then async-fetch from Supabase. Local cache
+//               is used as an emergency fallback only if the cloud read
+//               fails. Writes always go to Supabase AND mirror to local
+//               (the local copy is purely for offline survival).
+const initialMode: DataSource = isSupabaseEnabled
+  ? getDataSourceMode()
+  : "local";
 
-// Sync the cascade-corrected apis back into the project so persistence stays consistent
-initialActive.apis = initialApis;
+function buildInitialFromPersisted() {
+  const persisted = loadPersisted();
+  const projects: Project[] = persisted?.projects ?? [freshDefaultProject()];
+  const activeId =
+    persisted && projects.some((p) => p.id === persisted.activeProjectId)
+      ? persisted.activeProjectId
+      : projects[0].id;
+  const active = projects.find((p) => p.id === activeId)!;
+  const apis = active.apis.map(cascadePlannedBatches);
+  active.apis = apis;
+  return {
+    projects,
+    activeProjectId: activeId,
+    apis,
+    reactors: active.reactors,
+    window: active.window,
+    schedule: runScheduler(apis, active.reactors, active.window),
+    hasPersisted: !!persisted,
+  };
+}
+
+const initialFromLocal = buildInitialFromPersisted();
+// In cloud mode we still seed from local synchronously so first paint isn't
+// blank — the async cloud fetch will replace it within a few hundred ms.
+const initialProjects = initialFromLocal.projects;
+const initialActiveId = initialFromLocal.activeProjectId;
+const initialApis = initialFromLocal.apis;
+const initialReactors = initialFromLocal.reactors;
+const initialWindow = initialFromLocal.window;
+const initialSchedule = initialFromLocal.schedule;
 
 let recomputeTimer: number | undefined;
 
-function persistAndSync(projects: Project[], activeProjectId: string) {
+/**
+ * Persistence dispatcher. Always writes localStorage (it's free, sync, and
+ * acts as backup). Only queues a cloud upsert when the user is in "cloud"
+ * mode AND Supabase is actually enabled.
+ */
+function persistAndSync(
+  projects: Project[],
+  activeProjectId: string,
+  mode: DataSource
+) {
   savePersisted(projects, activeProjectId);
-  queueCloudSave({ projects, activeProjectId });
+  if (mode === "cloud" && isSupabaseEnabled) {
+    queueCloudSave({ projects, activeProjectId });
+  }
 }
 
 function scheduleRecompute(set: any, get: any, immediate = false) {
@@ -221,7 +291,7 @@ function mutateActive(
     window: active.window,
     hasPersistedChanges: true,
   });
-  persistAndSync(projects, state.activeProjectId);
+  persistAndSync(projects, state.activeProjectId, state.dataSource);
   return { changed: true };
 }
 
@@ -239,6 +309,11 @@ export const useStore = create<AppState>((set, get) => ({
   hasPersistedChanges: isPersistedPresent(),
   cloudEnabled: isSupabaseEnabled,
   workspaceId: getWorkspaceId(),
+
+  // ─ Data source defaults ─────────────────────────────────────────
+  dataSource: initialMode,
+  isHydrating: initialMode === "cloud" && isSupabaseEnabled,
+  cloudError: null,
 
   // ─ Stage actions ────────────────────────────────────────────────
   updateStageField: (stageId, field, value) => {
@@ -647,7 +722,7 @@ export const useStore = create<AppState>((set, get) => ({
       hasPersistedChanges: true,
       recentlyAddedStageId: null,
     });
-    persistAndSync(projects, project.id);
+    persistAndSync(projects, project.id, get().dataSource);
     scheduleRecompute(set, get, true);
     return project.id;
   },
@@ -664,7 +739,7 @@ export const useStore = create<AppState>((set, get) => ({
       window: project.window,
       recentlyAddedStageId: null,
     });
-    persistAndSync(state.projects, project.id);
+    persistAndSync(state.projects, project.id, state.dataSource);
     scheduleRecompute(set, get, true);
   },
 
@@ -676,7 +751,7 @@ export const useStore = create<AppState>((set, get) => ({
       p.id === id ? { ...p, name: trimmed } : p
     );
     set({ projects, hasPersistedChanges: true });
-    persistAndSync(projects, state.activeProjectId);
+    persistAndSync(projects, state.activeProjectId, state.dataSource);
   },
 
   deleteProject: (id) => {
@@ -698,8 +773,92 @@ export const useStore = create<AppState>((set, get) => ({
       window: active.window,
       hasPersistedChanges: true,
     });
-    persistAndSync(projects, activeProjectId);
+    persistAndSync(projects, activeProjectId, state.dataSource);
     scheduleRecompute(set, get, true);
+  },
+
+  // ─ Data source actions ──────────────────────────────────────────
+  setDataSource: (mode) => {
+    if (mode !== "cloud" && mode !== "local") return;
+    if (mode === "cloud" && !isSupabaseEnabled) {
+      set({ cloudError: "Supabase is not configured in this build." });
+      return;
+    }
+    setDataSourceMode(mode);
+    set({ dataSource: mode, cloudError: null });
+    // If we just switched TO cloud, push current state up so the cloud row
+    // at least matches what the user is seeing right now.
+    if (mode === "cloud") {
+      const state = get();
+      queueCloudSave({
+        projects: state.projects,
+        activeProjectId: state.activeProjectId,
+      });
+    }
+  },
+
+  pushToCloud: async () => {
+    if (!isSupabaseEnabled) {
+      return { ok: false, error: "Supabase is not configured." };
+    }
+    const state = get();
+    try {
+      await saveToCloud({
+        projects: state.projects,
+        activeProjectId: state.activeProjectId,
+      });
+      set({ cloudError: null });
+      return { ok: true };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      set({ cloudError: msg });
+      return { ok: false, error: msg };
+    }
+  },
+
+  pullFromCloud: async () => {
+    if (!isSupabaseEnabled) {
+      return { ok: false, error: "Supabase is not configured." };
+    }
+    set({ isHydrating: true, cloudError: null });
+    try {
+      const cloud = await loadFromCloud();
+      if (!cloud || cloud.projects.length === 0) {
+        set({ isHydrating: false });
+        return { ok: false, error: "No data found in Supabase." };
+      }
+      const projects = cloud.projects.map((p) => ({
+        ...p,
+        apis: refreshPaletteColors(p.apis).map(cascadePlannedBatches),
+      }));
+      const activeId = projects.some((p) => p.id === cloud.activeProjectId)
+        ? cloud.activeProjectId
+        : projects[0].id;
+      const active = projects.find((p) => p.id === activeId)!;
+      const sched = runScheduler(active.apis, active.reactors, active.window);
+      set({
+        projects,
+        activeProjectId: activeId,
+        apis: active.apis,
+        reactors: active.reactors,
+        window: active.window,
+        schedule: sched,
+        hasPersistedChanges: true,
+        isHydrating: false,
+      });
+      // Mirror to local cache so a subsequent local-mode boot has fresh data.
+      savePersisted(projects, activeId);
+      return { ok: true };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      set({ isHydrating: false, cloudError: msg });
+      return { ok: false, error: msg };
+    }
+  },
+
+  clearLocalCache: () => {
+    clearPersisted();
+    set({ hasPersistedChanges: false });
   },
 
   // ─ Misc ────────────────────────────────────────────────────────
@@ -727,45 +886,64 @@ export const useStore = create<AppState>((set, get) => ({
 }));
 
 // ─── Async cloud hydration on startup ──────────────────────────────────────────
-if (isSupabaseEnabled) {
+//
+// In CLOUD mode (default): cloud is the source of truth. We always replace
+// the locally-seeded state with whatever's in Supabase, even if local has
+// edits. This is the user-visible difference between cloud and local mode.
+// If the cloud read fails we keep the local-seeded state and surface a
+// `cloudError` so the Admin tab can show "fell back to local cache".
+//
+// In LOCAL mode: we never call Supabase on boot.
+if (initialMode === "cloud" && isSupabaseEnabled) {
   setLoadingStatus();
   void loadFromCloud()
     .then((cloud) => {
-      if (!cloud) {
+      if (!cloud || cloud.projects.length === 0) {
+        // No row yet — first time on this workspace. Push the local-seeded
+        // state up so the cloud has something to read on next boot, and
+        // leave the user looking at the seed.
+        const state = useStore.getState();
+        queueCloudSave({
+          projects: state.projects,
+          activeProjectId: state.activeProjectId,
+        });
+        useStore.setState({ isHydrating: false });
         setIdleStatus();
         return;
       }
-      const state = useStore.getState();
-      if (!state.hasPersistedChanges) {
-        // Apply latest palette across all projects
-        const projects = cloud.projects.map((p) => ({
-          ...p,
-          apis: refreshPaletteColors(p.apis).map(cascadePlannedBatches),
-        }));
-        const activeId = projects.some((p) => p.id === cloud.activeProjectId)
-          ? cloud.activeProjectId
-          : projects[0]?.id;
-        if (!activeId || projects.length === 0) {
-          setIdleStatus();
-          return;
-        }
-        const active = projects.find((p) => p.id === activeId)!;
-        const sched = runScheduler(active.apis, active.reactors, active.window);
-        useStore.setState({
-          projects,
-          activeProjectId: activeId,
-          apis: active.apis,
-          reactors: active.reactors,
-          window: active.window,
-          schedule: sched,
-          hasPersistedChanges: true,
-        });
-        savePersisted(projects, activeId);
-      }
+      const projects = cloud.projects.map((p) => ({
+        ...p,
+        apis: refreshPaletteColors(p.apis).map(cascadePlannedBatches),
+      }));
+      const activeId = projects.some((p) => p.id === cloud.activeProjectId)
+        ? cloud.activeProjectId
+        : projects[0].id;
+      const active = projects.find((p) => p.id === activeId)!;
+      const sched = runScheduler(active.apis, active.reactors, active.window);
+      useStore.setState({
+        projects,
+        activeProjectId: activeId,
+        apis: active.apis,
+        reactors: active.reactors,
+        window: active.window,
+        schedule: sched,
+        hasPersistedChanges: true,
+        isHydrating: false,
+      });
+      // Mirror cloud → local so a future LOCAL-mode boot has fresh data.
+      savePersisted(projects, activeId);
       setIdleStatus();
     })
     .catch((e) => {
+      const msg = e instanceof Error ? e.message : String(e);
       console.error("[sync] hydrate failed:", e);
+      useStore.setState({
+        isHydrating: false,
+        cloudError: `Cloud unavailable: ${msg}. Showing last local cache.`,
+      });
       setIdleStatus();
     });
+} else {
+  // local mode (or supabase disabled) → already seeded synchronously
+  useStore.setState({ isHydrating: false });
 }

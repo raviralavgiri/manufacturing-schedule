@@ -10,6 +10,8 @@ import {
   FlaskConical,
   Gauge,
   LayoutGrid,
+  Loader2,
+  Settings,
   Sparkles,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -26,6 +28,7 @@ import GanttTab from "./tabs/GanttTab";
 import EquipmentTab from "./tabs/EquipmentTab";
 import ClashTab from "./tabs/ClashTab";
 import QuarterlyTab from "./tabs/QuarterlyTab";
+import AdminTab from "./tabs/AdminTab";
 
 type TabId =
   | "apis"
@@ -35,7 +38,8 @@ type TabId =
   | "gantt"
   | "equipment"
   | "clash"
-  | "quarterly";
+  | "quarterly"
+  | "admin";
 
 const TABS: {
   id: TabId;
@@ -100,6 +104,13 @@ const TABS: {
     accent: "lime",
     desc: "Q1–Q4 + FY totals",
   },
+  {
+    id: "admin",
+    label: "Admin",
+    icon: <Settings size={18} />,
+    accent: "violet",
+    desc: "Data source: Cloud or Local",
+  },
 ];
 
 export default function App() {
@@ -108,9 +119,19 @@ export default function App() {
   const reactors = useStore((s) => s.reactors);
   const apis = useStore((s) => s.apis);
   const isRecomputing = useStore((s) => s.isRecomputing);
+  const isHydrating = useStore((s) => s.isHydrating);
 
   return (
     <div className="min-h-screen w-full">
+      {/* Cloud-mode boot splash. Only shown for the few hundred ms while
+          loadFromCloud() is in flight. Doesn't block interaction beyond
+          that — the local-seeded state is already painted underneath. */}
+      {isHydrating && (
+        <div className="pointer-events-none fixed right-4 top-4 z-50 flex items-center gap-2 rounded-lg border border-cyan-300/30 bg-ink-950/80 px-3 py-2 text-[11px] font-semibold text-cyan-300 shadow-glow backdrop-blur-md">
+          <Loader2 size={12} className="animate-spin" />
+          Loading from cloud…
+        </div>
+      )}
       {/* Top bar */}
       <header className="sticky top-0 z-20 border-b border-white/5 bg-ink-950/40 backdrop-blur-xl">
         <div className="mx-auto flex max-w-[1600px] items-center justify-between px-6 py-3">
@@ -227,6 +248,7 @@ export default function App() {
           {active === "equipment" && <EquipmentTab />}
           {active === "clash" && <ClashTab />}
           {active === "quarterly" && <QuarterlyTab />}
+          {active === "admin" && <AdminTab />}
         </div>
       </main>
 

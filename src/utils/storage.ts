@@ -8,6 +8,56 @@ import { refreshPaletteColors } from "../data/seed";
 const STORAGE_KEY = "pharma:apis:v1"; // kept the same to avoid orphaning data
 // Migration is performed inline based on the `v` field within the JSON.
 
+const DATA_SOURCE_KEY = "pharma:dataSource:v1";
+
+export type DataSource = "cloud" | "local";
+
+/** Get the user's preferred data source. Defaults to "cloud". */
+export function getDataSourceMode(): DataSource {
+  if (typeof window === "undefined") return "cloud";
+  try {
+    const v = window.localStorage.getItem(DATA_SOURCE_KEY);
+    if (v === "local") return "local";
+    return "cloud";
+  } catch {
+    return "cloud";
+  }
+}
+
+/** Persist the user's data source preference. */
+export function setDataSourceMode(mode: DataSource): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(DATA_SOURCE_KEY, mode);
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
+/** Bytes occupied by the workspace JSON in localStorage (UTF-16 → x2 estimate). */
+export function persistedSizeBytes(): number {
+  if (typeof window === "undefined") return 0;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    return raw ? raw.length * 2 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Wall-clock timestamp from the persisted blob's `savedAt`. null if absent. */
+export function persistedSavedAt(): number | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.savedAt === "number" ? parsed.savedAt : null;
+  } catch {
+    return null;
+  }
+}
+
 interface PersistedV1 {
   v: 1;
   apis: API[];
