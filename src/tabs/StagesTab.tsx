@@ -5,13 +5,11 @@ import {
   Plus,
   Trash2,
   Lock,
-  ChevronDown,
-  ChevronRight,
   Beaker,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
-import { Card, SectionHeader, Tag } from "../components/Primitives";
+import { Card, SectionHeader } from "../components/Primitives";
 import AddStageForm from "../components/AddStageForm";
 import PriorityPill from "../components/PriorityPill";
 import ReactorPoolEditor from "../components/ReactorPoolEditor";
@@ -20,12 +18,9 @@ import type { Priority, StageMaster } from "../types";
 /**
  * Stages tab — operational details for each stage.
  *
- * Layout:
- *   1. Reactors panel (collapsible) — edit reactor display names; class
- *      and capacity are read-only structural facts.
- *   2. Stage table — the full editable per-stage master data
- *      (Stage name, Reactor pool, Batch size, Cycle hrs, Analysis hrs,
- *      Output target). Planned batches is derived.
+ * Reactor master data (add/rename/delete/reclassify) lives on the dedicated
+ * "Master Reactor" tab. This tab focuses on per-stage operational fields
+ * (Stage name, Reactor pool, Batch size, Cycle hrs, Analysis hrs).
  */
 export default function StagesTab() {
   const apis = useStore((s) => s.apis);
@@ -34,7 +29,6 @@ export default function StagesTab() {
   const setStageName = useStore((s) => s.setStageName);
   const setStageReactorPool = useStore((s) => s.setStageReactorPool);
   const setApiPriority = useStore((s) => s.setApiPriority);
-  const setReactorName = useStore((s) => s.setReactorName);
   const removeStage = useStore((s) => s.removeStage);
   const recentlyAddedStageId = useStore((s) => s.recentlyAddedStageId);
   const clearRecentlyAdded = useStore((s) => s.clearRecentlyAdded);
@@ -42,7 +36,6 @@ export default function StagesTab() {
   const [q, setQ] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [reactorsOpen, setReactorsOpen] = useState(true);
   const newRowRef = useRef<HTMLTableRowElement>(null);
 
   const sortedApis = useMemo(
@@ -109,16 +102,6 @@ export default function StagesTab() {
     };
   }, [recentlyAddedStageId, clearRecentlyAdded]);
 
-  // ─── Reactors panel ────────────────────────────────────────────────────────
-  const reactorsByClass = useMemo(
-    () => ({
-      Small: reactors.filter((r) => r.reactorClass === "Small"),
-      Medium: reactors.filter((r) => r.reactorClass === "Medium"),
-      Large: reactors.filter((r) => r.reactorClass === "Large"),
-    }),
-    [reactors]
-  );
-
   return (
     <div className="space-y-4">
       <SectionHeader
@@ -160,77 +143,17 @@ export default function StagesTab() {
         />
       )}
 
-      {/* Reactors panel */}
-      <Card className="overflow-hidden p-0">
-        <button
-          onClick={() => setReactorsOpen((v) => !v)}
-          className="flex w-full items-center justify-between border-b border-white/10 px-4 py-3 text-left transition hover:bg-white/5"
-        >
-          <div className="flex items-center gap-2">
-            {reactorsOpen ? (
-              <ChevronDown size={14} className="text-ink-400" />
-            ) : (
-              <ChevronRight size={14} className="text-ink-400" />
-            )}
-            <Beaker size={14} className="text-cyan-300" />
-            <h3 className="text-sm font-bold uppercase tracking-wider text-white">
-              Reactors ({reactors.length})
-            </h3>
-            <span className="text-[11px] text-ink-400">
-              · click any name to rename
-            </span>
-          </div>
-          <span className="text-[10px] text-ink-400">
-            Names are display-only labels; internal IDs are immutable.
-          </span>
-        </button>
-        {reactorsOpen && (
-          <div className="space-y-3 p-4">
-            {(["Small", "Medium", "Large"] as const).map((cls) => (
-              <div key={cls}>
-                <div className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-ink-400">
-                  {cls} ({reactorsByClass[cls].length})
-                </div>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-                  {reactorsByClass[cls].map((r) => (
-                    <div
-                      key={r.id}
-                      className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] p-2"
-                    >
-                      <span
-                        className="h-2 w-2 shrink-0 rounded-sm"
-                        style={{
-                          background: classColor(r.reactorClass),
-                          boxShadow: `0 0 6px ${classColor(r.reactorClass)}80`,
-                        }}
-                      />
-                      <div className="flex flex-1 flex-col gap-0.5 overflow-hidden">
-                        <EditableTextCell
-                          value={r.name}
-                          onCommit={(v) => setReactorName(r.id, v)}
-                          placeholder={r.id}
-                        />
-                        <div className="flex items-center gap-1.5 text-[9px] uppercase tracking-wider text-ink-500">
-                          <span title="Stable internal id (immutable)">
-                            id: {r.id}
-                          </span>
-                          <span>·</span>
-                          <span>{r.capacityKg}L</span>
-                          {r.shared && (
-                            <Tag tone="violet" className="!px-1 !py-0 !text-[8px]">
-                              ★ shared
-                            </Tag>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
+      {/* Pointer to Master Reactor tab — reactor CRUD lives there now */}
+      <div className="flex items-center justify-between rounded-xl border border-cyan-300/20 bg-cyan-300/5 px-4 py-2.5 text-xs text-ink-200">
+        <span className="inline-flex items-center gap-2">
+          <Beaker size={12} className="text-cyan-300" />
+          To rename, reclassify, add, or delete reactors, head to the{" "}
+          <span className="font-bold text-cyan-300">Master Reactor</span> tab.
+        </span>
+        <span className="text-[10px] uppercase tracking-wider text-ink-400">
+          {reactors.length} reactors available
+        </span>
+      </div>
 
       {/* Stages table */}
       <Card className="overflow-hidden p-0">
@@ -561,8 +484,3 @@ function EditableTextCell({
   );
 }
 
-function classColor(cls: "Small" | "Medium" | "Large"): string {
-  if (cls === "Small") return "#00f0ff";
-  if (cls === "Medium") return "#a78bfa";
-  return "#f472b6";
-}

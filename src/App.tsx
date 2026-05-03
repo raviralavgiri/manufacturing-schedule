@@ -3,6 +3,7 @@ import {
   Activity,
   AlertTriangle,
   BarChart3,
+  Beaker,
   CalendarDays,
   CheckCircle2,
   Database,
@@ -19,6 +20,7 @@ import ThemeToggle from "./components/ThemeToggle";
 import ProjectSwitcher from "./components/ProjectSwitcher";
 import ApisTab from "./tabs/ApisTab";
 import StagesTab from "./tabs/StagesTab";
+import MasterReactorTab from "./tabs/MasterReactorTab";
 import ScheduleTab from "./tabs/ScheduleTab";
 import GanttTab from "./tabs/GanttTab";
 import EquipmentTab from "./tabs/EquipmentTab";
@@ -28,6 +30,7 @@ import QuarterlyTab from "./tabs/QuarterlyTab";
 type TabId =
   | "apis"
   | "stages"
+  | "reactors"
   | "schedule"
   | "gantt"
   | "equipment"
@@ -53,7 +56,14 @@ const TABS: {
     label: "Stages",
     icon: <Database size={18} />,
     accent: "amber",
-    desc: "Per-stage details + reactors",
+    desc: "Per-stage operational details",
+  },
+  {
+    id: "reactors",
+    label: "Master Reactor",
+    icon: <Beaker size={18} />,
+    accent: "cyan",
+    desc: "Manage the reactor fleet",
   },
   {
     id: "schedule",
@@ -211,6 +221,7 @@ export default function App() {
         <div key={active} className="animate-fade-in">
           {active === "apis" && <ApisTab />}
           {active === "stages" && <StagesTab />}
+          {active === "reactors" && <MasterReactorTab />}
           {active === "schedule" && <ScheduleTab />}
           {active === "gantt" && <GanttTab />}
           {active === "equipment" && <EquipmentTab />}

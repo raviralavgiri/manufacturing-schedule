@@ -8,6 +8,7 @@ import type {
   Priority,
   Project,
   Reactor,
+  ReactorClass,
   ScheduleResult,
   StageMaster,
 } from "./types";
@@ -87,6 +88,22 @@ interface AppState {
 
   // ─ Reactor actions (operate on active project) ──────────────────
   setReactorName: (reactorId: string, name: string) => void;
+  setReactorClass: (reactorId: string, cls: ReactorClass) => void;
+  setReactorCapacity: (reactorId: string, capacityKg: number) => void;
+  addReactor: (input: {
+    id: string;
+    name?: string;
+    reactorClass: ReactorClass;
+    capacityKg: number;
+  }) =>
+    | { ok: true; id: string }
+    | { ok: false; error: string };
+  removeReactor: (
+    reactorId: string,
+    opts?: { cascade?: boolean }
+  ) =>
+    | { ok: true }
+    | { ok: false; error: string; blockingStages?: string[] };
 
   // ─ Project actions ──────────────────────────────────────────────
   createProject: (name?: string) => string;
@@ -497,6 +514,116 @@ export const useStore = create<AppState>((set, get) => ({
         r.id === reactorId ? { ...r, name: trimmed } : r
       ),
     }));
+  },
+
+  setReactorClass: (reactorId, cls) => {
+    if (cls !== "Small" && cls !== "Medium" && cls !== "Large") return;
+    mutateActive(set, get, (p) => ({
+      ...p,
+      reactors: p.reactors.map((r) =>
+        r.id === reactorId ? { ...r, reactorClass: cls } : r
+      ),
+    }));
+  },
+
+  setReactorCapacity: (reactorId, capacityKg) => {
+    const v = Math.max(1, Math.round(capacityKg));
+    if (!Number.isFinite(v)) return;
+    mutateActive(set, get, (p) => ({
+      ...p,
+      reactors: p.reactors.map((r) =>
+        r.id === reactorId ? { ...r, capacityKg: v } : r
+      ),
+    }));
+  },
+
+  addReactor: (input) => {
+    const trimmedId = (input.id ?? "").trim();
+    if (!trimmedId) return { ok: false, error: "ID is required." };
+    if (/\s/.test(trimmedId))
+      return { ok: false, error: "ID cannot contain whitespace." };
+    const cap = Math.round(input.capacityKg);
+    if (!Number.isFinite(cap) || cap <= 0)
+      return { ok: false, error: "Capacity must be a positive number." };
+    if (
+      input.reactorClass !== "Small" &&
+      input.reactorClass !== "Medium" &&
+      input.reactorClass !== "Large"
+    ) {
+      return { ok: false, error: "Class must be Small, Medium, or Large." };
+    }
+    const state = get();
+    const active = getActive(state);
+    if (active.reactors.some((r) => r.id === trimmedId)) {
+      return { ok: false, error: `ID "${trimmedId}" is already in use.` };
+    }
+    const newReactor: Reactor = {
+      id: trimmedId,
+      name: (input.name ?? "").trim() || trimmedId,
+      reactorClass: input.reactorClass,
+      capacityKg: cap,
+      shared: false,
+    };
+    mutateActive(set, get, (p) => ({
+      ...p,
+      reactors: [...p.reactors, newReactor],
+    }));
+    // Reactor list change doesn't affect existing schedule (no stage uses it
+    // yet), so no recompute needed.
+    return { ok: true, id: trimmedId };
+  },
+
+  removeReactor: (reactorId, opts) => {
+    const cascade = opts?.cascade ?? false;
+    const state = get();
+    const active = getActive(state);
+    if (!active.reactors.some((r) => r.id === reactorId)) {
+      return { ok: false, error: `Reactor "${reactorId}" not found.` };
+    }
+    // Find every stage whose pool would become empty if we strip this id.
+    const blockingStages: string[] = [];
+    const usingStages: string[] = [];
+    active.apis.forEach((a) => {
+      a.stages.forEach((s) => {
+        if (!s.reactorPool.includes(reactorId)) return;
+        usingStages.push(`${a.name} · S${s.stageNo}`);
+        if (s.reactorPool.length <= 1) {
+          blockingStages.push(`${a.name} · S${s.stageNo}`);
+        }
+      });
+    });
+    if (blockingStages.length > 0) {
+      return {
+        ok: false,
+        error: `Cannot delete ${reactorId} — it's the only reactor assigned to ${blockingStages
+          .slice(0, 3)
+          .join(", ")}${blockingStages.length > 3 ? ` and ${blockingStages.length - 3} more` : ""}. Assign another reactor to those stage(s) first.`,
+        blockingStages,
+      };
+    }
+    if (usingStages.length > 0 && !cascade) {
+      return {
+        ok: false,
+        error: `Reactor ${reactorId} is in ${usingStages.length} stage pool(s). Confirm to remove it from all of them.`,
+      };
+    }
+    mutateActive(set, get, (p) => ({
+      ...p,
+      reactors: p.reactors.filter((r) => r.id !== reactorId),
+      apis: p.apis.map((a) => ({
+        ...a,
+        stages: a.stages.map((s) =>
+          s.reactorPool.includes(reactorId)
+            ? { ...s, reactorPool: s.reactorPool.filter((id) => id !== reactorId) }
+            : s
+        ),
+      })),
+    }));
+    if (usingStages.length > 0) {
+      // Pool changes affect scheduling; recompute.
+      scheduleRecompute(set, get, true);
+    }
+    return { ok: true };
   },
 
   // ─ Project actions ──────────────────────────────────────────────
