@@ -1,5 +1,6 @@
 import type { API, PlanWindow, Reactor } from "../types";
 import { FY_END_MS, FY_START_MS } from "./dates";
+import { API_PALETTE } from "../data/seed";
 
 // Bump if schema changes - old data is then ignored & seed is used.
 const STORAGE_KEY = "pharma:apis:v1";
@@ -31,8 +32,10 @@ export function loadPersisted(): PersistedSnapshot | null {
       return null;
     }
     // Migrate: ensure priority + targetKg + per-stage inputKgPerBatch fields
-    // exist. Strip any legacy per-API startMs/endMs (now global).
-    const apis = parsed.apis.map((a) => {
+    // exist. Strip any legacy per-API startMs/endMs (now global). Refresh
+    // api.color from the latest palette so palette upgrades take effect on
+    // existing saved data.
+    const apis = parsed.apis.map((a, idx) => {
       const priority = (a.priority ?? 3) as API["priority"];
       let targetKg = a.targetKg;
       if (typeof targetKg !== "number" || targetKg <= 0) {
@@ -64,7 +67,10 @@ export function loadPersisted(): PersistedSnapshot | null {
       } = a as API & { startMs?: number; endMs?: number };
       void _legacyStart;
       void _legacyEnd;
-      return { ...rest, priority, targetKg, stages };
+      // Refresh color from the latest palette using the API's array index
+      // (this lets palette upgrades take effect without manual reset)
+      const color = API_PALETTE[idx % API_PALETTE.length];
+      return { ...rest, color, priority, targetKg, stages };
     });
 
     let reactors: Reactor[] | null = null;

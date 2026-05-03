@@ -14,13 +14,34 @@ const rand = mulberry32(20260401);
 const ri = (lo: number, hi: number) => Math.floor(rand() * (hi - lo + 1)) + lo;
 const pick = <T,>(arr: T[]) => arr[Math.floor(rand() * arr.length)];
 
-// 20 distinct, accessible colors for each API
-export const API_PALETTE = [
-  "#00f0ff", "#a78bfa", "#f472b6", "#a3e635", "#fbbf24",
-  "#34d399", "#fb7185", "#60a5fa", "#facc15", "#c084fc",
-  "#f87171", "#22d3ee", "#84cc16", "#e879f9", "#38bdf8",
-  "#fda4af", "#86efac", "#fcd34d", "#7dd3fc", "#d8b4fe",
-];
+// 20 maximally-distinct API colors via the golden-angle (137.508°) hue
+// distribution. Adjacent palette indices land far apart on the color wheel,
+// so consecutive APIs never look like the same hue family.
+function hslToHex(h: number, s: number, l: number): string {
+  s /= 100;
+  l /= 100;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const c = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(255 * c)
+      .toString(16)
+      .padStart(2, "0");
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+export const API_PALETTE: string[] = (() => {
+  const out: string[] = [];
+  const GOLDEN_ANGLE = 137.508;
+  for (let i = 0; i < 20; i++) {
+    const hue = (i * GOLDEN_ANGLE) % 360;
+    // 70% saturation + 55% lightness keeps colors readable on both light
+    // and dark backgrounds while still being vivid.
+    out.push(hslToHex(hue, 70, 55));
+  }
+  return out;
+})();
 
 // Reactors: 20 total, with shared ones across stages.
 // `id` is the stable internal reference; `name` is the editable display label.
