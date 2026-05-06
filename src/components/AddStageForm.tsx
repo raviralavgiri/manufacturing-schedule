@@ -53,11 +53,11 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
       const isFirst = api.stages.length === 0;
       const suggested = isFirst
         ? reactors
-            .filter((r) => r.reactorClass === "Intermediate")
+            .filter((r) => r.reactorClass === "SSR")
             .slice(0, 4)
             .map((r) => r.id)
         : reactors
-            .filter((r) => r.reactorClass === "Intermediate")
+            .filter((r) => r.reactorClass === "SSR")
             .slice(0, 3)
             .map((r) => r.id);
       setReactorPool(suggested);
@@ -116,14 +116,14 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
 
   const reactorsByClass = useMemo(() => {
     return {
-      Intermediate: reactors.filter((r) => r.reactorClass === "Intermediate"),
-      Cleanroom: reactors.filter((r) => r.reactorClass === "Cleanroom"),
+      SSR: reactors.filter((r) => r.reactorClass === "SSR"),
+      GLR: reactors.filter((r) => r.reactorClass === "GLR"),
     };
   }, [reactors]);
 
   const classLabel: Record<keyof typeof reactorsByClass, string> = {
-    Intermediate: "INT",
-    Cleanroom: "CR",
+    SSR: "SSR",
+    GLR: "GLR",
   };
 
   return (
@@ -245,7 +245,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
           </button>
         </div>
         <div className="space-y-2">
-          {(["Intermediate", "Cleanroom"] as const).map((cls) => (
+          {(["SSR", "GLR"] as const).map((cls) => (
             <div key={cls} className="flex flex-wrap items-center gap-1.5">
               <span
                 className="mr-1 inline-block w-16 text-[10px] font-bold uppercase tracking-wider text-ink-400"

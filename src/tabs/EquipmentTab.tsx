@@ -112,7 +112,7 @@ export default function EquipmentTab() {
                   >
                     <span className="truncate">{r.name}</span>
                     <span className="text-[9px] uppercase text-ink-400">
-                      {r.cls === "Cleanroom" ? "CR" : "INT"}
+                      {r.cls === "GLR" ? "GLR" : "SSR"}
                     </span>
                   </span>
                   <span className="font-mono font-bold tabular-nums text-cyan-300">

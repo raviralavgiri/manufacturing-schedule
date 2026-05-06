@@ -59,8 +59,8 @@ export function refreshPaletteColors<T extends { color?: string }>(
 }
 
 // Reactors: 20 total. Two classes:
-//   • Intermediate (R1xx + R2xx) — upstream / intermediate-stage equipment
-//   • Cleanroom    (R3xx)        — cleanroom-grade for the Final API stage
+//   • SSR (Stainless Steel Reactor) R1xx + R2xx — upstream / intermediate stages
+//   • GLR (Glass Lined Reactor)     R3xx        — glass-lined for the Final API stage
 // `id` is the stable internal reference; `name` is the editable display label.
 // (Whether a reactor is "shared" across stages is no longer a stored flag —
 // it's derived live from current pool memberships in the Clash tab.)
@@ -73,29 +73,29 @@ function r(
 }
 
 export const REACTORS: Reactor[] = [
-  // Intermediate R1xx — small/medium upstream reactors.
-  r("R101", "Intermediate", 200),
-  r("R102", "Intermediate", 200),
-  r("R103", "Intermediate", 250),
-  r("R104", "Intermediate", 250),
-  r("R105", "Intermediate", 300),
-  r("R106", "Intermediate", 300),
-  r("R107", "Intermediate", 350),
-  r("R108", "Intermediate", 350),
-  // Intermediate R2xx — larger upstream reactors.
-  r("R201", "Intermediate", 500),
-  r("R202", "Intermediate", 500),
-  r("R203", "Intermediate", 600),
-  r("R204", "Intermediate", 600),
-  r("R205", "Intermediate", 700),
-  r("R206", "Intermediate", 700),
-  // Cleanroom R3xx — final-API / large-volume cleanroom reactors.
-  r("R301", "Cleanroom", 1000),
-  r("R302", "Cleanroom", 1000),
-  r("R303", "Cleanroom", 1200),
-  r("R304", "Cleanroom", 1200),
-  r("R305", "Cleanroom", 1500),
-  r("R306", "Cleanroom", 1500),
+  // SSR R1xx — small/medium upstream reactors.
+  r("R101", "SSR", 200),
+  r("R102", "SSR", 200),
+  r("R103", "SSR", 250),
+  r("R104", "SSR", 250),
+  r("R105", "SSR", 300),
+  r("R106", "SSR", 300),
+  r("R107", "SSR", 350),
+  r("R108", "SSR", 350),
+  // SSR R2xx — larger upstream reactors.
+  r("R201", "SSR", 500),
+  r("R202", "SSR", 500),
+  r("R203", "SSR", 600),
+  r("R204", "SSR", 600),
+  r("R205", "SSR", 700),
+  r("R206", "SSR", 700),
+  // GLR R3xx — glass-lined reactors for the final API stage.
+  r("R301", "GLR", 1000),
+  r("R302", "GLR", 1000),
+  r("R303", "GLR", 1200),
+  r("R304", "GLR", 1200),
+  r("R305", "GLR", 1500),
+  r("R306", "GLR", 1500),
 ];
 
 // Distribution of stage counts per API to total 82 stages over 20 APIs:

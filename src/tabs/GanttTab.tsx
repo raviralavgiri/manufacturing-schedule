@@ -630,7 +630,7 @@ export default function GanttTab() {
                       className="shrink-0 text-[9px] uppercase text-ink-400"
                       title={r.reactorClass}
                     >
-                      {r.reactorClass === "Cleanroom" ? "CR" : "INT"}
+                      {r.reactorClass === "GLR" ? "GLR" : "SSR"}
                     </span>
                     <span className="ml-auto font-mono text-[10px] text-ink-400 tabular-nums">
                       {batchCount}
@@ -1047,5 +1047,5 @@ function monthForBand(
 }
 
 function classColor(cls: Reactor["reactorClass"]): string {
-  return cls === "Cleanroom" ? "#f472b6" : "#00f0ff";
+  return cls === "GLR" ? "#f472b6" : "#00f0ff";
 }

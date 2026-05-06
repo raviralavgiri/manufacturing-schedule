@@ -329,11 +329,15 @@ export function persistedSavedAt(): number | null {
 
 // ─── Reactor class migration helper ────────────────────────────────────────
 //
-// "Small" + "Medium" → "Intermediate"; "Large" → "Cleanroom". Unknown values
-// fall back to "Intermediate". Exported because services/sync.ts also uses
-// it on cloud reads.
+// Migration chain (all legacy values → current "SSR" | "GLR"):
+//   "SSR", "GLR"                           → pass-through (current)
+//   "Intermediate"                         → "SSR"
+//   "Small", "Medium", or anything unknown → "SSR"
+//   "Cleanroom" or "Large"                 → "GLR"
+// Exported because services/sync.ts uses it on cloud reads too.
 export function migrateReactorClass(value: unknown): Reactor["reactorClass"] {
-  if (value === "Intermediate" || value === "Cleanroom") return value;
-  if (value === "Large") return "Cleanroom";
-  return "Intermediate";
+  if (value === "SSR" || value === "GLR") return value;
+  if (value === "Cleanroom" || value === "Large") return "GLR";
+  // "Intermediate" | "Small" | "Medium" | anything else → SSR
+  return "SSR";
 }

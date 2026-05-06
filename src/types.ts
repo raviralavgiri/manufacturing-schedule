@@ -1,11 +1,11 @@
 /**
  * Reactor classification.
  *
- * - "Intermediate" (display: INT) — upstream / intermediate-stage equipment.
- * - "Cleanroom"    (display: CR)  — cleanroom-grade equipment, typically
- *                                   used for the final API stage.
+ * - "SSR" (Stainless Steel Reactor)  — upstream / intermediate-stage equipment.
+ * - "GLR" (Glass Lined Reactor)      — glass-lined equipment, typically
+ *                                      used for the final API stage.
  */
-export type ReactorClass = "Intermediate" | "Cleanroom";
+export type ReactorClass = "SSR" | "GLR";
 
 export interface Reactor {
   id: string;            // stable internal reference (e.g. "R101")

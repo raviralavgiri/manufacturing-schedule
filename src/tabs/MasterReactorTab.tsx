@@ -13,20 +13,20 @@ import { useStore } from "../store";
 import { Card, SectionHeader } from "../components/Primitives";
 import type { ReactorClass } from "../types";
 
-const CLASS_ORDER: ReactorClass[] = ["Intermediate", "Cleanroom"];
+const CLASS_ORDER: ReactorClass[] = ["SSR", "GLR"];
 const CLASS_LABEL: Record<ReactorClass, string> = {
-  Intermediate: "INT",
-  Cleanroom: "CR",
+  SSR: "SSR",
+  GLR: "GLR",
 };
 const CLASS_FULL: Record<ReactorClass, string> = {
-  Intermediate: "Intermediate",
-  Cleanroom: "Cleanroom",
+  SSR: "Stainless Steel Reactor",
+  GLR: "Glass Lined Reactor",
 };
 
 /**
  * Master Reactor tab — single source of truth for the reactor fleet.
  *
- * Layout: a single sticky-header table grouped by class (Intermediate / Cleanroom).
+ * Layout: a single sticky-header table grouped by class (SSR / GLR).
  *   • id is immutable (referenced by every stage's `reactorPool`).
  *   • Click name / class toggle / capacity to edit.
  *   • Trash → confirm-inline. Cannot delete a reactor that is the only
@@ -65,8 +65,8 @@ export default function MasterReactorTab() {
       return a.id.localeCompare(b.id);
     });
     const buckets: Record<ReactorClass, typeof sorted> = {
-      Intermediate: [],
-      Cleanroom: [],
+      SSR: [],
+      GLR: [],
     };
     sorted.forEach((r) => buckets[r.reactorClass].push(r));
     return buckets;
@@ -76,7 +76,7 @@ export default function MasterReactorTab() {
     <div className="space-y-4">
       <SectionHeader
         title="Master Reactor"
-        subtitle={`${reactors.length} reactors across the fleet · ${groupedReactors.Intermediate.length} INT, ${groupedReactors.Cleanroom.length} CR. Click any name, class, or capacity to edit; ID is immutable.`}
+        subtitle={`${reactors.length} reactors across the fleet · ${groupedReactors.SSR.length} SSR, ${groupedReactors.GLR.length} GLR. Click any name, class, or capacity to edit; ID is immutable.`}
         right={
           <button
             onClick={() => setShowAdd((v) => !v)}
@@ -408,8 +408,8 @@ function ReactorRow({
 // ─── Add Reactor form ────────────────────────────────────────────────────────
 
 const CLASS_PREFIX: Record<ReactorClass, string> = {
-  Intermediate: "R1",
-  Cleanroom: "R3",
+  SSR: "R1",
+  GLR: "R3",
 };
 
 function suggestNextId(cls: ReactorClass, existingIds: string[]): string {
@@ -447,14 +447,14 @@ function AddReactorForm({
     capacityKg: number;
   }) => { ok: true; id: string } | { ok: false; error: string };
 }) {
-  const [cls, setCls] = useState<ReactorClass>("Intermediate");
+  const [cls, setCls] = useState<ReactorClass>("SSR");
   const initialCapacity = useMemo(() => {
     const peers = existingByClass[cls];
-    if (peers.length === 0) return cls === "Cleanroom" ? 1000 : 200;
+    if (peers.length === 0) return cls === "GLR" ? 1000 : 200;
     const mean = peers.reduce((a, b) => a + b.capacityKg, 0) / peers.length;
     return Math.round(mean);
   }, [cls, existingByClass]);
-  const [id, setId] = useState(() => suggestNextId("Intermediate", existingIds));
+  const [id, setId] = useState(() => suggestNextId("SSR", existingIds));
   const [idTouched, setIdTouched] = useState(false);
   const [name, setName] = useState("");
   const [capacity, setCapacity] = useState(String(initialCapacity));
@@ -706,5 +706,5 @@ function EditableNumCell({
 }
 
 function classColor(cls: ReactorClass): string {
-  return cls === "Cleanroom" ? "#f472b6" : "#00f0ff";
+  return cls === "GLR" ? "#f472b6" : "#00f0ff";
 }
