@@ -203,14 +203,15 @@ export function buildSeed(): { apis: API[]; reactors: Reactor[] } {
         : stageIdx === 0
         ? ri(40, 110)
         : ri(60, 160);
-      // Train model uses reactors serially per-stage, so cycle times need to
-      // be shorter than the parallel-pool model to fit ~848 batches in a year.
-      // BCF = Batch Charging Frequency — interval between batch starts at
-      // the same stage. Roughly the time the reactor is occupied per batch.
-      const bcfHours = isFinal ? ri(96, 168) : ri(48, 96);
+      // BCT = Batch Completion Time — physical reactor occupancy per batch.
+      // BCF = Batch Charging Frequency — interval between consecutive same-
+      //       campaign batch STARTS. BCF >= BCT (you can't start the next batch
+      //       before the reactor is free). In the seed, BCF = BCT (back-to-back).
+      const bctHours = isFinal ? ri(96, 168) : ri(48, 96);
+      const bcfHours = bctHours; // seed default: back-to-back batches
       const analysisHours = isFinal ? ri(36, 72) : ri(24, 48);
-      // PCO (Product Change Over) cleaning time. Cleanroom equipment is held
-      // to a stricter standard, so finals get a longer scrub than intermediates.
+      // PCO (Product Change Over) cleaning time. GLR equipment (final stage)
+      // gets a longer scrub than SSR equipment.
       const pcoHours = isFinal ? 12 : 8;
       const plannedBatches = batchAllocations[stageCursor];
       stageCursor++;
@@ -225,6 +226,7 @@ export function buildSeed(): { apis: API[]; reactors: Reactor[] } {
         inputKgPerBatch: batchSizeKg, // 1:1 yield default; user can adjust
         reactorPool: pool,
         bcfHours,
+        bctHours,
         analysisHours,
         pcoHours,
         plannedBatches,

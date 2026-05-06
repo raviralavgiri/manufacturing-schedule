@@ -35,16 +35,25 @@ export interface StageMaster {
   reactorPool: string[];
   /**
    * Batch Charging Frequency (BCF) — the time interval in hours between the
-   * START of two consecutive batches at the same stage. A new batch is
-   * initiated at every BCF interval (subject to reactor availability and
-   * cleaning constraints). Was previously named `cycleHours`; legacy data
-   * is migrated transparently by the storage loader.
+   * START of two consecutive same-campaign batches at the same stage.
    *
-   * BCT (Batch Completion Time) — the total duration a single batch occupies
-   * the reactor — is NOT a separate field; it's derived from the booking
-   * window inside the scheduler.
+   *   start₁ + BCF = start₂   (same campaign, same stage)
+   *
+   * Must be >= bctHours (can't start the next batch before the reactor is
+   * physically free). Defaults to bctHours (= back-to-back) on legacy data.
+   * Was previously called `cycleHours`.
    */
   bcfHours: number;
+  /**
+   * Batch Completion Time (BCT) — the total duration a single batch physically
+   * occupies the reactor, from start to completion.
+   *
+   *   start + BCT = reactor free time
+   *
+   * Controls reactor occupancy duration in the scheduler. Can be <= BCF.
+   * Defaults to bcfHours (= BCF) on legacy data.
+   */
+  bctHours: number;
   analysisHours: number;
   /**
    * Product Change Over (PCO) cleaning time in hours. Required BEFORE running

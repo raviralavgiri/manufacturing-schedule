@@ -62,6 +62,7 @@ export interface NewStageInput {
   inputKgPerBatch: number;
   reactorPool: string[];
   bcfHours: number;
+  bctHours: number;
   analysisHours: number;
   pcoHours: number;
   plannedBatches: number;
@@ -106,6 +107,7 @@ interface AppState {
       | "batchSizeKg"
       | "inputKgPerBatch"
       | "bcfHours"
+      | "bctHours"
       | "analysisHours"
       | "pcoHours"
       | "plannedBatches"
@@ -457,6 +459,7 @@ export const useStore = create<AppState>((set, get) => ({
         inputKgPerBatch: Math.max(1, input.inputKgPerBatch),
         reactorPool: input.reactorPool.slice(),
         bcfHours: Math.max(1, input.bcfHours),
+        bctHours: Math.max(1, input.bctHours),
         analysisHours: Math.max(1, input.analysisHours),
         pcoHours: Math.max(0, input.pcoHours),
         plannedBatches: Math.max(1, input.plannedBatches),
@@ -575,6 +578,7 @@ export const useStore = create<AppState>((set, get) => ({
               reactorPool:
                 defaultPool.length > 0 ? defaultPool : [reactors[0]?.id ?? ""],
               bcfHours: isFinal ? 120 : 72,
+              bctHours: isFinal ? 120 : 72,
               analysisHours: isFinal ? 48 : 24,
               pcoHours: isFinal ? 12 : 8,
               plannedBatches: 1,
@@ -612,6 +616,7 @@ export const useStore = create<AppState>((set, get) => ({
                 .slice(0, 2)
                 .map((r) => r.id),
               bcfHours: 120,
+              bctHours: 120,
               analysisHours: 48,
               pcoHours: 12,
               plannedBatches: 5,

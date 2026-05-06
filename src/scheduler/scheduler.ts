@@ -16,7 +16,7 @@ import {
 interface BookedSlot {
   startMs: number;
   endMs: number; // includes analysis tail
-  cycleEndMs: number; // physical reactor occupancy end (= endMs - analysis tail)
+  cycleEndMs: number; // physical reactor occupancy end = startMs + bctMs
   // ─ Campaign metadata ─────────────────────────────────────────────────────
   // Two slots are "same campaign" iff their (apiId, stageId) match.
   apiId: string;
@@ -29,6 +29,13 @@ interface BookedSlot {
    *  would land more than 30 days after `campaignStartMs`, we insert a
    *  campaign-cleaning gap and reset the clock. */
   campaignStartMs: number;
+  /**
+   * Earliest start for the NEXT same-campaign batch at the same stage on
+   * this reactor. Equals startMs + bcfMs (BCF = Batch Charging Frequency).
+   * Cross-campaign slots use cycleEndMs + pcoMs instead (PCO path).
+   * Stored here so checkPredecessor doesn't need to recompute it.
+   */
+  nextSameCampaignStartMs: number;
 }
 
 /** Maximum continuous campaign duration before a forced campaign cleaning. */
@@ -159,7 +166,13 @@ export function runScheduler(
         earliestStart: Math.max(t, pred.cycleEndMs + newPcoMs),
       };
     }
-    return { kind: "none", earliestStart: Math.max(t, pred.cycleEndMs) };
+    // Same campaign, within 30-day cap.
+    // Next start = max(BCF interval from previous start, reactor free time).
+    // The BCF constraint enforces the "start₁ + BCF = start₂" rule.
+    return {
+      kind: "none",
+      earliestStart: Math.max(t, pred.nextSameCampaignStartMs, pred.cycleEndMs),
+    };
   }
 
   /**
@@ -305,7 +318,17 @@ export function runScheduler(
         if (round >= stage.plannedBatches) continue;
         if (stage.reactorPool.length === 0) continue;
 
-        const cycleMs = hoursToMs(stage.bcfHours);
+        // BCT = physical reactor occupancy duration.
+        // BCF = interval between same-campaign consecutive batch STARTS.
+        // BCF must be >= BCT; the scheduler enforces this by taking the max.
+        const bctMs = hoursToMs(
+          typeof stage.bctHours === "number" && stage.bctHours > 0
+            ? stage.bctHours
+            : stage.bcfHours // defensive fallback for legacy data
+        );
+        const bcfMs = hoursToMs(stage.bcfHours);
+        // cycleMs = reactor occupancy = BCT.
+        const cycleMs = bctMs;
         const analysisMs = hoursToMs(stage.analysisHours);
         const bufferMs = hoursToMs(INTER_STAGE_BUFFER_HOURS);
         const pcoMs = hoursToMs(
@@ -361,7 +384,8 @@ export function runScheduler(
           const newSlot: BookedSlot = {
             startMs,
             endMs: analysisEndMs,
-            cycleEndMs,
+            cycleEndMs,                          // startMs + bctMs
+            nextSameCampaignStartMs: startMs + bcfMs, // startMs + bcfMs
             apiId: api.id,
             stageId: stage.id,
             pcoMs,
@@ -370,7 +394,11 @@ export function runScheduler(
           insertSorted(slots, newSlot);
           reactorLoadHours.set(
             rid,
-            (reactorLoadHours.get(rid) ?? 0) + stage.bcfHours
+            // Load hours tracks physical occupancy (BCT), not BCF.
+            (reactorLoadHours.get(rid) ?? 0) +
+              (typeof stage.bctHours === "number" && stage.bctHours > 0
+                ? stage.bctHours
+                : stage.bcfHours)
           );
           reactorBatchCount.set(rid, (reactorBatchCount.get(rid) ?? 0) + 1);
         }

@@ -26,6 +26,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
   const [batchSizeKg, setBatchSizeKg] = useState(100);
   const [inputKgPerBatch, setInputKgPerBatch] = useState(100);
   const [bcfHours, setBcfHours] = useState(120);
+  const [bctHours, setBctHours] = useState(120);
   const [analysisHours, setAnalysisHours] = useState(48);
   const [pcoHours, setPcoHours] = useState(8);
   const [plannedBatches, setPlannedBatches] = useState(10);
@@ -92,8 +93,12 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
       setError("Stage name cannot be empty");
       return;
     }
-    if (batchSizeKg < 1 || bcfHours < 1 || analysisHours < 1 || plannedBatches < 1) {
+    if (batchSizeKg < 1 || bcfHours < 1 || bctHours < 1 || analysisHours < 1 || plannedBatches < 1) {
       setError("All numbers must be ≥ 1");
+      return;
+    }
+    if (bcfHours < bctHours) {
+      setError("BCF must be ≥ BCT (can't start a batch before the reactor is free)");
       return;
     }
     if (pcoHours < 0) {
@@ -106,6 +111,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
       batchSizeKg,
       inputKgPerBatch,
       bcfHours,
+      bctHours,
       analysisHours,
       pcoHours,
       plannedBatches,
@@ -202,6 +208,14 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
           value={bcfHours}
           onChange={setBcfHours}
           className="sm:col-span-1"
+          tooltip="Batch Charging Frequency — interval between same-campaign batch STARTS (start₁ + BCF = start₂). Must be ≥ BCT."
+        />
+        <NumField
+          label="BCT (h)"
+          value={bctHours}
+          onChange={setBctHours}
+          className="sm:col-span-1"
+          tooltip="Batch Completion Time — physical reactor occupancy per batch (start + BCT = reactor free). Must be ≤ BCF."
         />
         <NumField
           label="Analysis (h)"
@@ -221,10 +235,13 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
         <span className="font-semibold text-ink-300">Input/Batch</span> is what
         this stage consumes per batch (= upstream demand);{" "}
         <span className="font-semibold text-ink-300">Output/Batch</span> is what
-        it produces. Set them equal for 1:1 yield.{" "}
-        <span className="font-semibold text-ink-300">PCO</span> is the cleaning
-        gap before this stage when its reactor previously held a different
-        (API, stage) campaign. Planned batches are auto-computed.
+        it produces. Set equal for 1:1 yield.{" "}
+        <span className="font-semibold text-ink-300">BCF</span> = interval
+        between same-campaign batch starts;{" "}
+        <span className="font-semibold text-ink-300">BCT</span> = physical
+        reactor occupancy (BCF ≥ BCT).{" "}
+        <span className="font-semibold text-ink-300">PCO</span> = cleaning
+        gap on campaign change. Planned batches are auto-computed.
       </p>
 
       {/* Row 2: Reactor Pool */}
@@ -337,6 +354,7 @@ function NumField({
   onChange,
   className,
   allowZero,
+  tooltip,
 }: {
   label: string;
   value: number;
@@ -344,6 +362,8 @@ function NumField({
   className?: string;
   /** Allow 0 as a valid value (e.g. PCO = 0 → no cleaning needed). */
   allowZero?: boolean;
+  /** Optional hover tooltip on the label. */
+  tooltip?: string;
 }) {
   // Local string buffer so the user can clear the input and retype without
   // every transient keystroke clamping back to 1.
@@ -364,7 +384,9 @@ function NumField({
 
   return (
     <div className={className}>
-      <Label>{label}</Label>
+      <div title={tooltip}>
+        <Label>{label}</Label>
+      </div>
       <input
         type="number"
         min={min}

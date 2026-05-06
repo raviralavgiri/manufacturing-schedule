@@ -171,8 +171,11 @@ export default function StagesTab() {
                 <Th align="right" yellow>
                   Output/Batch (kg)
                 </Th>
-                <Th align="right" yellow>
+                <Th align="right" yellow title="Batch Charging Frequency — interval between consecutive same-campaign batch STARTS. start₁ + BCF = start₂">
                   BCF (h)
+                </Th>
+                <Th align="right" yellow title="Batch Completion Time — physical reactor occupancy per batch. start + BCT = batch end (reactor free)">
+                  BCT (h)
                 </Th>
                 <Th align="right" yellow>
                   Analysis (h)
@@ -268,11 +271,20 @@ export default function StagesTab() {
                     </td>
                     <td
                       className="px-3 py-2 text-right"
-                      title="BCF (Batch Charging Frequency) — time between consecutive batch starts at the same stage. Was previously labelled 'Cycle'."
+                      title="BCF (Batch Charging Frequency) — interval between consecutive same-campaign batch STARTS. start₁ + BCF = start₂. Must be ≥ BCT."
                     >
                       <EditableNumCell
                         value={r.bcfHours}
                         onChange={(v) => updateStageField(r.id, "bcfHours", v)}
+                      />
+                    </td>
+                    <td
+                      className="px-3 py-2 text-right"
+                      title="BCT (Batch Completion Time) — physical reactor occupancy per batch. start + BCT = reactor free. Controls how long the reactor is locked."
+                    >
+                      <EditableNumCell
+                        value={r.bctHours}
+                        onChange={(v) => updateStageField(r.id, "bctHours", v)}
                       />
                     </td>
                     <td className="px-3 py-2 text-right">
@@ -355,7 +367,7 @@ export default function StagesTab() {
               {rows.length === 0 && (
                 <tr>
                   <td
-                    colSpan={14}
+                    colSpan={15}
                     className="py-12 text-center text-sm text-ink-300"
                   >
                     No stages match. Click{" "}
@@ -375,15 +387,17 @@ export default function StagesTab() {
             <Pencil size={12} className="inline" /> Editable here:
           </span>
           Stage Name, Reactor Pool, Input/Batch (kg), Output/Batch (kg), BCF,
-          Analysis, PCO. Reactors on the{" "}
+          BCT, Analysis, PCO. Reactors on the{" "}
           <span className="font-bold">Master Reactor</span> tab; API target on
           the <span className="font-bold">APIs</span> tab.
           <span className="mt-1 block text-amber-300/80">
-            <span className="font-mono">BCF</span> = batch charging frequency
-            (gap between consecutive batch starts).{" "}
-            <span className="font-mono">PCO</span> = cleaning time before a
-            reactor switches campaign. Campaigns auto-cleanse every{" "}
-            <span className="font-mono">30 days</span> of continuous run.
+            <span className="font-mono">BCF</span> = interval between
+            same-campaign batch STARTs (start₁ + BCF = start₂).{" "}
+            <span className="font-mono">BCT</span> = physical reactor occupancy
+            per batch (start + BCT = reactor free). BCF ≥ BCT.{" "}
+            <span className="font-mono">PCO</span> = cleaning before a reactor
+            switches campaign. Campaigns auto-cleanse every{" "}
+            <span className="font-mono">30 days</span>.
           </span>
         </div>
         <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs text-ink-300">
@@ -407,14 +421,17 @@ function Th({
   align = "left",
   yellow,
   locked,
+  title,
 }: {
   children: React.ReactNode;
   align?: "left" | "right";
   yellow?: boolean;
   locked?: boolean;
+  title?: string;
 }) {
   return (
     <th
+      title={title}
       className={clsx(
         "border-b border-white/10 px-3 py-2 font-semibold",
         align === "right" ? "text-right" : "text-left",

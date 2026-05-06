@@ -153,8 +153,7 @@ function normalizeProject(p: any): Project | null {
     }
     const stages = Array.isArray(a.stages)
       ? a.stages.map((s: any) => {
-          // Migrate the legacy `cycleHours` field to the new `bcfHours`.
-          // We strip the old key so it doesn't leak through the spread.
+          // Migrate legacy `cycleHours` → `bcfHours` and default `bctHours`.
           const { cycleHours: _legacyCycle, ...rest } = s;
           const bcfHours =
             typeof s.bcfHours === "number" && s.bcfHours > 0
@@ -162,9 +161,15 @@ function normalizeProject(p: any): Project | null {
               : typeof _legacyCycle === "number" && _legacyCycle > 0
               ? _legacyCycle
               : 72;
+          // BCT defaults to BCF (back-to-back batches) when not explicitly set.
+          const bctHours =
+            typeof s.bctHours === "number" && s.bctHours > 0
+              ? s.bctHours
+              : bcfHours;
           return {
             ...rest,
             bcfHours,
+            bctHours,
             inputKgPerBatch:
               typeof s.inputKgPerBatch === "number" && s.inputKgPerBatch > 0
                 ? s.inputKgPerBatch
