@@ -61,7 +61,7 @@ export interface NewStageInput {
   batchSizeKg: number;
   inputKgPerBatch: number;
   reactorPool: string[];
-  cycleHours: number;
+  bcfHours: number;
   analysisHours: number;
   pcoHours: number;
   plannedBatches: number;
@@ -105,7 +105,7 @@ interface AppState {
       StageMaster,
       | "batchSizeKg"
       | "inputKgPerBatch"
-      | "cycleHours"
+      | "bcfHours"
       | "analysisHours"
       | "pcoHours"
       | "plannedBatches"
@@ -456,7 +456,7 @@ export const useStore = create<AppState>((set, get) => ({
         batchSizeKg: Math.max(1, input.batchSizeKg),
         inputKgPerBatch: Math.max(1, input.inputKgPerBatch),
         reactorPool: input.reactorPool.slice(),
-        cycleHours: Math.max(1, input.cycleHours),
+        bcfHours: Math.max(1, input.bcfHours),
         analysisHours: Math.max(1, input.analysisHours),
         pcoHours: Math.max(0, input.pcoHours),
         plannedBatches: Math.max(1, input.plannedBatches),
@@ -574,7 +574,7 @@ export const useStore = create<AppState>((set, get) => ({
               inputKgPerBatch: out,
               reactorPool:
                 defaultPool.length > 0 ? defaultPool : [reactors[0]?.id ?? ""],
-              cycleHours: isFinal ? 120 : 72,
+              bcfHours: isFinal ? 120 : 72,
               analysisHours: isFinal ? 48 : 24,
               pcoHours: isFinal ? 12 : 8,
               plannedBatches: 1,
@@ -611,7 +611,7 @@ export const useStore = create<AppState>((set, get) => ({
                 .filter((r) => r.reactorClass === "Cleanroom")
                 .slice(0, 2)
                 .map((r) => r.id),
-              cycleHours: 120,
+              bcfHours: 120,
               analysisHours: 48,
               pcoHours: 12,
               plannedBatches: 5,

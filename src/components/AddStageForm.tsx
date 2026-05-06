@@ -25,7 +25,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
   const [stageName, setStageName] = useState("");
   const [batchSizeKg, setBatchSizeKg] = useState(100);
   const [inputKgPerBatch, setInputKgPerBatch] = useState(100);
-  const [cycleHours, setCycleHours] = useState(120);
+  const [bcfHours, setBcfHours] = useState(120);
   const [analysisHours, setAnalysisHours] = useState(48);
   const [pcoHours, setPcoHours] = useState(8);
   const [plannedBatches, setPlannedBatches] = useState(10);
@@ -92,7 +92,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
       setError("Stage name cannot be empty");
       return;
     }
-    if (batchSizeKg < 1 || cycleHours < 1 || analysisHours < 1 || plannedBatches < 1) {
+    if (batchSizeKg < 1 || bcfHours < 1 || analysisHours < 1 || plannedBatches < 1) {
       setError("All numbers must be ≥ 1");
       return;
     }
@@ -105,7 +105,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
       stageName,
       batchSizeKg,
       inputKgPerBatch,
-      cycleHours,
+      bcfHours,
       analysisHours,
       pcoHours,
       plannedBatches,
@@ -198,9 +198,9 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
           className="sm:col-span-1"
         />
         <NumField
-          label="Cycle (h)"
-          value={cycleHours}
-          onChange={setCycleHours}
+          label="BCF (h)"
+          value={bcfHours}
+          onChange={setBcfHours}
           className="sm:col-span-1"
         />
         <NumField

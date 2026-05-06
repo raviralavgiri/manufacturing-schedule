@@ -17,27 +17,31 @@ interface BookedSlot {
   startMs: number;
   endMs: number; // includes analysis tail
   cycleEndMs: number; // physical reactor occupancy end (= endMs - analysis tail)
-  // Campaign metadata — used by PCO checks to decide whether a cleaning gap
-  // is needed before/after this slot when something else lands on the same
-  // reactor. Two slots are "same campaign" iff (apiId, stageId) match — i.e.
-  // the SAME stage of the SAME API. Same-campaign batches go back-to-back
-  // with no PCO; everything else needs a cleaning gap.
+  // ─ Campaign metadata ─────────────────────────────────────────────────────
+  // Two slots are "same campaign" iff their (apiId, stageId) match.
   apiId: string;
   stageId: string;
+  /** Stage's PCO time (ms) — needed by future scans to know how big a gap
+   *  to leave when something else lands BEFORE this slot. */
   pcoMs: number;
+  /** When this slot's CURRENT campaign began on the reactor it lives on.
+   *  Used to enforce the 30-day campaign cap: if a same-campaign successor
+   *  would land more than 30 days after `campaignStartMs`, we insert a
+   *  campaign-cleaning gap and reset the clock. */
+  campaignStartMs: number;
 }
 
+/** Maximum continuous campaign duration before a forced campaign cleaning. */
+const CAMPAIGN_MAX_MS = 30 * 24 * 3600 * 1000;
+
 /**
- * Equipment-availability sequencer — TRAIN model + PCO.
+ * Equipment-availability sequencer — TRAIN model + PCO + 30-day campaign cap.
  *
  * Each batch of a stage locks **every reactor in stage.reactorPool**
- * simultaneously for the cycle window [start, start + cycleHours]. Examples:
+ * simultaneously for the cycle window [start, start + bcfHours]. Examples:
  *
  *   pool = [R101, R102, R103]      → batch 1 books all 3 reactors together
- *   10 batches with the same pool  → run strictly serially
- *                                    (you cannot run two batches in parallel
- *                                    even though there are 3 reactors —
- *                                    they're all needed for one batch)
+ *   10 batches with the same pool  → run strictly serially, BCF apart
  *
  * Constraints (provably never violated):
  *   1. No reactor clash: a reactor's [start, cycleEnd] windows are
@@ -48,12 +52,15 @@ interface BookedSlot {
  *      transfer buffer.
  *   3. Priority ordering: APIs are processed in priority order (P1 first,
  *      P5 last) within each round so high-priority APIs grab earliest slots.
- *   4. Product Change Over (PCO): when a reactor switches from one
- *      (apiId, stageId) campaign to a different one, the new batch's start
- *      must be >= prev.cycleEnd + newStage.pcoHours. Same-campaign batches
- *      have zero PCO. The same rule applies in reverse for any successor
- *      slot we'd land BEFORE: our cycleEnd must be <= next.start - next.pco
- *      if we differ from `next`'s campaign.
+ *   4. PCO: when a reactor switches from one (apiId, stageId) campaign to a
+ *      different one, the new batch's start must be
+ *      >= prev.cycleEnd + newStage.pcoHours.
+ *   5. Campaign cap: even within the SAME campaign, a continuous run on a
+ *      reactor cannot exceed 30 days. The 11th-or-later batch in a
+ *      30-days-old campaign incurs a campaign-cleaning gap (= the stage's
+ *      pcoHours) and resets the campaign clock. Treated as a PCO
+ *      equivalent in terms of duration but tagged separately so the Gantt
+ *      can colour it differently.
  *
  * Reactor analysis windows (analysisHours) DO NOT lock the reactor — they
  * only delay the next stage of the SAME API. Other batches can use these
@@ -64,8 +71,6 @@ export function runScheduler(
   reactors: Reactor[],
   planWindow?: PlanWindow
 ): ScheduleResult {
-  // Global plan window applied to every API. Falls back to FY 26-27 if not
-  // provided (e.g. legacy callers).
   const windowStart =
     planWindow && Number.isFinite(planWindow.startMs)
       ? planWindow.startMs
@@ -88,12 +93,10 @@ export function runScheduler(
   const allBatches: BatchScheduleEntry[] = [];
   let clashCount = 0;
 
-  // APIs in priority order (P1 first ... P5 last)
   const apisInPriorityOrder = [...apis].sort(
     (a, b) => a.priority - b.priority || a.id.localeCompare(b.id)
   );
 
-  // Find max batches across all stages (loop bound)
   let maxBatches = 0;
   apis.forEach((a) =>
     a.stages.forEach((s) => {
@@ -101,8 +104,6 @@ export function runScheduler(
     })
   );
 
-  // Per-API per-stage end tracker: latest analysis end so stage N+1 can wait.
-  // All APIs share the global window's start as their initial horizon.
   const apiStageLastEnd = new Map<string, number[]>();
   apis.forEach((a) =>
     apiStageLastEnd.set(
@@ -112,30 +113,70 @@ export function runScheduler(
   );
 
   /**
+   * Decide what cleaning (if any) is required when we want to book a new
+   * slot at time `t` on reactor R, given R's current sorted slot list.
+   *
+   * Returns:
+   *   - kind: 'none' | 'pco' | 'campaign'
+   *   - earliestStart: minimum start time on R that satisfies the cleaning
+   *                    requirement implied by the predecessor (could be
+   *                    `t` unchanged if no predecessor or no cleaning).
+   *
+   * `kind === 'campaign'` is set only when the same campaign has been
+   * running on R for more than CAMPAIGN_MAX_MS (measured from the
+   * predecessor's `campaignStartMs`).
+   */
+  function checkPredecessor(
+    slots: BookedSlot[],
+    t: number,
+    newApiId: string,
+    newStageId: string,
+    newPcoMs: number
+  ): { kind: "none" | "pco" | "campaign"; earliestStart: number } {
+    // Walk forward to find the slot with the largest cycleEndMs <= t.
+    let pred: BookedSlot | null = null;
+    for (const slot of slots) {
+      if (slot.cycleEndMs <= t) {
+        if (!pred || slot.cycleEndMs > pred.cycleEndMs) pred = slot;
+      } else {
+        break;
+      }
+    }
+    if (!pred) return { kind: "none", earliestStart: t };
+    const sameCampaign =
+      pred.apiId === newApiId && pred.stageId === newStageId;
+    if (!sameCampaign) {
+      return {
+        kind: "pco",
+        earliestStart: Math.max(t, pred.cycleEndMs + newPcoMs),
+      };
+    }
+    // Same campaign — check the 30-day cap.
+    const campaignAge = t - pred.campaignStartMs;
+    if (campaignAge > CAMPAIGN_MAX_MS) {
+      return {
+        kind: "campaign",
+        earliestStart: Math.max(t, pred.cycleEndMs + newPcoMs),
+      };
+    }
+    return { kind: "none", earliestStart: Math.max(t, pred.cycleEndMs) };
+  }
+
+  /**
    * Find the EARLIEST time t >= earliest such that [t, t + cycleMs) is free
-   * on every reactor in the pool simultaneously, INCLUDING the PCO cleaning
-   * gap before/after any campaign change.
+   * on every reactor in the pool simultaneously, INCLUDING any cleaning
+   * gap required by predecessor or successor slots.
    *
-   * For each reactor R in the train, t is valid iff:
-   *   1. No booked slot on R overlaps [t, t+cycleMs).
-   *   2. (Predecessor PCO) For every booked slot S on R with S.cycleEnd <= t:
-   *        if S.campaign !== newCampaign → t >= S.cycleEnd + newPcoMs
-   *   3. (Successor PCO) For the first booked slot S on R with S.start
-   *      >= t+cycleMs: if S.campaign !== newCampaign → t+cycleMs <=
-   *        S.start - S.pcoMs (i.e. there's room for S's own cleaning gap
-   *        BEFORE S runs). If not, we treat S as a hard block and advance
-   *        past it (next iteration will use S as predecessor instead).
-   *
-   * If any check fails on any reactor, advance t to the maximum required
-   * advance across all checks and retry.
-   *
-   * Why predecessor + successor: a low-priority API may slot into an early
-   * gap — and we need the gap to be PCO-safe on BOTH ends, not just before
-   * us. Otherwise we'd be forcing whoever already booked the next slot to
-   * either wait or violate their own PCO requirement, which is worse.
-   *
-   * Worst case O(B * P * iters); B = total bookings across pool, P = pool
-   * size, iters bounded by the safety counter (5000).
+   * Algorithm:
+   *   - For each reactor in the train, compute the predecessor cleaning
+   *     constraint via checkPredecessor and the successor PCO constraint.
+   *   - If any constraint forces an advance, jump to the max required
+   *     advance across all reactors and retry.
+   *   - On success, return both the start time and the per-reactor
+   *     cleaning kinds (we use the strongest cleaning kind across the
+   *     train as the cleaning-type label for the batch — campaign > pco
+   *     > none, since campaign and pco have the same duration but
+   *     different semantics).
    */
   function findTrainSlot(
     pool: string[],
@@ -144,7 +185,7 @@ export function runScheduler(
     newApiId: string,
     newStageId: string,
     newPcoMs: number
-  ): number {
+  ): { startMs: number; cleaningKind: "none" | "pco" | "campaign" } {
     let t = earliest;
     const lookups = pool.map((rid) => reactorBookings.get(rid)!);
 
@@ -153,64 +194,108 @@ export function runScheduler(
       let needAdvance = false;
 
       for (const slots of lookups) {
-        let predRequired = -Infinity;
+        // Successor + overlap pass. We also separately compute the
+        // predecessor requirement via checkPredecessor below.
         let conflictThisReactor = false;
-
         for (const slot of slots) {
           const sameCampaign =
             slot.apiId === newApiId && slot.stageId === newStageId;
-
-          if (slot.cycleEndMs <= t) {
-            // Predecessor: enforce PCO before us if campaign differs.
-            const required =
-              slot.cycleEndMs + (sameCampaign ? 0 : newPcoMs);
-            if (required > predRequired) predRequired = required;
-            continue;
-          }
-
+          if (slot.cycleEndMs <= t) continue;
           if (slot.startMs >= t + cycleMs) {
-            // Successor: we need to leave room for ITS cleaning gap before
-            // it runs (if its campaign differs from ours).
             const requiredEnd =
               slot.startMs - (sameCampaign ? 0 : slot.pcoMs);
             if (t + cycleMs > requiredEnd) {
-              // Can't fit before this slot — jump past it. Next iteration
-              // will treat slot as the predecessor and apply newPcoMs.
               if (slot.cycleEndMs > advance) advance = slot.cycleEndMs;
               needAdvance = true;
               conflictThisReactor = true;
             }
-            // No later slot on this reactor can affect us (sorted by start).
             break;
           }
-
-          // Slot overlaps [t, t+cycleMs) — wait for it to free.
+          // Slot overlaps [t, t+cycleMs)
           if (slot.cycleEndMs > advance) advance = slot.cycleEndMs;
           needAdvance = true;
           conflictThisReactor = true;
           break;
         }
+        if (conflictThisReactor) continue;
 
-        if (!conflictThisReactor && predRequired > t) {
-          if (predRequired > advance) advance = predRequired;
+        const pred = checkPredecessor(
+          slots,
+          t,
+          newApiId,
+          newStageId,
+          newPcoMs
+        );
+        if (pred.earliestStart > t) {
+          if (pred.earliestStart > advance) advance = pred.earliestStart;
           needAdvance = true;
         }
       }
 
-      if (!needAdvance) return t;
+      if (!needAdvance) {
+        // We've found a valid t. Now compute the strongest cleaning kind
+        // across all reactors in the pool — that's what gets shown on
+        // the batch's faded tail.
+        let cleaningKind: "none" | "pco" | "campaign" = "none";
+        for (const slots of lookups) {
+          const pred = checkPredecessor(
+            slots,
+            t,
+            newApiId,
+            newStageId,
+            newPcoMs
+          );
+          if (pred.kind === "campaign") {
+            cleaningKind = "campaign";
+            break; // strongest kind, no need to keep looking
+          }
+          if (pred.kind === "pco" && cleaningKind === "none") {
+            cleaningKind = "pco";
+          }
+        }
+        return { startMs: t, cleaningKind };
+      }
       t = advance;
     }
-    return t; // safety fallback
+    return { startMs: t, cleaningKind: "none" }; // safety fallback
   }
 
   /** Insert a booking into a reactor's sorted slot list (by startMs). */
   function insertSorted(slots: BookedSlot[], slot: BookedSlot): void {
-    // Linear scan from the end (most appends are still chronological because
-    // the algorithm processes batches mostly in order). Falls back to early
-    // insertion when a low-priority API slots into an earlier gap.
     let i = slots.length;
     while (i > 0 && slots[i - 1].startMs > slot.startMs) i--;
     slots.splice(i, 0, slot);
+  }
+
+  /**
+   * Compute the campaignStartMs for a freshly-booked slot on reactor R.
+   * Continues the predecessor's campaign clock if (a) same campaign and
+   * (b) the gap stayed within CAMPAIGN_MAX_MS. Otherwise this slot starts
+   * a new campaign at its own startMs.
+   */
+  function deriveCampaignStart(
+    slots: BookedSlot[],
+    newStartMs: number,
+    newApiId: string,
+    newStageId: string
+  ): number {
+    let pred: BookedSlot | null = null;
+    for (const slot of slots) {
+      if (slot.cycleEndMs <= newStartMs) {
+        if (!pred || slot.cycleEndMs > pred.cycleEndMs) pred = slot;
+      } else {
+        break;
+      }
+    }
+    if (
+      pred &&
+      pred.apiId === newApiId &&
+      pred.stageId === newStageId &&
+      newStartMs - pred.campaignStartMs <= CAMPAIGN_MAX_MS
+    ) {
+      return pred.campaignStartMs;
+    }
+    return newStartMs;
   }
 
   for (let round = 0; round < maxBatches; round++) {
@@ -220,30 +305,22 @@ export function runScheduler(
         if (round >= stage.plannedBatches) continue;
         if (stage.reactorPool.length === 0) continue;
 
-        const cycleMs = hoursToMs(stage.cycleHours);
+        const cycleMs = hoursToMs(stage.bcfHours);
         const analysisMs = hoursToMs(stage.analysisHours);
         const bufferMs = hoursToMs(INTER_STAGE_BUFFER_HOURS);
-        // PCO defaults to 8h on legacy data via the storage migration; treat
-        // anything missing/invalid as 0 here (defensive — should never fire
-        // after migration).
         const pcoMs = hoursToMs(
           typeof stage.pcoHours === "number" && stage.pcoHours >= 0
             ? stage.pcoHours
             : 0
         );
 
-        // 1. Earliest possible start = max(prev stage's batch end + buffer,
-        //    global plan window start)
         const prevStageReady =
           sIdx === 0
             ? windowStart
             : apiStageLastEnd.get(api.id)![sIdx - 1] + bufferMs;
         const earliestStart = Math.max(prevStageReady, windowStart);
 
-        // 2. Find the EARLIEST gap on the train where [t, t+cycle) is free on
-        //    every pool reactor simultaneously, with PCO checks against
-        //    predecessor and successor campaigns on each reactor.
-        const startMs = findTrainSlot(
+        const { startMs, cleaningKind } = findTrainSlot(
           stage.reactorPool,
           earliestStart,
           cycleMs,
@@ -254,8 +331,8 @@ export function runScheduler(
         const cycleEndMs = startMs + cycleMs;
         const analysisEndMs = cycleEndMs + analysisMs;
 
-        // 3. Defensive clash check — verify the slot we found genuinely doesn't
-        //    overlap any existing booking on any pool reactor.
+        // Defensive clash check — verify the slot we found genuinely doesn't
+        // overlap any existing booking on any pool reactor.
         let clash = false;
         for (const rid of stage.reactorPool) {
           const slots = reactorBookings.get(rid)!;
@@ -269,33 +346,41 @@ export function runScheduler(
         }
         if (clash) clashCount++;
 
-        // 4. Book the cycle on EVERY reactor in the train, inserting at the
-        //    sorted position so future gap-finder scans walk slots in time order.
-        const newSlot: BookedSlot = {
-          startMs,
-          endMs: analysisEndMs,
-          cycleEndMs,
-          apiId: api.id,
-          stageId: stage.id,
-          pcoMs,
-        };
+        // Book on every reactor in the train, computing each reactor's own
+        // campaign start (they may differ if the train's reactors had
+        // different campaign histories — which is rare but possible when
+        // pools change over time).
         for (const rid of stage.reactorPool) {
-          insertSorted(reactorBookings.get(rid)!, newSlot);
+          const slots = reactorBookings.get(rid)!;
+          const campaignStartMs = deriveCampaignStart(
+            slots,
+            startMs,
+            api.id,
+            stage.id
+          );
+          const newSlot: BookedSlot = {
+            startMs,
+            endMs: analysisEndMs,
+            cycleEndMs,
+            apiId: api.id,
+            stageId: stage.id,
+            pcoMs,
+            campaignStartMs,
+          };
+          insertSorted(slots, newSlot);
           reactorLoadHours.set(
             rid,
-            (reactorLoadHours.get(rid) ?? 0) + stage.cycleHours
+            (reactorLoadHours.get(rid) ?? 0) + stage.bcfHours
           );
-          reactorBatchCount.set(
-            rid,
-            (reactorBatchCount.get(rid) ?? 0) + 1
-          );
+          reactorBatchCount.set(rid, (reactorBatchCount.get(rid) ?? 0) + 1);
         }
 
-        // 5. Stage N+1 of THIS API waits for analysis end
         apiStageLastEnd.get(api.id)![sIdx] = Math.max(
           apiStageLastEnd.get(api.id)![sIdx],
           analysisEndMs
         );
+
+        const cleaningBeforeMs = cleaningKind === "none" ? 0 : pcoMs;
 
         const entry: BatchScheduleEntry = {
           batchId: `${stage.id}-B${round + 1}`,
@@ -306,45 +391,41 @@ export function runScheduler(
           stageNo: stage.stageNo,
           stageName: stage.stageName,
           batchNo: round + 1,
-          reactorId: stage.reactorPool[0], // primary / lead reactor
+          reactorId: stage.reactorPool[0],
           reactorIds: stage.reactorPool.slice(),
           startMs,
           endMs: cycleEndMs,
           analysisEndMs,
-          // "In FY" = batch fits within the global plan window
-          inFY:
-            startMs >= windowStart &&
-            cycleEndMs <= windowEnd,
+          inFY: startMs >= windowStart && cycleEndMs <= windowEnd,
           clash,
           outputKg: stage.batchSizeKg,
           inputKg:
-            typeof stage.inputKgPerBatch === "number" && stage.inputKgPerBatch > 0
+            typeof stage.inputKgPerBatch === "number" &&
+            stage.inputKgPerBatch > 0
               ? stage.inputKgPerBatch
               : stage.batchSizeKg,
+          cleaningBeforeMs,
+          cleaningType: cleaningKind,
         };
         allBatches.push(entry);
       }
     }
   }
 
-  // Sort by start for stable output
   allBatches.sort((a, b) => a.startMs - b.startMs);
 
-  // Reactor usage stats — count every reactor in every batch's train
   const reactorUsage: Record<string, { busyHours: number; batchCount: number }> = {};
   reactors.forEach((r) => (reactorUsage[r.id] = { busyHours: 0, batchCount: 0 }));
   allBatches.forEach((b) => {
-    const cycleHours = (b.endMs - b.startMs) / 3600000;
+    const bctHours = (b.endMs - b.startMs) / 3600000;
     b.reactorIds.forEach((rid) => {
       const u = reactorUsage[rid];
       if (!u) return;
-      u.busyHours += cycleHours;
+      u.busyHours += bctHours;
       u.batchCount += 1;
     });
   });
 
-  // Weekly occupancy: bill every reactor in the train for the cycle window.
-  // Range = the global plan window so the heatmap mirrors the planning span.
   const weeks = computeWeeks(windowStart, windowEnd);
   const weekCount = weeks.length;
   const weeklyReactorOccupancy: number[][] = reactors.map(() =>
@@ -359,8 +440,7 @@ export function runScheduler(
       while (cursor < b.endMs) {
         const wIdx = weekIndexIn(weeks, cursor);
         if (wIdx < 0) break;
-        const weekEnd =
-          weeks[wIdx].startMs + 7 * 24 * 3600 * 1000;
+        const weekEnd = weeks[wIdx].startMs + 7 * 24 * 3600 * 1000;
         const segmentEnd = Math.min(b.endMs, weekEnd);
         const hours = (segmentEnd - cursor) / 3600000;
         weeklyReactorOccupancy[rIdx][wIdx] += hours;

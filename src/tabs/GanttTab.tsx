@@ -252,7 +252,7 @@ export default function GanttTab() {
         subtitle={
           anyFilterActive
             ? `Showing ${filteredBatches.length} of ${schedule.batches.length} batches (filters active)`
-            : "Solid bar = reactor cycle, faded tail = analysis window. Color encodes the API."
+            : "Solid bar = reactor cycle. Cyan tail = analysis window, yellow pre-tail = PCO cleaning, green pre-tail = 30-day campaign cleaning."
         }
         right={
           <div className="flex items-center gap-2">
@@ -356,6 +356,8 @@ export default function GanttTab() {
                   "Start",
                   "End (Cycle)",
                   "Analysis End",
+                  "Cleaning Before (h)",
+                  "Cleaning Type",
                   "FY",
                   "Input kg",
                   "Output kg",
@@ -374,6 +376,8 @@ export default function GanttTab() {
                   fmtDateTime(b.startMs),
                   fmtDateTime(b.endMs),
                   fmtDateTime(b.analysisEndMs),
+                  ((b.cleaningBeforeMs ?? 0) / 3600 / 1000).toFixed(2),
+                  b.cleaningType ?? "none",
                   b.inFY ? "FY" : "Ovr",
                   b.inputKg,
                   b.outputKg,
@@ -381,6 +385,69 @@ export default function GanttTab() {
                 const filterTag = anyFilterActive ? "_filtered" : "";
                 downloadCsv(
                   `gantt_${mode}${filterTag}_${fileStamp()}.csv`,
+                  headers,
+                  rows
+                );
+              }}
+              onReactorCsv={() => {
+                // One row per (batch × reactor-in-train). This shows
+                // every reactor's individual occupancy — useful for
+                // cross-checking reactor calendars without switching view.
+                const headers = [
+                  "Reactor ID",
+                  "Reactor Name",
+                  "Class",
+                  "Batch ID",
+                  "API ID",
+                  "API Name",
+                  "Stage No",
+                  "Stage Name",
+                  "Batch #",
+                  "Start",
+                  "End (Cycle)",
+                  "Analysis End",
+                  "Cleaning Before (h)",
+                  "Cleaning Type",
+                  "FY",
+                  "Input kg",
+                  "Output kg",
+                ];
+                const rows: (string | number)[][] = [];
+                // Use ALL batches (not filteredBatches) so the reactor
+                // export is always complete regardless of API/Stage filter.
+                schedule.batches.forEach((b) => {
+                  b.reactorIds.forEach((rid) => {
+                    const r = reactors.find((x) => x.id === rid);
+                    rows.push([
+                      rid,
+                      r?.name ?? rid,
+                      r?.reactorClass ?? "",
+                      b.batchId,
+                      b.apiId,
+                      b.apiName,
+                      b.stageNo,
+                      b.stageName,
+                      b.batchNo,
+                      fmtDateTime(b.startMs),
+                      fmtDateTime(b.endMs),
+                      fmtDateTime(b.analysisEndMs),
+                      ((b.cleaningBeforeMs ?? 0) / 3600 / 1000).toFixed(2),
+                      b.cleaningType ?? "none",
+                      b.inFY ? "FY" : "Ovr",
+                      b.inputKg,
+                      b.outputKg,
+                    ]);
+                  });
+                });
+                // Sort by reactor id then by start time so the output
+                // reads chronologically per reactor.
+                rows.sort((a, b) => {
+                  const rCmp = String(a[0]).localeCompare(String(b[0]));
+                  if (rCmp !== 0) return rCmp;
+                  return String(a[9]).localeCompare(String(b[9]));
+                });
+                downloadCsv(
+                  `gantt_reactor_wise_${fileStamp()}.csv`,
                   headers,
                   rows
                 );
@@ -745,6 +812,24 @@ export default function GanttTab() {
                           0,
                           (analysisEndWk - cycleEndWk) * pxPerWeek
                         );
+                        // Cleaning gap rendered BEFORE the bar — yellow for
+                        // PCO, green for the 30-day campaign cleaning.
+                        // `cleaningBeforeMs` lives on each batch; the tail
+                        // visually fills the gap from this batch's predecessor
+                        // on its train to this batch's start.
+                        const cleaningHrs =
+                          (b.cleaningBeforeMs ?? 0) / (3600 * 1000);
+                        const cleaningWidth = Math.max(
+                          0,
+                          (cleaningHrs / (7 * 24)) * pxPerWeek
+                        );
+                        const cleanType = b.cleaningType ?? "none";
+                        const cleanColor =
+                          cleanType === "campaign"
+                            ? "#a3e635" // lime-400
+                            : cleanType === "pco"
+                            ? "#fbbf24" // amber-400
+                            : null;
                         if (startWk >= totalWeeks) return null;
                         const barH = rowH - 6;
 
@@ -757,7 +842,7 @@ export default function GanttTab() {
                           <div
                             key={b.batchId}
                             className="group absolute top-1/2 -translate-y-1/2"
-                            style={{ left }}
+                            style={{ left: Math.max(0, left - cleaningWidth) }}
                             title={`${b.batchId} · ${b.reactorId}\n${new Date(
                               b.startMs
                             ).toDateString()} → ${new Date(
@@ -765,6 +850,23 @@ export default function GanttTab() {
                             ).toDateString()}`}
                           >
                             <div className="flex items-center">
+                              {cleanColor && cleaningWidth > 1 && (
+                                <div
+                                  style={{
+                                    width: cleaningWidth,
+                                    height: barH,
+                                    background: `linear-gradient(90deg, ${cleanColor}22, ${cleanColor}55)`,
+                                    border: `1px dashed ${cleanColor}80`,
+                                    borderRight: "none",
+                                  }}
+                                  className="rounded-l-sm opacity-70"
+                                  title={
+                                    cleanType === "campaign"
+                                      ? `Campaign cleaning · ${cleaningHrs.toFixed(1)}h`
+                                      : `PCO cleaning · ${cleaningHrs.toFixed(1)}h`
+                                  }
+                                />
+                              )}
                               <div
                                 style={{
                                   width: cycleWidth,
@@ -772,7 +874,12 @@ export default function GanttTab() {
                                   background: barColor,
                                   boxShadow: `0 0 6px ${barColor}99, inset 0 1px 0 rgba(255,255,255,0.25)`,
                                 }}
-                                className="rounded-l-sm border border-white/20 transition-all group-hover:brightness-125 group-hover:saturate-150"
+                                className={clsx(
+                                  "border border-white/20 transition-all group-hover:brightness-125 group-hover:saturate-150",
+                                  cleanColor && cleaningWidth > 1
+                                    ? ""
+                                    : "rounded-l-sm"
+                                )}
                               />
                               {tailWidth > 1 && (
                                 <div
@@ -813,6 +920,22 @@ export default function GanttTab() {
                                 Analysis End:{" "}
                                 {new Date(b.analysisEndMs).toLocaleString()}
                               </div>
+                              {(b.cleaningType ?? "none") !== "none" && (
+                                <div
+                                  className={clsx(
+                                    "text-[10px]",
+                                    b.cleaningType === "campaign"
+                                      ? "text-lime-300"
+                                      : "text-amber-300"
+                                  )}
+                                >
+                                  {b.cleaningType === "campaign"
+                                    ? "Campaign cleaning"
+                                    : "PCO cleaning"}{" "}
+                                  before:{" "}
+                                  {(b.cleaningBeforeMs / 3600 / 1000).toFixed(1)}h
+                                </div>
+                              )}
                               <div
                                 className={clsx(
                                   "mt-0.5 font-bold",
@@ -857,6 +980,30 @@ export default function GanttTab() {
               />
             }
             label="Analysis window (faded tail)"
+          />
+          <Legend
+            swatch={
+              <span
+                className="inline-block h-3 w-6 rounded-sm border border-dashed border-amber-300"
+                style={{
+                  background:
+                    "linear-gradient(90deg, rgba(251,191,36,0.13), rgba(251,191,36,0.4))",
+                }}
+              />
+            }
+            label="PCO cleaning (yellow pre-tail)"
+          />
+          <Legend
+            swatch={
+              <span
+                className="inline-block h-3 w-6 rounded-sm border border-dashed border-lime-300"
+                style={{
+                  background:
+                    "linear-gradient(90deg, rgba(163,230,53,0.13), rgba(163,230,53,0.4))",
+                }}
+              />
+            }
+            label="Campaign cleaning (green pre-tail · 30d)"
           />
           {mode === "by-reactor" && (
             <span className="inline-flex items-center gap-1.5 rounded-md border border-violet-300/30 bg-violet-300/8 px-2 py-1 font-semibold text-violet-200">

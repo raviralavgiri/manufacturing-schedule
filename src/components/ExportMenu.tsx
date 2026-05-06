@@ -11,6 +11,8 @@ import { clsx } from "clsx";
 
 interface Props {
   onCsv?: () => void;
+  /** Extra CSV export action — typically "Reactor-wise Gantt CSV". */
+  onReactorCsv?: () => void;
   onPng?: () => Promise<void> | void;
   onPrint?: () => void;
   /** Override the button's primary label (default "Export"). */
@@ -21,6 +23,7 @@ interface Props {
 
 export default function ExportMenu({
   onCsv,
+  onReactorCsv,
   onPng,
   onPrint,
   label = "Export",
@@ -80,10 +83,21 @@ export default function ExportMenu({
             <ExportItem
               icon={<FileText size={13} />}
               title="CSV"
-              subtitle="spreadsheet-friendly data"
+              subtitle="current view — all batches"
               onClick={() => {
                 setOpen(false);
                 onCsv();
+              }}
+            />
+          )}
+          {onReactorCsv && (
+            <ExportItem
+              icon={<FileText size={13} />}
+              title="Reactor-wise CSV"
+              subtitle="one row per reactor per batch"
+              onClick={() => {
+                setOpen(false);
+                onReactorCsv();
               }}
             />
           )}

@@ -172,7 +172,7 @@ export default function StagesTab() {
                   Output/Batch (kg)
                 </Th>
                 <Th align="right" yellow>
-                  Cycle (h)
+                  BCF (h)
                 </Th>
                 <Th align="right" yellow>
                   Analysis (h)
@@ -266,10 +266,13 @@ export default function StagesTab() {
                         }
                       />
                     </td>
-                    <td className="px-3 py-2 text-right">
+                    <td
+                      className="px-3 py-2 text-right"
+                      title="BCF (Batch Charging Frequency) — time between consecutive batch starts at the same stage. Was previously labelled 'Cycle'."
+                    >
                       <EditableNumCell
-                        value={r.cycleHours}
-                        onChange={(v) => updateStageField(r.id, "cycleHours", v)}
+                        value={r.bcfHours}
+                        onChange={(v) => updateStageField(r.id, "bcfHours", v)}
                       />
                     </td>
                     <td className="px-3 py-2 text-right">
@@ -371,14 +374,16 @@ export default function StagesTab() {
           <span className="mr-1 font-bold">
             <Pencil size={12} className="inline" /> Editable here:
           </span>
-          Stage Name, Reactor Pool, Input/Batch (kg), Output/Batch (kg), Cycle,
+          Stage Name, Reactor Pool, Input/Batch (kg), Output/Batch (kg), BCF,
           Analysis, PCO. Reactors on the{" "}
           <span className="font-bold">Master Reactor</span> tab; API target on
           the <span className="font-bold">APIs</span> tab.
           <span className="mt-1 block text-amber-300/80">
-            <span className="font-mono">PCO</span> = cleaning time required
-            before this stage runs on a reactor that previously held a
-            different (API, stage) campaign. Same-campaign batches → 0h.
+            <span className="font-mono">BCF</span> = batch charging frequency
+            (gap between consecutive batch starts).{" "}
+            <span className="font-mono">PCO</span> = cleaning time before a
+            reactor switches campaign. Campaigns auto-cleanse every{" "}
+            <span className="font-mono">30 days</span> of continuous run.
           </span>
         </div>
         <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs text-ink-300">

@@ -152,17 +152,29 @@ function normalizeProject(p: any): Project | null {
       }
     }
     const stages = Array.isArray(a.stages)
-      ? a.stages.map((s: any) => ({
-          ...s,
-          inputKgPerBatch:
-            typeof s.inputKgPerBatch === "number" && s.inputKgPerBatch > 0
-              ? s.inputKgPerBatch
-              : s.batchSizeKg,
-          pcoHours:
-            typeof s.pcoHours === "number" && s.pcoHours >= 0
-              ? s.pcoHours
-              : 8,
-        }))
+      ? a.stages.map((s: any) => {
+          // Migrate the legacy `cycleHours` field to the new `bcfHours`.
+          // We strip the old key so it doesn't leak through the spread.
+          const { cycleHours: _legacyCycle, ...rest } = s;
+          const bcfHours =
+            typeof s.bcfHours === "number" && s.bcfHours > 0
+              ? s.bcfHours
+              : typeof _legacyCycle === "number" && _legacyCycle > 0
+              ? _legacyCycle
+              : 72;
+          return {
+            ...rest,
+            bcfHours,
+            inputKgPerBatch:
+              typeof s.inputKgPerBatch === "number" && s.inputKgPerBatch > 0
+                ? s.inputKgPerBatch
+                : s.batchSizeKg,
+            pcoHours:
+              typeof s.pcoHours === "number" && s.pcoHours >= 0
+                ? s.pcoHours
+                : 8,
+          };
+        })
       : [];
     const {
       startMs: _legacyStart,

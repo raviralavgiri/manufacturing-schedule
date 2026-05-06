@@ -33,7 +33,18 @@ export interface StageMaster {
    */
   inputKgPerBatch: number;
   reactorPool: string[];
-  cycleHours: number;
+  /**
+   * Batch Charging Frequency (BCF) — the time interval in hours between the
+   * START of two consecutive batches at the same stage. A new batch is
+   * initiated at every BCF interval (subject to reactor availability and
+   * cleaning constraints). Was previously named `cycleHours`; legacy data
+   * is migrated transparently by the storage loader.
+   *
+   * BCT (Batch Completion Time) — the total duration a single batch occupies
+   * the reactor — is NOT a separate field; it's derived from the booking
+   * window inside the scheduler.
+   */
+  bcfHours: number;
   analysisHours: number;
   /**
    * Product Change Over (PCO) cleaning time in hours. Required BEFORE running
@@ -109,6 +120,20 @@ export interface BatchScheduleEntry {
   outputKg: number;
   /** Input consumed by this batch (kg) — equals stage.inputKgPerBatch. */
   inputKg: number;
+  /**
+   * Cleaning gap (ms) that the scheduler enforced immediately BEFORE this
+   * batch's start. 0 if no cleaning was required (back-to-back same-campaign).
+   * Drives the faded tail rendered in front of the bar on the Gantt chart.
+   */
+  cleaningBeforeMs: number;
+  /**
+   * What kind of cleaning preceded this batch:
+   *   - "none"     → back-to-back with previous same-campaign batch
+   *   - "pco"      → predecessor was a different (apiId, stageId) campaign
+   *   - "campaign" → same campaign, but the 30-day campaign clock tripped
+   *                  so a campaign cleaning was inserted (resets the clock)
+   */
+  cleaningType: "none" | "pco" | "campaign";
 }
 
 export interface ScheduleResult {
