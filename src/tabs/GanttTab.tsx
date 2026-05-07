@@ -52,6 +52,23 @@ export default function GanttTab() {
     apisRaw.forEach((a) => m.set(a.id, a.color));
     return m;
   }, [apisRaw]);
+
+  // Stage-level (process,bct) lookup. Used by the per-batch renderer to
+  // split each slot into a leading WAIT portion (bct − process) and a
+  // trailing PROCESS portion. processHours defaults to bctHours when the
+  // stage doesn't carry the field (legacy data).
+  const stageSlotByStageId = useMemo(() => {
+    const m = new Map<string, { processHours: number; bctHours: number }>();
+    apisRaw.forEach((a) =>
+      a.stages.forEach((s) =>
+        m.set(s.id, {
+          processHours: s.processHours ?? s.bctHours,
+          bctHours: s.bctHours,
+        })
+      )
+    );
+    return m;
+  }, [apisRaw]);
   const [pxPerWeek, setPxPerWeek] = useState(64); // default = "Quarter view": ~13 weeks visible per ~830px
   const [mode, setMode] = useState<Mode>("by-stage");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -252,7 +269,7 @@ export default function GanttTab() {
         subtitle={
           anyFilterActive
             ? `Showing ${filteredBatches.length} of ${schedule.batches.length} batches (filters active)`
-            : "Solid bar = reactor cycle. Cyan tail = analysis window, yellow pre-tail = PCO cleaning, green pre-tail = 30-day campaign cleaning."
+            : "Solid bar = process; striped bar = wait inside slot. Cyan tail = analysis, yellow pre-tail = PCO, green pre-tail = 30-day campaign cleaning."
         }
         right={
           <div className="flex items-center gap-2">
@@ -812,6 +829,27 @@ export default function GanttTab() {
                           0,
                           (analysisEndWk - cycleEndWk) * pxPerWeek
                         );
+                        // Split the slot into leading WAIT (faded) + trailing
+                        // PROCESS (solid). Wait fraction = (bct − process)/bct.
+                        // Falls back to "no wait" when stage info is missing.
+                        const slotInfo = stageSlotByStageId.get(b.stageId);
+                        const waitFrac =
+                          slotInfo && slotInfo.bctHours > 0
+                            ? Math.max(
+                                0,
+                                Math.min(
+                                  1,
+                                  (slotInfo.bctHours -
+                                    slotInfo.processHours) /
+                                    slotInfo.bctHours
+                                )
+                              )
+                            : 0;
+                        const waitWidth = cycleWidth * waitFrac;
+                        const processWidth = Math.max(
+                          0,
+                          cycleWidth - waitWidth
+                        );
                         // Cleaning gap rendered BEFORE the bar — yellow for
                         // PCO, green for the 30-day campaign cleaning.
                         // `cleaningBeforeMs` lives on each batch; the tail
@@ -867,20 +905,53 @@ export default function GanttTab() {
                                   }
                                 />
                               )}
-                              <div
-                                style={{
-                                  width: cycleWidth,
-                                  height: barH,
-                                  background: barColor,
-                                  boxShadow: `0 0 6px ${barColor}99, inset 0 1px 0 rgba(255,255,255,0.25)`,
-                                }}
-                                className={clsx(
-                                  "border border-white/20 transition-all group-hover:brightness-125 group-hover:saturate-150",
-                                  cleanColor && cleaningWidth > 1
-                                    ? ""
-                                    : "rounded-l-sm"
-                                )}
-                              />
+                              {waitWidth > 1 ? (
+                                <>
+                                  <div
+                                    style={{
+                                      width: waitWidth,
+                                      height: barH,
+                                      background: `repeating-linear-gradient(45deg, ${barColor}33 0 6px, ${barColor}1a 6px 12px)`,
+                                      border: `1px dashed ${barColor}80`,
+                                      borderRight: "none",
+                                    }}
+                                    className={clsx(
+                                      "transition-all group-hover:brightness-125",
+                                      cleanColor && cleaningWidth > 1
+                                        ? ""
+                                        : "rounded-l-sm"
+                                    )}
+                                    title={`Wait · ${(
+                                      ((slotInfo?.bctHours ?? 0) -
+                                        (slotInfo?.processHours ?? 0))
+                                    ).toFixed(1)}h (slot−process)`}
+                                  />
+                                  <div
+                                    style={{
+                                      width: processWidth,
+                                      height: barH,
+                                      background: barColor,
+                                      boxShadow: `0 0 6px ${barColor}99, inset 0 1px 0 rgba(255,255,255,0.25)`,
+                                    }}
+                                    className="border border-white/20 transition-all group-hover:brightness-125 group-hover:saturate-150"
+                                  />
+                                </>
+                              ) : (
+                                <div
+                                  style={{
+                                    width: cycleWidth,
+                                    height: barH,
+                                    background: barColor,
+                                    boxShadow: `0 0 6px ${barColor}99, inset 0 1px 0 rgba(255,255,255,0.25)`,
+                                  }}
+                                  className={clsx(
+                                    "border border-white/20 transition-all group-hover:brightness-125 group-hover:saturate-150",
+                                    cleanColor && cleaningWidth > 1
+                                      ? ""
+                                      : "rounded-l-sm"
+                                  )}
+                                />
+                              )}
                               {tailWidth > 1 && (
                                 <div
                                   style={{
@@ -916,6 +987,17 @@ export default function GanttTab() {
                               <div className="text-ink-300">
                                 Cycle End: {new Date(b.endMs).toLocaleString()}
                               </div>
+                              {slotInfo &&
+                                slotInfo.processHours <
+                                  slotInfo.bctHours && (
+                                  <div className="text-ink-300">
+                                    Wait: {(
+                                      slotInfo.bctHours -
+                                      slotInfo.processHours
+                                    ).toFixed(1)}h · Process:{" "}
+                                    {slotInfo.processHours.toFixed(1)}h
+                                  </div>
+                                )}
                               <div className="text-ink-300">
                                 Analysis End:{" "}
                                 {new Date(b.analysisEndMs).toLocaleString()}
@@ -967,7 +1049,19 @@ export default function GanttTab() {
             swatch={
               <span className="inline-block h-3 w-6 rounded-sm bg-cyan-400 shadow-[0_0_6px_#00f0ff80]" />
             }
-            label="Reactor cycle (busy)"
+            label="Process (active)"
+          />
+          <Legend
+            swatch={
+              <span
+                className="inline-block h-3 w-6 rounded-sm border border-dashed border-cyan-300/70"
+                style={{
+                  background:
+                    "repeating-linear-gradient(45deg, rgba(0,240,255,0.20) 0 4px, rgba(0,240,255,0.08) 4px 8px)",
+                }}
+              />
+            }
+            label="Wait inside slot (BCT − Process)"
           />
           <Legend
             swatch={

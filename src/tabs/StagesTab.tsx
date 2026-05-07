@@ -174,8 +174,11 @@ export default function StagesTab() {
                 <Th align="right" yellow title="Batch Charging Frequency — interval between consecutive same-stage batch STARTS. start_n − start_(n−1) = BCF.">
                   BCF (h)
                 </Th>
-                <Th align="right" yellow title="Batch Completion Time — physical reactor occupancy per batch. start + BCT = batch end (reactor free).">
+                <Th align="right" yellow title="Slot duration — reactor occupancy per batch. start + BCT = reactor free.">
                   BCT (h)
+                </Th>
+                <Th align="right" yellow title="Active processing time within the slot. (BCT − Process) = leading wait period rendered as a faded bar before the process portion on the Gantt.">
+                  Process (h)
                 </Th>
                 <Th align="right" yellow>
                   Analysis (h)
@@ -280,11 +283,22 @@ export default function StagesTab() {
                     </td>
                     <td
                       className="px-3 py-2 text-right"
-                      title="BCT (Batch Completion Time) — physical reactor occupancy per batch. start + BCT = reactor free."
+                      title="Slot duration — reactor occupancy per batch. start + BCT = reactor free."
                     >
                       <EditableNumCell
                         value={r.bctHours}
                         onChange={(v) => updateStageField(r.id, "bctHours", v)}
+                      />
+                    </td>
+                    <td
+                      className="px-3 py-2 text-right"
+                      title="Active processing time within the slot. (BCT − Process) renders as a leading wait bar (faded) before the process portion on the Gantt."
+                    >
+                      <EditableNumCell
+                        value={r.processHours ?? r.bctHours}
+                        onChange={(v) =>
+                          updateStageField(r.id, "processHours", v)
+                        }
                       />
                     </td>
                     <td className="px-3 py-2 text-right">
@@ -367,7 +381,7 @@ export default function StagesTab() {
               {rows.length === 0 && (
                 <tr>
                   <td
-                    colSpan={15}
+                    colSpan={16}
                     className="py-12 text-center text-sm text-ink-300"
                   >
                     No stages match. Click{" "}
@@ -387,18 +401,18 @@ export default function StagesTab() {
             <Pencil size={12} className="inline" /> Editable here:
           </span>
           Stage Name, Reactor Pool, Input/Batch (kg), Output/Batch (kg), BCF,
-          BCT, Analysis, PCO. Reactors on the{" "}
+          BCT, Process, Analysis, PCO. Reactors on the{" "}
           <span className="font-bold">Master Reactor</span> tab; API target on
           the <span className="font-bold">APIs</span> tab.
           <span className="mt-1 block text-amber-300/80">
             <span className="font-mono">BCF</span> = interval between
             same-stage batch STARTs:{" "}
             <span className="font-mono">start_n − start_(n−1) = BCF</span>.{" "}
-            <span className="font-mono">BCT</span> = reactor occupancy per
-            batch:{" "}
-            <span className="font-mono">start + BCT = reactor free</span>.
-            The scheduler honours BCF by picking any free reactor in the
-            pool, so growing the pool unlocks higher cadence.{" "}
+            <span className="font-mono">BCT</span> = slot duration (reactor
+            occupancy per batch).{" "}
+            <span className="font-mono">Process</span> = active processing
+            within the slot; the gap (BCT − Process) renders as a leading
+            wait period on the Gantt.{" "}
             <span className="font-mono">PCO</span> = cleaning on campaign
             switch; campaigns auto-clean every{" "}
             <span className="font-mono">30 days</span>.

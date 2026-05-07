@@ -27,6 +27,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
   const [inputKgPerBatch, setInputKgPerBatch] = useState(100);
   const [bcfHours, setBcfHours] = useState(120);
   const [bctHours, setBctHours] = useState(120);
+  const [processHours, setProcessHours] = useState(120);
   const [analysisHours, setAnalysisHours] = useState(48);
   const [pcoHours, setPcoHours] = useState(8);
   const [plannedBatches, setPlannedBatches] = useState(10);
@@ -93,8 +94,19 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
       setError("Stage name cannot be empty");
       return;
     }
-    if (batchSizeKg < 1 || bcfHours < 1 || bctHours < 1 || analysisHours < 1 || plannedBatches < 1) {
+    if (
+      batchSizeKg < 1 ||
+      bcfHours < 1 ||
+      bctHours < 1 ||
+      processHours < 1 ||
+      analysisHours < 1 ||
+      plannedBatches < 1
+    ) {
       setError("All numbers must be ≥ 1");
+      return;
+    }
+    if (processHours > bctHours) {
+      setError("Process (h) can't exceed BCT (slot duration)");
       return;
     }
     if (pcoHours < 0) {
@@ -108,6 +120,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
       inputKgPerBatch,
       bcfHours,
       bctHours,
+      processHours,
       analysisHours,
       pcoHours,
       plannedBatches,
@@ -209,9 +222,20 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
         <NumField
           label="BCT (h)"
           value={bctHours}
-          onChange={setBctHours}
+          onChange={(v) => {
+            setBctHours(v);
+            // process can't exceed slot
+            if (processHours > v) setProcessHours(v);
+          }}
           className="sm:col-span-1"
-          tooltip="Batch Completion Time — physical reactor occupancy per batch (start + BCT = reactor free)."
+          tooltip="Slot duration — reactor occupancy per batch (start + BCT = reactor free)."
+        />
+        <NumField
+          label="Process (h)"
+          value={processHours}
+          onChange={(v) => setProcessHours(Math.min(v, bctHours))}
+          className="sm:col-span-1"
+          tooltip="Active processing within the slot. (BCT − Process) shows as a faded wait bar at the start of the slot on the Gantt."
         />
         <NumField
           label="Analysis (h)"
@@ -228,14 +252,17 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
         />
       </div>
       <p className="mt-1 text-[10px] text-ink-400">
-        <span className="font-semibold text-ink-300">Input/Batch</span> is what
-        this stage consumes per batch (= upstream demand);{" "}
-        <span className="font-semibold text-ink-300">Output/Batch</span> is what
-        it produces. Set equal for 1:1 yield.{" "}
+        <span className="font-semibold text-ink-300">Input/Batch</span> is
+        what this stage consumes per batch (= upstream demand);{" "}
+        <span className="font-semibold text-ink-300">Output/Batch</span> is
+        what it produces. Set equal for 1:1 yield.{" "}
         <span className="font-semibold text-ink-300">BCF</span> = interval
-        between same-campaign batch starts;{" "}
-        <span className="font-semibold text-ink-300">BCT</span> = physical
-        reactor occupancy (BCF ≥ BCT).{" "}
+        between same-stage batch STARTs;{" "}
+        <span className="font-semibold text-ink-300">BCT</span> = slot
+        duration (reactor occupancy);{" "}
+        <span className="font-semibold text-ink-300">Process</span> ≤ BCT —
+        the gap (BCT − Process) renders as a faded wait bar leading into
+        the process portion on the Gantt.{" "}
         <span className="font-semibold text-ink-300">PCO</span> = cleaning
         gap on campaign change. Planned batches are auto-computed.
       </p>

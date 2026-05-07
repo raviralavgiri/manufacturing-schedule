@@ -45,15 +45,27 @@ export interface StageMaster {
    */
   bcfHours: number;
   /**
-   * Batch Completion Time (BCT) — the total duration a single batch physically
-   * occupies the reactor, from start to completion.
+   * Batch Cycle Time (BCT) — total SLOT DURATION on this stage's reactor.
+   * The reactor is locked for `bctHours` per batch. The active processing
+   * is `processHours` (≤ bctHours); the difference (`bctHours − processHours`)
+   * is the WAIT period at the START of the slot — the reactor is claimed
+   * but not yet producing.
    *
    *   start + BCT = reactor free time
    *
-   * Controls reactor occupancy duration in the scheduler. Can be <= BCF.
-   * Defaults to bcfHours (= BCF) on legacy data.
+   * For the bottleneck (Reactor 1) BCT == BCF == processHours (no wait).
+   * For downstream reactors BCT == BCF, processHours < BCT (visible wait).
+   * For Filtration & Drying BCT == processHours < BCF (no wait, idle gap
+   * between consecutive batches at this equipment).
    */
   bctHours: number;
+  /**
+   * Active processing time within the slot. `bctHours − processHours` is
+   * the leading wait period rendered as a faded bar at the start of the
+   * batch's slot on the Gantt chart. Defaults to `bctHours` on legacy data
+   * (= no wait, i.e. process fills the full slot).
+   */
+  processHours: number;
   analysisHours: number;
   /**
    * Product Change Over (PCO) cleaning time in hours. Required BEFORE running

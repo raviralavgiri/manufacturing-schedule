@@ -227,6 +227,7 @@ export function buildSeed(): { apis: API[]; reactors: Reactor[] } {
         reactorPool: pool,
         bcfHours,
         bctHours,
+        processHours: bctHours, // no wait by default; user can shrink to introduce one
         analysisHours,
         pcoHours,
         plannedBatches,

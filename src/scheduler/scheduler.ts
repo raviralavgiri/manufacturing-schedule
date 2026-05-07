@@ -103,7 +103,12 @@ export function runScheduler(
     reactorBatchCount.set(r.id, 0);
   });
 
-  const INTER_STAGE_BUFFER_HOURS = 4;
+  // Inter-stage transfer buffer between consecutive stages of the SAME
+  // batch. Set to 0 for the user's pipeline spec where stage N+1's slot
+  // starts exactly at stage N's slot end. (Was 4h previously to model
+  // material transfer + QC release; users who want that can set the
+  // upstream stage's analysisHours instead, which is per-stage configurable.)
+  const INTER_STAGE_BUFFER_HOURS = 0;
 
   const allBatches: BatchScheduleEntry[] = [];
   let clashCount = 0;

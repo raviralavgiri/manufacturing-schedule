@@ -63,6 +63,7 @@ export interface NewStageInput {
   reactorPool: string[];
   bcfHours: number;
   bctHours: number;
+  processHours: number;
   analysisHours: number;
   pcoHours: number;
   plannedBatches: number;
@@ -108,6 +109,7 @@ interface AppState {
       | "inputKgPerBatch"
       | "bcfHours"
       | "bctHours"
+      | "processHours"
       | "analysisHours"
       | "pcoHours"
       | "plannedBatches"
@@ -380,9 +382,26 @@ export const useStore = create<AppState>((set, get) => ({
       const apis = p.apis.map((a) => {
         const idx = a.stages.findIndex((s) => s.id === stageId);
         if (idx < 0) return a;
-        const updatedStages = a.stages.map((s) =>
-          s.id === stageId ? { ...s, [field]: clamped } : s
-        );
+        const updatedStages = a.stages.map((s) => {
+          if (s.id !== stageId) return s;
+          // Coupled fields:
+          //   - processHours can't exceed bctHours (slot ⊇ process)
+          //   - shrinking bctHours must shrink processHours to match
+          if (field === "processHours") {
+            return {
+              ...s,
+              processHours: Math.min(clamped, s.bctHours),
+            };
+          }
+          if (field === "bctHours") {
+            return {
+              ...s,
+              bctHours: clamped,
+              processHours: Math.min(s.processHours ?? clamped, clamped),
+            };
+          }
+          return { ...s, [field]: clamped };
+        });
         const updated = { ...a, stages: updatedStages };
         if (
           field === "batchSizeKg" ||
@@ -449,6 +468,7 @@ export const useStore = create<AppState>((set, get) => ({
           : Math.max(...api.stages.map((s) => s.stageNo)) + 1;
       newId = `${api.id}-S${nextStageNo}`;
 
+      const bct = Math.max(1, input.bctHours);
       const newStage: StageMaster = {
         id: newId,
         apiId: api.id,
@@ -459,7 +479,9 @@ export const useStore = create<AppState>((set, get) => ({
         inputKgPerBatch: Math.max(1, input.inputKgPerBatch),
         reactorPool: input.reactorPool.slice(),
         bcfHours: Math.max(1, input.bcfHours),
-        bctHours: Math.max(1, input.bctHours),
+        bctHours: bct,
+        // process can be at most the slot duration (BCT)
+        processHours: Math.min(bct, Math.max(1, input.processHours)),
         analysisHours: Math.max(1, input.analysisHours),
         pcoHours: Math.max(0, input.pcoHours),
         plannedBatches: Math.max(1, input.plannedBatches),
@@ -579,6 +601,7 @@ export const useStore = create<AppState>((set, get) => ({
                 defaultPool.length > 0 ? defaultPool : [reactors[0]?.id ?? ""],
               bcfHours: isFinal ? 120 : 72,
               bctHours: isFinal ? 120 : 72,
+              processHours: isFinal ? 120 : 72,
               analysisHours: isFinal ? 48 : 24,
               pcoHours: isFinal ? 12 : 8,
               plannedBatches: 1,
@@ -617,6 +640,7 @@ export const useStore = create<AppState>((set, get) => ({
                 .map((r) => r.id),
               bcfHours: 120,
               bctHours: 120,
+              processHours: 120,
               analysisHours: 48,
               pcoHours: 12,
               plannedBatches: 5,

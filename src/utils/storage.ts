@@ -166,10 +166,19 @@ function normalizeProject(p: any): Project | null {
             typeof s.bctHours === "number" && s.bctHours > 0
               ? s.bctHours
               : bcfHours;
+          // processHours defaults to bctHours (no wait, process fills the
+          // full slot). Clamp to ≤ bctHours just in case stored data is
+          // inconsistent.
+          const rawProcess =
+            typeof s.processHours === "number" && s.processHours > 0
+              ? s.processHours
+              : bctHours;
+          const processHours = Math.min(rawProcess, bctHours);
           return {
             ...rest,
             bcfHours,
             bctHours,
+            processHours,
             inputKgPerBatch:
               typeof s.inputKgPerBatch === "number" && s.inputKgPerBatch > 0
                 ? s.inputKgPerBatch
