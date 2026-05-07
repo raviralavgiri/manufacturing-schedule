@@ -42,36 +42,44 @@ interface BookedSlot {
 const CAMPAIGN_MAX_MS = 30 * 24 * 3600 * 1000;
 
 /**
- * Equipment-availability sequencer — TRAIN model + PCO + 30-day campaign cap.
+ * Equipment-availability sequencer — POOL model + PCO + 30-day campaign cap.
  *
- * Each batch of a stage locks **every reactor in stage.reactorPool**
- * simultaneously for the cycle window [start, start + bcfHours]. Examples:
+ * Each batch uses ONE reactor at a time. `stage.reactorPool` is the list of
+ * eligible reactors; the scheduler picks whichever one becomes free earliest
+ * at the candidate start time. So pool size determines achievable concurrency.
  *
- *   pool = [R101, R102, R103]      → batch 1 books all 3 reactors together
- *   10 batches with the same pool  → run strictly serially, BCF apart
+ *   pool = [R101, R102, R103], BCF = 24h, BCT = 72h
+ *      → B1 on R1 [0, 72]
+ *        B2 on R2 [24, 96]   ← 24h after B1 — BCF honoured
+ *        B3 on R3 [48, 120]
+ *        B4 on R1 [72, 144]  ← R1 free again at 72 — cadence holds
+ *
+ *   pool = [R101], BCF = 24h, BCT = 72h
+ *      → B1 on R1 [0, 72]
+ *        B2 on R1 [72, 144]  ← BCT dominates, BCF can't be honoured
+ *      Add reactors to the pool to unlock BCF cadence.
  *
  * Constraints (provably never violated):
  *   1. No reactor clash: a reactor's [start, cycleEnd] windows are
- *      non-overlapping, so even when shared across stages there's no
- *      double-booking.
+ *      non-overlapping per reactor.
  *   2. Stage ordering inside an API: stage N+1's batch B can only start
  *      after stage N's batch B finishes its analysis window plus a 4-hour
  *      transfer buffer.
  *   3. Priority ordering: APIs are processed in priority order (P1 first,
  *      P5 last) within each round so high-priority APIs grab earliest slots.
- *   4. PCO: when a reactor switches from one (apiId, stageId) campaign to a
+ *   4. BCF cadence: same-stage consecutive batches respect
+ *      start_n - start_(n-1) >= BCF (cross-reactor; tracked per stage in
+ *      stageLastBatchStart).
+ *   5. PCO: when a reactor switches from one (apiId, stageId) campaign to a
  *      different one, the new batch's start must be
  *      >= prev.cycleEnd + newStage.pcoHours.
- *   5. Campaign cap: even within the SAME campaign, a continuous run on a
- *      reactor cannot exceed 30 days. The 11th-or-later batch in a
- *      30-days-old campaign incurs a campaign-cleaning gap (= the stage's
- *      pcoHours) and resets the campaign clock. Treated as a PCO
- *      equivalent in terms of duration but tagged separately so the Gantt
- *      can colour it differently.
+ *   6. Campaign cap: even within the SAME campaign, a continuous run on a
+ *      reactor cannot exceed 30 days. Triggers a campaign-cleaning gap
+ *      (= the stage's pcoHours) and resets the clock. Tagged separately so
+ *      the Gantt can colour it green vs PCO yellow.
  *
  * Reactor analysis windows (analysisHours) DO NOT lock the reactor — they
- * only delay the next stage of the SAME API. Other batches can use these
- * reactors as soon as cycleEnd (subject to PCO).
+ * only delay the next stage of the SAME API.
  */
 export function runScheduler(
   apis: API[],
@@ -118,6 +126,13 @@ export function runScheduler(
       a.stages.map(() => windowStart)
     )
   );
+
+  // BCF gate (cross-reactor): for each stage, the last booked batch's start.
+  // The next batch of the same stage cannot start before
+  // `stageLastBatchStart + bcfMs`, regardless of which reactor it lands on.
+  // Tracked by stageId so we don't depend on reactor choice. -Infinity means
+  // no batch booked yet for this stage.
+  const stageLastBatchStart = new Map<string, number>();
 
   /**
    * Decide what cleaning (if any) is required when we want to book a new
@@ -181,15 +196,16 @@ export function runScheduler(
    * gap required by predecessor or successor slots.
    *
    * Algorithm:
-   *   - For each reactor in the train, compute the predecessor cleaning
-   *     constraint via checkPredecessor and the successor PCO constraint.
+   *   - For each reactor in the supplied list (single-element under the
+   *     pool model; multi-element is supported for the legacy code paths
+   *     that probe a "best of pool" via repeated single-reactor calls),
+   *     compute the predecessor cleaning constraint and the successor
+   *     PCO constraint.
    *   - If any constraint forces an advance, jump to the max required
-   *     advance across all reactors and retry.
-   *   - On success, return both the start time and the per-reactor
-   *     cleaning kinds (we use the strongest cleaning kind across the
-   *     train as the cleaning-type label for the batch — campaign > pco
-   *     > none, since campaign and pco have the same duration but
-   *     different semantics).
+   *     advance and retry.
+   *   - On success, return both the start time and the cleaning kind
+   *     (campaign > pco > none — campaign and pco have the same duration
+   *     but the Gantt colours them differently).
    */
   function findTrainSlot(
     pool: string[],
@@ -318,9 +334,10 @@ export function runScheduler(
         if (round >= stage.plannedBatches) continue;
         if (stage.reactorPool.length === 0) continue;
 
-        // BCT = physical reactor occupancy duration.
-        // BCF = interval between same-campaign consecutive batch STARTS.
-        // BCF must be >= BCT; the scheduler enforces this by taking the max.
+        // BCT = physical reactor occupancy duration (per batch).
+        // BCF = interval between consecutive same-stage batch STARTS
+        //       (cross-reactor; honoured if the pool has enough reactors,
+        //       otherwise BCT dominates because the reactor stays busy).
         const bctMs = hoursToMs(
           typeof stage.bctHours === "number" && stage.bctHours > 0
             ? stage.bctHours
@@ -341,72 +358,95 @@ export function runScheduler(
           sIdx === 0
             ? windowStart
             : apiStageLastEnd.get(api.id)![sIdx - 1] + bufferMs;
-        const earliestStart = Math.max(prevStageReady, windowStart);
 
-        const { startMs, cleaningKind } = findTrainSlot(
-          stage.reactorPool,
-          earliestStart,
-          cycleMs,
-          api.id,
-          stage.id,
-          pcoMs
+        // BCF gate: the next batch of THIS stage cannot start before
+        // (last booked start of this stage) + BCF, no matter which reactor.
+        const prevSameStageStart = stageLastBatchStart.get(stage.id);
+        const bcfGate =
+          prevSameStageStart !== undefined
+            ? prevSameStageStart + bcfMs
+            : -Infinity;
+
+        const earliestStart = Math.max(
+          prevStageReady,
+          windowStart,
+          bcfGate
         );
+
+        // POOL pick: probe every reactor in the pool with a single-reactor
+        // findTrainSlot call, then choose the one that becomes free earliest.
+        // Each call respects per-reactor PCO + 30-day campaign rules.
+        let bestStart = Infinity;
+        let bestReactor = stage.reactorPool[0];
+        let bestKind: "none" | "pco" | "campaign" = "none";
+        for (const rid of stage.reactorPool) {
+          const probe = findTrainSlot(
+            [rid],
+            earliestStart,
+            cycleMs,
+            api.id,
+            stage.id,
+            pcoMs
+          );
+          if (probe.startMs < bestStart) {
+            bestStart = probe.startMs;
+            bestReactor = rid;
+            bestKind = probe.cleaningKind;
+          }
+        }
+
+        const startMs = bestStart;
+        const cleaningKind = bestKind;
         const cycleEndMs = startMs + cycleMs;
         const analysisEndMs = cycleEndMs + analysisMs;
 
-        // Defensive clash check — verify the slot we found genuinely doesn't
-        // overlap any existing booking on any pool reactor.
+        // Defensive clash check on the chosen reactor only.
         let clash = false;
-        for (const rid of stage.reactorPool) {
-          const slots = reactorBookings.get(rid)!;
-          for (const s of slots) {
-            if (s.cycleEndMs <= startMs) continue;
-            if (s.startMs >= cycleEndMs) break;
-            clash = true;
-            break;
-          }
-          if (clash) break;
+        const chosenSlots = reactorBookings.get(bestReactor)!;
+        for (const s of chosenSlots) {
+          if (s.cycleEndMs <= startMs) continue;
+          if (s.startMs >= cycleEndMs) break;
+          clash = true;
+          break;
         }
         if (clash) clashCount++;
 
-        // Book on every reactor in the train, computing each reactor's own
-        // campaign start (they may differ if the train's reactors had
-        // different campaign histories — which is rare but possible when
-        // pools change over time).
-        for (const rid of stage.reactorPool) {
-          const slots = reactorBookings.get(rid)!;
-          const campaignStartMs = deriveCampaignStart(
-            slots,
-            startMs,
-            api.id,
-            stage.id
-          );
-          const newSlot: BookedSlot = {
-            startMs,
-            endMs: analysisEndMs,
-            cycleEndMs,                          // startMs + bctMs
-            nextSameCampaignStartMs: startMs + bcfMs, // startMs + bcfMs
-            apiId: api.id,
-            stageId: stage.id,
-            pcoMs,
-            campaignStartMs,
-          };
-          insertSorted(slots, newSlot);
-          reactorLoadHours.set(
-            rid,
-            // Load hours tracks physical occupancy (BCT), not BCF.
-            (reactorLoadHours.get(rid) ?? 0) +
-              (typeof stage.bctHours === "number" && stage.bctHours > 0
-                ? stage.bctHours
-                : stage.bcfHours)
-          );
-          reactorBatchCount.set(rid, (reactorBatchCount.get(rid) ?? 0) + 1);
-        }
+        // Book the slot on the chosen reactor (only).
+        const campaignStartMs = deriveCampaignStart(
+          chosenSlots,
+          startMs,
+          api.id,
+          stage.id
+        );
+        const newSlot: BookedSlot = {
+          startMs,
+          endMs: analysisEndMs,
+          cycleEndMs,
+          nextSameCampaignStartMs: startMs + bcfMs,
+          apiId: api.id,
+          stageId: stage.id,
+          pcoMs,
+          campaignStartMs,
+        };
+        insertSorted(chosenSlots, newSlot);
+        const bctHrs =
+          typeof stage.bctHours === "number" && stage.bctHours > 0
+            ? stage.bctHours
+            : stage.bcfHours;
+        reactorLoadHours.set(
+          bestReactor,
+          (reactorLoadHours.get(bestReactor) ?? 0) + bctHrs
+        );
+        reactorBatchCount.set(
+          bestReactor,
+          (reactorBatchCount.get(bestReactor) ?? 0) + 1
+        );
 
         apiStageLastEnd.get(api.id)![sIdx] = Math.max(
           apiStageLastEnd.get(api.id)![sIdx],
           analysisEndMs
         );
+        stageLastBatchStart.set(stage.id, startMs);
 
         const cleaningBeforeMs = cleaningKind === "none" ? 0 : pcoMs;
 
@@ -419,8 +459,9 @@ export function runScheduler(
           stageNo: stage.stageNo,
           stageName: stage.stageName,
           batchNo: round + 1,
-          reactorId: stage.reactorPool[0],
-          reactorIds: stage.reactorPool.slice(),
+          reactorId: bestReactor,
+          // Single-reactor list (pool model) — kept as array for API compat.
+          reactorIds: [bestReactor],
           startMs,
           endMs: cycleEndMs,
           analysisEndMs,

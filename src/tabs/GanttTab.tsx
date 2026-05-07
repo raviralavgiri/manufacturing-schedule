@@ -122,7 +122,7 @@ export default function GanttTab() {
   );
 
   // Group batches by the active mode. In by-reactor mode each batch appears
-  // in EVERY reactor row in its train (since trains lock all reactors together).
+  // on its assigned reactor's row (pool model — one reactor per batch).
   // Uses filteredBatches so the user's filter selections affect what's drawn.
   const grouped = useMemo(() => {
     const map = new Map<string, BatchScheduleEntry[]>();
@@ -351,8 +351,8 @@ export default function GanttTab() {
                   "Stage No",
                   "Stage Name",
                   "Batch #",
-                  "Reactor Train (IDs)",
-                  "Reactor Train (Names)",
+                  "Reactor ID",
+                  "Reactor Name",
                   "Start",
                   "End (Cycle)",
                   "Analysis End",
@@ -390,9 +390,9 @@ export default function GanttTab() {
                 );
               }}
               onReactorCsv={() => {
-                // One row per (batch × reactor-in-train). This shows
-                // every reactor's individual occupancy — useful for
-                // cross-checking reactor calendars without switching view.
+                // One row per (batch × reactor). In the pool model that's
+                // exactly one row per batch since each batch uses one
+                // reactor. Sorted by reactor id, then start time.
                 const headers = [
                   "Reactor ID",
                   "Reactor Name",
@@ -901,7 +901,7 @@ export default function GanttTab() {
                                 {b.batchId} · S{b.stageNo} · #{b.batchNo}
                               </div>
                               <div className="text-ink-300">
-                                Train:{" "}
+                                Reactor:{" "}
                                 {b.reactorIds
                                   .map(
                                     (id) =>

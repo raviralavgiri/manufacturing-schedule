@@ -82,8 +82,8 @@ export default function ScheduleTab() {
         "Stage",
         "Stage Name",
         "Batch #",
-        "Reactor Train (IDs)",
-        "Reactor Train (Names)",
+        "Reactor ID",
+        "Reactor Name",
         "Start",
         "End (cycle)",
         "Analysis End",
@@ -285,7 +285,7 @@ export default function ScheduleTab() {
           <span>API</span>
           <span>Stage</span>
           <span>#</span>
-          <span>Reactor Train</span>
+          <span>Reactor</span>
           <span>Start</span>
           <span>End (Cycle)</span>
           <span>Analysis End</span>
@@ -330,7 +330,7 @@ export default function ScheduleTab() {
                   <span className="font-mono text-ink-300">{b.batchNo}</span>
                   <span
                     className="font-mono font-semibold text-cyan-300 truncate"
-                    title={`Reactor train: ${b.reactorIds
+                    title={`Reactor: ${b.reactorIds
                       .map((id) => {
                         const r = reactors.find((x) => x.id === id);
                         return r && r.name !== id ? `${r.name} (${id})` : id;

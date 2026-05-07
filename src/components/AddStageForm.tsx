@@ -97,10 +97,6 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
       setError("All numbers must be ≥ 1");
       return;
     }
-    if (bcfHours < bctHours) {
-      setError("BCF must be ≥ BCT (can't start a batch before the reactor is free)");
-      return;
-    }
     if (pcoHours < 0) {
       setError("PCO must be ≥ 0");
       return;
@@ -208,14 +204,14 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
           value={bcfHours}
           onChange={setBcfHours}
           className="sm:col-span-1"
-          tooltip="Batch Charging Frequency — interval between same-campaign batch STARTS (start₁ + BCF = start₂). Must be ≥ BCT."
+          tooltip="Batch Charging Frequency — interval between consecutive same-stage batch STARTS. start_n − start_(n−1) = BCF. Pool must have enough reactors for the cadence to be honoured."
         />
         <NumField
           label="BCT (h)"
           value={bctHours}
           onChange={setBctHours}
           className="sm:col-span-1"
-          tooltip="Batch Completion Time — physical reactor occupancy per batch (start + BCT = reactor free). Must be ≤ BCF."
+          tooltip="Batch Completion Time — physical reactor occupancy per batch (start + BCT = reactor free)."
         />
         <NumField
           label="Analysis (h)"

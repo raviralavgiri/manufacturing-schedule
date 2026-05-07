@@ -171,10 +171,10 @@ export default function StagesTab() {
                 <Th align="right" yellow>
                   Output/Batch (kg)
                 </Th>
-                <Th align="right" yellow title="Batch Charging Frequency — interval between consecutive same-campaign batch STARTS. start₁ + BCF = start₂">
+                <Th align="right" yellow title="Batch Charging Frequency — interval between consecutive same-stage batch STARTS. start_n − start_(n−1) = BCF.">
                   BCF (h)
                 </Th>
-                <Th align="right" yellow title="Batch Completion Time — physical reactor occupancy per batch. start + BCT = batch end (reactor free)">
+                <Th align="right" yellow title="Batch Completion Time — physical reactor occupancy per batch. start + BCT = batch end (reactor free).">
                   BCT (h)
                 </Th>
                 <Th align="right" yellow>
@@ -271,7 +271,7 @@ export default function StagesTab() {
                     </td>
                     <td
                       className="px-3 py-2 text-right"
-                      title="BCF (Batch Charging Frequency) — interval between consecutive same-campaign batch STARTS. start₁ + BCF = start₂. Must be ≥ BCT."
+                      title="BCF (Batch Charging Frequency) — interval between consecutive same-stage batch STARTS. start_n − start_(n−1) = BCF. The scheduler picks any free reactor in the pool to honour this cadence."
                     >
                       <EditableNumCell
                         value={r.bcfHours}
@@ -280,7 +280,7 @@ export default function StagesTab() {
                     </td>
                     <td
                       className="px-3 py-2 text-right"
-                      title="BCT (Batch Completion Time) — physical reactor occupancy per batch. start + BCT = reactor free. Controls how long the reactor is locked."
+                      title="BCT (Batch Completion Time) — physical reactor occupancy per batch. start + BCT = reactor free."
                     >
                       <EditableNumCell
                         value={r.bctHours}
@@ -392,11 +392,15 @@ export default function StagesTab() {
           the <span className="font-bold">APIs</span> tab.
           <span className="mt-1 block text-amber-300/80">
             <span className="font-mono">BCF</span> = interval between
-            same-campaign batch STARTs (start₁ + BCF = start₂).{" "}
-            <span className="font-mono">BCT</span> = physical reactor occupancy
-            per batch (start + BCT = reactor free). BCF ≥ BCT.{" "}
-            <span className="font-mono">PCO</span> = cleaning before a reactor
-            switches campaign. Campaigns auto-cleanse every{" "}
+            same-stage batch STARTs:{" "}
+            <span className="font-mono">start_n − start_(n−1) = BCF</span>.{" "}
+            <span className="font-mono">BCT</span> = reactor occupancy per
+            batch:{" "}
+            <span className="font-mono">start + BCT = reactor free</span>.
+            The scheduler honours BCF by picking any free reactor in the
+            pool, so growing the pool unlocks higher cadence.{" "}
+            <span className="font-mono">PCO</span> = cleaning on campaign
+            switch; campaigns auto-clean every{" "}
             <span className="font-mono">30 days</span>.
           </span>
         </div>

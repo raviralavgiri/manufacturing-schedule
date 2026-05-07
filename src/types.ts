@@ -116,9 +116,12 @@ export interface BatchScheduleEntry {
   stageNo: number;
   stageName: string;
   batchNo: number;
-  /** Primary / lead reactor in the train (= reactorIds[0]). Kept for backwards compat. */
+  /** The reactor this batch is booked on. Single reactor per batch in the
+   *  pool model (was: lead reactor in a train under the legacy train model). */
   reactorId: string;
-  /** Full reactor train: every reactor locked for the cycle window. */
+  /** Reactors used by this batch. Single-element array under the pool model;
+   *  kept as an array for backwards compat with old batch payloads that may
+   *  still carry multiple ids. */
   reactorIds: string[];
   startMs: number;
   endMs: number;
