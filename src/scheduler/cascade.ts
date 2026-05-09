@@ -6,30 +6,44 @@ import {
 } from "../utils/validation";
 
 /**
- * Backwards cascade — DAG version.
+ * Backwards cascade — DAG version with side-chain support.
  *
- * Each stage carries `inputStageIds`: the predecessor stages whose output
- * it consumes. The cascade walks the DAG in REVERSE topological order
- * (sinks first, roots last) and propagates demand:
- *
+ * MAIN PASS (reverse-topo over non-side-chain stages):
  *   plannedBatches  = ⌈ outputDemandKg ÷ outputPerBatch ⌉
  *   inputConsumed   = plannedBatches × inputPerBatch
  *   demand on pred  += this stage's inputConsumed   (sum across successors)
+ *   sink demand     = api.targetKg                  (single sink)
+ *                   = api.targetKg ÷ #sinks         (multi-sink, equal split)
  *
- *   sink demand     = api.targetKg               (single sink)
- *                   = api.targetKg ÷ #sinks      (multi-sink, equal split)
+ * SIDE-CHAIN PASS (forward-topo over side-chain stages):
+ *   Side-chain stages = {anchors} ∪ {continuations reachable forward from
+ *   anchors whose every predecessor is itself a side-chain stage}.
  *
- * Multi-sink note: for now we split the API target equally across sinks.
- * TODO(future): support a per-sink weighting if a real use-case lands.
+ *   For an ANCHOR (`stage.cascadePolicy.kind === "side-chain"`):
+ *       outputDemand = baseStage.actualOutput × factor
+ *     where baseStage is the upstream main-backbone stage referenced by
+ *     `cascadePolicy.baseStageId` and its `actualOutput` was computed in
+ *     the main pass.
  *
- * Back-compat: a strictly linear chain (every non-first stage has
- * `inputStageIds = [prev]`) collapses to exactly the old per-stage formula
- * because each stage has exactly one successor and
- * `outputDemand = inputConsumed of that one successor`.
+ *   For a CONTINUATION (no cascadePolicy, all inputStageIds are side-chain):
+ *       input = Σ predecessor.actualOutput   (for each side-chain pred)
+ *       plannedBatches = ⌈ input ÷ inputPerBatch ⌉
  *
- * Cycle handling: if the inputs form a cycle we fall back to the legacy
- * linear cascade (sorted by `stageNo`) and emit a single console.warn.
- * Validation surfaces the cycle to the user; the cascade never crashes.
+ *   These are forward-cascaded so each side-stage actually produces what the
+ *   factor (and yield losses along the chain) imply, NOT what the merge
+ *   stage demands. The merge stage's `inputStageIds` listing the side
+ *   chain's last stage matters only for the SCHEDULER's per-batch wait
+ *   rule, not for cascade demand propagation.
+ *
+ * BACK-COMPAT — a strictly linear chain (every non-first stage has
+ * `inputStageIds = [prev]`, no `cascadePolicy` anywhere) collapses to
+ * exactly the old per-stage formula because the side-chain pass is a
+ * no-op and the main pass walks the entire DAG.
+ *
+ * CYCLE HANDLING — if the inputStageIds form a cycle we fall back to the
+ * legacy linear cascade (sorted by `stageNo`) and emit a single
+ * console.warn. Validation surfaces the cycle to the user; the cascade
+ * never crashes.
  */
 export function cascadePlannedBatches(api: API): API {
   if (api.stages.length === 0) {
@@ -47,37 +61,53 @@ export function cascadePlannedBatches(api: API): API {
   const successors = buildSuccessors(api.stages);
   const topo = topologicalStageOrder(api.stages); // roots → sinks
 
-  // Sinks = no successors. Equal split of api.targetKg across sinks.
-  const sinks = api.stages.filter(
-    (s) => (successors.get(s.id)?.length ?? 0) === 0
+  // ─ Identify side-chain stages ─────────────────────────────────────
+  // Anchors: stages with cascadePolicy.kind === "side-chain".
+  // Continuations: closure of stages whose every predecessor is already
+  // marked side-chain. Computed via fixed-point over the stage list.
+  const sideChainStageIds = identifySideChainStages(api.stages);
+
+  // ─ Pass 1: main-stage reverse-topo cascade ────────────────────────
+  // Sinks = main stages with no successors. Side-chain stages are
+  // intentionally never sinks (they always feed into the merge).
+  const isMain = (id: string) => !sideChainStageIds.has(id);
+  const mainSinks = api.stages.filter(
+    (s) =>
+      isMain(s.id) &&
+      (successors.get(s.id) ?? []).length === 0
   );
   const target = Math.max(0, api.targetKg ?? 0);
   const perSinkTarget =
-    sinks.length === 0 ? 0 : target / sinks.length;
-  const sinkIds = new Set(sinks.map((s) => s.id));
+    mainSinks.length === 0 ? 0 : target / mainSinks.length;
+  const mainSinkIds = new Set(mainSinks.map((s) => s.id));
 
-  // Walk REVERSE topo so each stage is visited only after every successor
-  // has already booked its demand into `outputDemandByStageId`.
   const outputDemandByStageId = new Map<string, number>();
   api.stages.forEach((s) => outputDemandByStageId.set(s.id, 0));
-  sinks.forEach((s) => outputDemandByStageId.set(s.id, perSinkTarget));
+  mainSinks.forEach((s) =>
+    outputDemandByStageId.set(s.id, perSinkTarget)
+  );
 
   const plannedById = new Map<string, number>();
+  api.stages.forEach((s) => plannedById.set(s.id, 0));
+
   for (let i = topo.length - 1; i >= 0; i--) {
     const sid = topo[i];
+    if (sideChainStageIds.has(sid)) continue; // side chains handled in pass 2
     const s = stagesById.get(sid);
     if (!s) continue;
     const outputPerBatch = Math.max(1, s.batchSizeKg);
     const inputPerBatch = effectiveInputPerBatch(s);
     const demand = outputDemandByStageId.get(sid) ?? 0;
-    // Same zero-target → zero-batches semantics as the legacy cascade.
-    const planned = demand <= 0 ? 0 : Math.max(1, Math.ceil(demand / outputPerBatch));
+    const planned =
+      demand <= 0 ? 0 : Math.max(1, Math.ceil(demand / outputPerBatch));
     plannedById.set(sid, planned);
     const inputConsumed = inputPerBatch * planned;
-    // Add this stage's input demand to each predecessor's output demand.
-    // Multiple successors sharing the same predecessor => demands SUM.
+    // Add this stage's input demand to each predecessor's output demand,
+    // BUT skip side-chain predecessors — their demand is set by the
+    // factor cascade in pass 2, not by what flows back from the merge.
     const preds = Array.isArray(s.inputStageIds) ? s.inputStageIds : [];
     for (const pid of preds) {
+      if (sideChainStageIds.has(pid)) continue;
       outputDemandByStageId.set(
         pid,
         (outputDemandByStageId.get(pid) ?? 0) + inputConsumed
@@ -85,25 +115,114 @@ export function cascadePlannedBatches(api: API): API {
     }
   }
 
+  // ─ Pass 2: side-chain forward cascade ─────────────────────────────
+  // Walk topo FORWARD over side-chain stages only. Anchors come first
+  // (their inputStageIds are typically [] → topo seeds them as roots);
+  // continuations follow because their inputStageIds point at side-chain
+  // predecessors that are already processed.
+  for (const sid of topo) {
+    if (!sideChainStageIds.has(sid)) continue;
+    const s = stagesById.get(sid);
+    if (!s) continue;
+    const outputPerBatch = Math.max(1, s.batchSizeKg);
+    const inputPerBatch = effectiveInputPerBatch(s);
+
+    let demand = 0;
+    if (s.cascadePolicy && s.cascadePolicy.kind === "side-chain") {
+      // Anchor: factor × baseStage.actualOutput.
+      const base = stagesById.get(s.cascadePolicy.baseStageId);
+      if (base) {
+        const basePlanned = plannedById.get(base.id) ?? 0;
+        const baseActualOutput = Math.max(1, base.batchSizeKg) * basePlanned;
+        demand = baseActualOutput * Math.max(0, s.cascadePolicy.factor);
+      } else {
+        // Dangling baseStageId — validation surfaces this; cascade just
+        // produces 0 batches so we don't crash.
+        demand = 0;
+      }
+    } else {
+      // Continuation: sum predecessors' actualOutputs as feed-in, then
+      // size by inputPerBatch.
+      let totalInput = 0;
+      const preds = Array.isArray(s.inputStageIds) ? s.inputStageIds : [];
+      for (const pid of preds) {
+        const pred = stagesById.get(pid);
+        if (!pred) continue;
+        const predPlanned = plannedById.get(pred.id) ?? 0;
+        totalInput += Math.max(1, pred.batchSizeKg) * predPlanned;
+      }
+      // For continuations, the relevant per-batch divisor is inputPerBatch.
+      const planned =
+        totalInput <= 0
+          ? 0
+          : Math.max(1, Math.ceil(totalInput / inputPerBatch));
+      plannedById.set(sid, planned);
+      continue;
+    }
+
+    const planned =
+      demand <= 0 ? 0 : Math.max(1, Math.ceil(demand / outputPerBatch));
+    plannedById.set(sid, planned);
+  }
+
   const updatedStages: StageMaster[] = api.stages.map((s) => ({
     ...s,
     plannedBatches: plannedById.get(s.id) ?? 0,
   }));
 
-  // projectionKg = sum of (sink stage's actual output). For a single-sink
-  // linear chain this equals finalStage.batchSizeKg * finalStage.plannedBatches
-  // exactly as before, so existing dashboards see no change.
+  // projectionKg = sum of (main-sink stage's actual output). For a single-
+  // sink linear chain this equals finalStage.batchSizeKg * finalStage
+  // .plannedBatches exactly as before, so existing dashboards see no
+  // change. Side-chain stages are intentionally excluded — they're not
+  // part of the API's deliverable.
   const projectionKg = updatedStages
-    .filter((s) => sinkIds.has(s.id))
+    .filter((s) => mainSinkIds.has(s.id))
     .reduce((acc, s) => acc + s.batchSizeKg * s.plannedBatches, 0);
 
   return { ...api, stages: updatedStages, projectionKg };
 }
 
 /**
+ * Identify the set of stage ids that belong to a side chain. Two rules:
+ *   1. ANCHOR — `cascadePolicy.kind === "side-chain"`.
+ *   2. CONTINUATION — has at least one `inputStageId`, and EVERY entry
+ *      in `inputStageIds` is itself a side-chain stage (anchor or earlier
+ *      continuation). Computed by fixed-point iteration so a chain of any
+ *      length collapses correctly.
+ *
+ * Pure helper — exported only for testing if we ever need it; not used
+ * outside this module.
+ */
+function identifySideChainStages(stages: StageMaster[]): Set<string> {
+  const out = new Set<string>();
+  for (const s of stages) {
+    if (s.cascadePolicy && s.cascadePolicy.kind === "side-chain") {
+      out.add(s.id);
+    }
+  }
+  if (out.size === 0) return out;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const s of stages) {
+      if (out.has(s.id)) continue;
+      const inputs = Array.isArray(s.inputStageIds) ? s.inputStageIds : [];
+      if (inputs.length === 0) continue; // pure root → only anchors qualify
+      if (inputs.every((id) => out.has(id))) {
+        out.add(s.id);
+        changed = true;
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Legacy linear cascade — used as the cycle fallback. Identical in formula
  * to the pre-DAG implementation: sort by `stageNo`, walk back from final
- * stage, propagate `inputConsumed` upstream as `outputDemand`.
+ * stage, propagate `inputConsumed` upstream as `outputDemand`. Side-chain
+ * policies are ignored in the fallback (the cycle itself is the bigger
+ * problem; validation surfaces it to the user).
  */
 function cascadeLinear(api: API): API {
   const sorted = [...api.stages].sort((a, b) => a.stageNo - b.stageNo);

@@ -1,4 +1,11 @@
-import type { API, PlanWindow, Project, Reactor } from "../types";
+import type {
+  API,
+  ApiTopology,
+  PlanWindow,
+  Project,
+  Reactor,
+  SideChainCascadePolicy,
+} from "../types";
 import { FY_END_MS, FY_START_MS } from "./dates";
 import { refreshPaletteColors } from "../data/seed";
 
@@ -202,6 +209,7 @@ function normalizeProject(p: any): Project | null {
                 ? s.pcoHours
                 : 8,
             inputStageIds: rawInputs ?? [],
+            cascadePolicy: normalizeCascadePolicy(s.cascadePolicy),
             // Sentinel: stash whether the source had a stored array. If not,
             // we'll fill it with the linear-chain default in the next pass
             // so legacy data is migrated transparently.
@@ -231,7 +239,13 @@ function normalizeProject(p: any): Project | null {
       storedWindow.endMs > storedWindow.startMs
         ? storedWindow
         : { ...projectWin };
-    return { ...rest, targetKg, stages, window: apiWindow };
+    return {
+      ...rest,
+      targetKg,
+      stages,
+      window: apiWindow,
+      topology: normalizeApiTopology(a.topology),
+    };
   });
   const apis = refreshPaletteColors(migratedApis as API[]) as API[];
 
@@ -436,9 +450,14 @@ export const migrateReactorClass = migrateMoc;
  *
  * Rules (matching types.ts doc):
  *   - The first stage by `stageNo` always gets `[]` (no predecessors).
- *   - If the field was MISSING from storage OR ended up empty after
- *     filtering dangling refs, default to `[previous stage by stageNo]`
- *     so legacy linear chains keep working.
+ *   - SIDE-CHAIN ANCHORS (`cascadePolicy.kind === "side-chain"`) are
+ *     allowed to keep their stored `inputStageIds` value — typically `[]`
+ *     because the anchor's demand comes from its `cascadePolicy.factor`,
+ *     not from a DAG predecessor. We just scrub self-refs and danglers
+ *     but do NOT fall back to the linear-chain default for them.
+ *   - For every other non-first stage: if the field was MISSING from
+ *     storage OR ended up empty after filtering dangling refs, default to
+ *     `[previous stage by stageNo]` so legacy linear chains keep working.
  *   - Self-references are dropped; ids that don't exist in the API's stage
  *     set are filtered out (guards against stale references after deletes).
  *
@@ -461,21 +480,79 @@ export function normalizeStageDagInputs(stages: any[]): void {
       "__inputsWereStored" in s
         ? !!s.__inputsWereStored
         : Array.isArray(s.inputStageIds);
+    const isSideChainAnchor =
+      s.cascadePolicy &&
+      typeof s.cascadePolicy === "object" &&
+      s.cascadePolicy.kind === "side-chain";
     if (idx === 0) {
       s.inputStageIds = [];
-    } else if (!wasStored || stored.length === 0) {
-      s.inputStageIds = [sortedByNo[idx - 1].id];
-    } else {
-      const filtered = stored.filter(
+    } else if (isSideChainAnchor) {
+      // Anchor of a side chain — its demand is set by cascadePolicy.factor,
+      // not by a DAG predecessor. Keep whatever was stored (typically [])
+      // after scrubbing self-refs and danglers; do NOT fall back to linear.
+      s.inputStageIds = stored.filter(
         (id) => id !== s.id && idSet.has(id)
       );
-      // Filtering wiped everything (dangling refs only) → fall back to
-      // the linear default rather than orphaning the stage.
-      s.inputStageIds =
-        filtered.length === 0 ? [sortedByNo[idx - 1].id] : filtered;
+    } else if (!wasStored) {
+      // Legacy data with no `inputStageIds` field at all → fall back to
+      // the linear-chain default so v1/v2 saves keep behaving identically.
+      s.inputStageIds = [sortedByNo[idx - 1].id];
+    } else {
+      // Explicitly stored (v3+ shape). An empty list is now meaningful —
+      // it can be a sub-chain root in the "parallel" topology — so we
+      // keep it as-is after scrubbing self-refs and danglers, instead of
+      // clobbering it with the legacy linear default.
+      s.inputStageIds = stored.filter(
+        (id) => id !== s.id && idSet.has(id)
+      );
     }
     if ("__inputsWereStored" in s) delete s.__inputsWereStored;
   });
+}
+
+/**
+ * Normalize an `api.topology` value. Anything not in the allowed set
+ * collapses to "linear" (the default), so legacy rows that predate the
+ * topology field — or rows with garbled data — keep behaving like the
+ * old linear-chain APIs.
+ *
+ * Exported for sync.ts so cloud reads use the same allow-list.
+ */
+export function normalizeApiTopology(value: unknown): ApiTopology {
+  if (value === "linear" || value === "parallel" || value === "side_chains") {
+    return value;
+  }
+  return "linear";
+}
+
+/**
+ * Normalize a `stage.cascadePolicy` value. Strips unknown shapes so
+ * stages from older rows (before the side-chain feature) come back as
+ * `undefined`, leaving them on the default "sum-from-successors" cascade
+ * path.
+ *
+ * Currently only `kind === "side-chain"` is recognised. The shape:
+ *   { kind: "side-chain", baseStageId: string, factor: number > 0 }
+ *
+ * Exported so sync.ts can apply the same canonicalization on cloud rows.
+ */
+export function normalizeCascadePolicy(
+  value: unknown
+): SideChainCascadePolicy | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const v = value as Record<string, unknown>;
+  if (v.kind !== "side-chain") return undefined;
+  const baseStageId =
+    typeof v.baseStageId === "string" && v.baseStageId.length > 0
+      ? v.baseStageId
+      : null;
+  if (!baseStageId) return undefined;
+  const factor =
+    typeof v.factor === "number" && Number.isFinite(v.factor) && v.factor > 0
+      ? v.factor
+      : null;
+  if (factor === null) return undefined;
+  return { kind: "side-chain", baseStageId, factor };
 }
 
 export function migrateAgitator(value: unknown): Reactor["agitatorType"] {

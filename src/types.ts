@@ -115,7 +115,76 @@ export interface StageMaster {
    * on every predecessor before starting batch N here ("any_done" rule).
    */
   inputStageIds: string[];
+  /**
+   * OPTIONAL — side-chain anchor policy. When present, this stage is the
+   * FIRST stage of a side chain (a sub-stream that feeds back into the
+   * main backbone) and its `outputDemand` is OVERRIDDEN during cascade to
+   *
+   *     baseStage.actualOutput × factor
+   *
+   * rather than being summed from its successors. The rest of the math is
+   * unchanged: `plannedBatches = ⌈ outputDemand / outputPerBatch ⌉`,
+   * `actualOutput = plannedBatches × outputPerBatch`. Demand from the
+   * merge stage does NOT propagate back into the side chain — the side
+   * chain is sized by the factor alone.
+   *
+   * Continuation stages of the same side chain (with `inputStageIds`
+   * pointing only at side-chain stages) carry NO `cascadePolicy` — their
+   * demand is forward-cascaded from the previous side stage's actual
+   * output by `cascadePlannedBatches`.
+   *
+   * `baseStageId` is the upstream MAIN-backbone stage whose actual output
+   * is multiplied by `factor`. By convention this is the main predecessor
+   * of the merge stage (i.e. the stage at `mergesIntoStageNo - 1`), but
+   * the field is free-form so the user could rewire it.
+   *
+   * Undefined for every stage that isn't a side-chain anchor.
+   */
+  cascadePolicy?: SideChainCascadePolicy;
 }
+
+/**
+ * Cascade-policy variants. Currently only "side-chain"; left as a
+ * discriminated union so future policies (e.g. "yield-driven",
+ * "campaign-cap") can extend it without a breaking model change.
+ */
+export type SideChainCascadePolicy = {
+  kind: "side-chain";
+  /** Id of the upstream main-backbone stage whose `actualOutput` is multiplied
+   *  by `factor` to size this anchor's `outputDemand`. */
+  baseStageId: string;
+  /** Multiplier applied to `baseStage.actualOutput` to derive this anchor's
+   *  output demand. Must be > 0. Typical values: 0.1 .. 1.0 (e.g. 0.3 means
+   *  "this side chain delivers 30% of what the main predecessor produces"). */
+  factor: number;
+};
+
+/**
+ * Topology preset that drives how stages are scaffolded for an API.
+ *
+ *   - "linear"      — Stages chain S1 → S2 → … → SN. Each non-first stage's
+ *                     `inputStageIds = [prev]`. Default for legacy data.
+ *   - "parallel"    — Multiple sub-chains converge into a single merge stage
+ *                     (and optional post-merge tail). Models a convergence
+ *                     synthesis where two routes (A1→A2→A3, B1→B2→B3→B4)
+ *                     feed into a Merge stage and one or more Final stages.
+ *   - "side_chains" — A main backbone with side chains feeding into it. Each
+ *                     side chain has a multiplicative `factor` applied to
+ *                     its main-predecessor's actualOutput to size the
+ *                     side chain's output demand (see `cascadePolicy`).
+ *
+ * Topology is metadata describing how the stages were SCAFFOLDED — the
+ * authoritative graph lives in `stage.inputStageIds` + `stage.cascadePolicy`.
+ * The cascade and scheduler don't read `topology` directly; only the UI
+ * (badges, spec panels) and the scaffolder do.
+ */
+export type ApiTopology = "linear" | "parallel" | "side_chains";
+
+export const API_TOPOLOGY_VALUES: readonly ApiTopology[] = [
+  "linear",
+  "parallel",
+  "side_chains",
+] as const;
 
 export interface API {
   id: string;
@@ -137,6 +206,12 @@ export interface API {
    * derived from the union of API windows for display purposes.
    */
   window: PlanWindow;
+  /**
+   * Topology preset used to scaffold this API's stages. Defaults to "linear"
+   * when missing on legacy data. Only the SCAFFOLDER reads this field; the
+   * cascade engine is graph-driven and ignores it. See `ApiTopology` above.
+   */
+  topology?: ApiTopology;
 }
 
 /**

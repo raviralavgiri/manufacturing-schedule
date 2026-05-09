@@ -7,6 +7,8 @@ import {
   Lock,
   Beaker,
   GitBranch,
+  GitMerge,
+  Workflow,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
@@ -14,7 +16,7 @@ import { Card, SectionHeader } from "../components/Primitives";
 import AddStageForm from "../components/AddStageForm";
 import ReactorPoolEditor from "../components/ReactorPoolEditor";
 import StageInputsEditor from "../components/StageInputsEditor";
-import type { StageMaster } from "../types";
+import type { ApiTopology, StageMaster } from "../types";
 
 /**
  * Stages tab — operational details for each stage.
@@ -48,12 +50,19 @@ export default function StagesTab() {
     const all: (StageMaster & {
       color: string;
       apiDisplayName: string;
+      apiTopology: ApiTopology;
       /** Output demand on this stage = sum of successors' input consumed (or api.targetKg share for sinks). */
       demandKg: number;
       /** Other stages on the same API — fed to the InputsEditor as candidates. */
       siblings: StageMaster[];
       /** True for the first stage of the API (lowest stageNo) — locks the inputs cell. */
       isFirstStage: boolean;
+      /** True iff this stage is part of a side chain (anchor or continuation). */
+      isSideChainStage: boolean;
+      /** True iff this stage is the side-chain anchor (carries cascadePolicy). */
+      isSideChainAnchor: boolean;
+      /** Anchor's factor — only present on anchors, used for the badge. */
+      sideChainFactor: number | null;
     })[] = [];
     sortedApis.forEach((a) => {
       const sortedStages = [...a.stages].sort((x, y) => x.stageNo - y.stageNo);
@@ -90,15 +99,44 @@ export default function StagesTab() {
           demandByStageId.set(s.id, demand);
         }
       });
+      // Side-chain stage set — same fixed-point rule as cascade.ts /
+      // validation.ts, computed locally so the table can flag them.
+      const sideChainIds = new Set<string>();
+      sortedStages.forEach((s) => {
+        if (s.cascadePolicy && s.cascadePolicy.kind === "side-chain") {
+          sideChainIds.add(s.id);
+        }
+      });
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const s of sortedStages) {
+          if (sideChainIds.has(s.id)) continue;
+          const inputs = Array.isArray(s.inputStageIds) ? s.inputStageIds : [];
+          if (inputs.length === 0) continue;
+          if (inputs.every((id) => sideChainIds.has(id))) {
+            sideChainIds.add(s.id);
+            changed = true;
+          }
+        }
+      }
       const firstId = sortedStages[0]?.id;
       sortedStages.forEach((s) =>
         all.push({
           ...s,
           color: a.color,
           apiDisplayName: a.name,
+          apiTopology: a.topology ?? "linear",
           demandKg: demandByStageId.get(s.id) ?? 0,
           siblings: sortedStages.filter((x) => x.id !== s.id),
           isFirstStage: s.id === firstId,
+          isSideChainStage: sideChainIds.has(s.id),
+          isSideChainAnchor:
+            !!s.cascadePolicy && s.cascadePolicy.kind === "side-chain",
+          sideChainFactor:
+            s.cascadePolicy && s.cascadePolicy.kind === "side-chain"
+              ? s.cascadePolicy.factor
+              : null,
         })
       );
     });
@@ -129,7 +167,7 @@ export default function StagesTab() {
     <div className="space-y-4">
       <SectionHeader
         title="Stages"
-        subtitle={`${apis.length} APIs · ${rows.length} stages · ${reactors.length} reactors. Edit any yellow cell to recompute the schedule.`}
+        subtitle={`${apis.length} APIs · ${rows.length} stages · ${reactors.length} reactors · ${topologyBreakdown(apis)}. Edit any yellow cell to recompute the schedule.`}
         right={
           <div className="flex items-center gap-2">
             <div className="relative">
@@ -262,14 +300,42 @@ export default function StagesTab() {
                         >
                           {r.apiDisplayName}
                         </span>
+                        <TopologyIndicator topology={r.apiTopology} />
                       </div>
                     </td>
                     <td className="px-3 py-2.5 text-ink-100">S{r.stageNo}</td>
                     <td className="px-3 py-2 text-left">
-                      <EditableTextCell
-                        value={r.stageName}
-                        onCommit={(v) => setStageName(r.id, v)}
-                      />
+                      <div
+                        className="flex items-center gap-2"
+                        // Side-chain rows are indented 16px to visually nest
+                        // them under the main backbone they branch from.
+                        style={
+                          r.isSideChainStage ? { paddingLeft: 16 } : undefined
+                        }
+                      >
+                        <EditableTextCell
+                          value={r.stageName}
+                          onCommit={(v) => setStageName(r.id, v)}
+                        />
+                        {r.isSideChainAnchor &&
+                          r.sideChainFactor !== null && (
+                            <span
+                              className="inline-flex items-center gap-1 rounded-md border border-cyan-300/40 bg-cyan-300/10 px-1.5 py-0.5 font-mono text-[9px] font-bold text-cyan-300"
+                              title={`Side-chain anchor — factor × baseStage.actualOutput sizes the demand. factor = ${r.sideChainFactor}`}
+                            >
+                              <Workflow size={9} /> side ×{" "}
+                              {formatFactor(r.sideChainFactor)}
+                            </span>
+                          )}
+                        {r.isSideChainStage && !r.isSideChainAnchor && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-md border border-cyan-300/20 bg-cyan-300/5 px-1.5 py-0.5 font-mono text-[9px] font-bold text-cyan-300/80"
+                            title="Side-chain continuation — forward-cascaded from the anchor's actualOutput."
+                          >
+                            <Workflow size={9} /> side
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-3 py-2 text-left">
                       <ReactorPoolEditor
@@ -551,6 +617,71 @@ function EditableNumCell({
       className="cell-yellow w-24 rounded-md px-2 py-1 text-right font-mono text-sm tabular-nums transition"
     />
   );
+}
+
+/**
+ * Tiny inline icon next to the API name showing which topology preset is
+ * active. Linear stays muted; parallel and side-chains light up so the
+ * stage list visually mirrors the APIs tab badges.
+ */
+function TopologyIndicator({ topology }: { topology: ApiTopology }) {
+  if (topology === "parallel") {
+    return (
+      <span
+        className="inline-flex items-center gap-0.5 rounded border border-violet-300/30 bg-violet-300/10 px-1 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-violet-300"
+        title="Topology: parallel (convergence)"
+      >
+        <GitMerge size={9} /> parallel
+      </span>
+    );
+  }
+  if (topology === "side_chains") {
+    return (
+      <span
+        className="inline-flex items-center gap-0.5 rounded border border-cyan-300/30 bg-cyan-300/10 px-1 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-cyan-300"
+        title="Topology: side chains (sub-streams)"
+      >
+        <Workflow size={9} /> side
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex items-center gap-0.5 rounded border border-white/10 bg-white/5 px-1 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-wider text-ink-300"
+      title="Topology: linear (default)"
+    >
+      <GitBranch size={9} /> linear
+    </span>
+  );
+}
+
+/** Pretty-print a side-chain factor like 0.3 / 1.25 with at most 2 decimals. */
+function formatFactor(f: number): string {
+  if (!Number.isFinite(f)) return "?";
+  return Number.isInteger(f) ? `${f}` : f.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+/**
+ * One-line summary of how many APIs are on each topology preset, e.g.
+ *   "18 linear · 1 parallel · 1 side-chains"
+ * Used as a subtitle hint in the section header so the user sees the
+ * shape of their workspace at a glance.
+ */
+function topologyBreakdown(apis: { topology?: ApiTopology }[]): string {
+  let linear = 0;
+  let parallel = 0;
+  let side = 0;
+  for (const a of apis) {
+    const t = a.topology ?? "linear";
+    if (t === "parallel") parallel++;
+    else if (t === "side_chains") side++;
+    else linear++;
+  }
+  const parts: string[] = [];
+  if (linear > 0) parts.push(`${linear} linear`);
+  if (parallel > 0) parts.push(`${parallel} parallel`);
+  if (side > 0) parts.push(`${side} side-chains`);
+  return parts.length === 0 ? "no topology data" : parts.join(" · ");
 }
 
 function EditableTextCell({

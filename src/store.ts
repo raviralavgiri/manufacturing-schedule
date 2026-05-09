@@ -21,6 +21,10 @@ import {
   setDataSourceMode,
   type DataSource,
 } from "./utils/storage";
+import {
+  applyTopologyPresetToApi,
+  type TopologyPresetSpec,
+} from "./utils/topologyPresets";
 import { isSupabaseEnabled } from "./services/supabase";
 import {
   loadAllProjectsFromCloud,
@@ -140,6 +144,17 @@ interface AppState {
   /** Set ONE api's plan window (per-API window replaces the old global). */
   setApiWindow: (apiId: string, startMs: number, endMs: number) => void;
   setApiStageCount: (apiId: string, count: number) => void;
+  /**
+   * Scaffold this API's stages onto the chosen TOPOLOGY PRESET. Operates
+   * in PRESERVE_THEN_ADD mode — existing stage rows are mapped to scaffold
+   * positions by stageNo and have their `inputStageIds` / `cascadePolicy`
+   * re-wired; missing positions are added with sensible defaults; extras
+   * past the scaffold size trail with a linear chain. Re-runs the cascade
+   * and triggers a schedule recompute.
+   *
+   * See `src/utils/topologyPresets.ts` for the spec shapes.
+   */
+  applyTopologyPreset: (apiId: string, spec: TopologyPresetSpec) => void;
   addAPI: (withDefaultFinalStage?: boolean) => string;
   removeAPI: (apiId: string) => void;
 
@@ -569,30 +584,47 @@ export const useStore = create<AppState>((set, get) => ({
       const apis = p.apis.map((a) => {
         if (!a.stages.some((s) => s.id === stageId)) return a;
         // Drop any dangling references to the deleted stage from siblings'
-        // inputStageIds. If a sibling ends up with an empty list and
-        // wasn't the first stage, fall back to its previous-by-stageNo
-        // sibling so the cascade has a sensible chain to walk.
+        // inputStageIds. If a sibling's list is filtered down to empty
+        // BUT was originally non-empty (i.e. all of its predecessors were
+        // the deleted stage or other casualties), fall back to its
+        // previous-by-stageNo sibling so the cascade has a sensible chain
+        // to walk. Stages that originally had an empty list (sub-chain
+        // roots, side-chain anchors) are preserved as-is.
         const remainingSorted = a.stages
           .filter((s) => s.id !== stageId)
           .sort((x, y) => x.stageNo - y.stageNo);
         const remainingIds = new Set(remainingSorted.map((s) => s.id));
         const stages = remainingSorted.map((s, idx) => {
-          const filtered = (s.inputStageIds ?? []).filter((id) =>
-            remainingIds.has(id)
-          );
+          const original = Array.isArray(s.inputStageIds)
+            ? s.inputStageIds
+            : [];
+          const filtered = original.filter((id) => remainingIds.has(id));
           let next = filtered;
           if (idx === 0) {
             next = [];
-          } else if (filtered.length === 0) {
+          } else if (filtered.length === 0 && original.length > 0) {
+            // Originally had predecessors, but they were all wiped by
+            // deletions — fall back to linear default for the chain.
             next = [remainingSorted[idx - 1].id];
           }
+          // Also strip cascadePolicy.baseStageId if it pointed at the
+          // deleted stage — leaves the policy intact otherwise.
+          let cascadePolicy = s.cascadePolicy;
           if (
-            next.length === s.inputStageIds.length &&
-            next.every((id, i) => id === s.inputStageIds[i])
+            cascadePolicy &&
+            cascadePolicy.kind === "side-chain" &&
+            !remainingIds.has(cascadePolicy.baseStageId)
+          ) {
+            cascadePolicy = undefined;
+          }
+          if (
+            next.length === original.length &&
+            next.every((id, i) => id === original[i]) &&
+            cascadePolicy === s.cascadePolicy
           ) {
             return s;
           }
-          return { ...s, inputStageIds: next };
+          return { ...s, inputStageIds: next, cascadePolicy };
         });
         return cascadePlannedBatches({ ...a, stages });
       });
@@ -706,6 +738,40 @@ export const useStore = create<AppState>((set, get) => ({
         }
         return cascadePlannedBatches({ ...a, stages });
       });
+      return { ...p, apis };
+    });
+    scheduleRecompute(set, get, true);
+  },
+
+  applyTopologyPreset: (apiId, spec) => {
+    mutateActive(set, get, (p) => {
+      const api = p.apis.find((a) => a.id === apiId);
+      if (!api) return p;
+      // Defaults for any newly-scaffolded stage rows. Reactor pool draws
+      // from the API's first existing stage's pool — falling back to the
+      // project's first SS reactor if there is none — so additions feel
+      // continuous with whatever the user already configured.
+      const firstExistingPool =
+        api.stages.find((s) => s.reactorPool.length > 0)?.reactorPool ?? [];
+      const fallbackPool = p.reactors
+        .filter((r) => r.moc === "SS")
+        .slice(0, 2)
+        .map((r) => r.id);
+      const reactorPool =
+        firstExistingPool.length > 0 ? firstExistingPool : fallbackPool;
+      const scaffolded = applyTopologyPresetToApi(api, spec, {
+        batchSizeKg: 100,
+        inputKgPerBatch: 100,
+        bcfHours: 120,
+        bctHours: 120,
+        processHours: 120,
+        analysisHours: 48,
+        pcoHours: 8,
+        plannedBatches: 10,
+        reactorPool,
+      });
+      const cascaded = cascadePlannedBatches(scaffolded);
+      const apis = p.apis.map((a) => (a.id === apiId ? cascaded : a));
       return { ...p, apis };
     });
     scheduleRecompute(set, get, true);

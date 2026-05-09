@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   RotateCcw,
   Plus,
@@ -6,11 +6,19 @@ import {
   Pencil,
   Search,
   Lock,
+  ChevronDown,
+  ChevronRight,
+  GitMerge,
+  Workflow,
+  GitBranch,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
 import { Card, SectionHeader } from "../components/Primitives";
 import { fmtIsoDate, parseIsoDate } from "../utils/dates";
+import type { ApiTopology } from "../types";
+import ParallelTopologyEditor from "../components/ParallelTopologyEditor";
+import SideChainsTopologyEditor from "../components/SideChainsTopologyEditor";
 
 /**
  * APIs tab — high-level "what we want to make" view.
@@ -29,6 +37,7 @@ export default function ApisTab() {
   const setApiTargetOutput = useStore((s) => s.setApiTargetOutput);
   const setApiWindow = useStore((s) => s.setApiWindow);
   const setApiStageCount = useStore((s) => s.setApiStageCount);
+  const applyTopologyPreset = useStore((s) => s.applyTopologyPreset);
   const addAPI = useStore((s) => s.addAPI);
   const removeAPI = useStore((s) => s.removeAPI);
   const resetToSeed = useStore((s) => s.resetToSeed);
@@ -41,6 +50,16 @@ export default function ApisTab() {
     null
   );
   const newRowRef = useRef<HTMLTableRowElement>(null);
+
+  // Per-API state for the inline topology spec panel:
+  //   - `expandedApiId` is the API whose panel is currently OPEN (only one
+  //     at a time to keep the UI focused).
+  //   - `pendingKindByApi` is the dropdown's selection, which can drift
+  //     from `api.topology` until the user clicks "Apply" on the panel.
+  const [expandedApiId, setExpandedApiId] = useState<string | null>(null);
+  const [pendingKindByApi, setPendingKindByApi] = useState<
+    Record<string, ApiTopology>
+  >({});
 
   const sortedApis = useMemo(
     () => [...apis].sort((a, b) => a.id.localeCompare(b.id)),
@@ -181,6 +200,9 @@ export default function ApisTab() {
                 <Th align="right" yellow>
                   Target (kg)
                 </Th>
+                <Th yellow title="Topology preset that scaffolds this API's stages. Linear chains stages 1→N. Parallel converges multiple sub-chains into a merge stage. Side chains add factor-driven sub-streams to a main backbone.">
+                  Topology
+                </Th>
                 <Th align="right" locked>
                   Actual (kg)
                 </Th>
@@ -199,18 +221,21 @@ export default function ApisTab() {
                   const isNew = api.id === recentlyAddedApiId;
                   const isConfirming = api.id === confirmDeleteId;
                   const isParked = api.targetKg === 0;
+                  const currentTopology: ApiTopology =
+                    pendingKindByApi[api.id] ?? api.topology ?? "linear";
+                  const isExpanded = expandedApiId === api.id;
                   return (
-                    <tr
-                      key={api.id}
-                      ref={isNew ? newRowRef : undefined}
-                      className={clsx(
-                        "group border-t border-white/5 transition hover:bg-white/[0.04]",
-                        i % 2 === 0 ? "bg-white/[0.01]" : "",
-                        isNew && "row-flash",
-                        isParked && "opacity-50"
-                      )}
-                      title={isParked ? "Target = 0 · this API is parked, no batches scheduled" : undefined}
-                    >
+                    <Fragment key={api.id}>
+                      <tr
+                        ref={isNew ? newRowRef : undefined}
+                        className={clsx(
+                          "group border-t border-white/5 transition hover:bg-white/[0.04]",
+                          i % 2 === 0 ? "bg-white/[0.01]" : "",
+                          isNew && "row-flash",
+                          isParked && "opacity-50"
+                        )}
+                        title={isParked ? "Target = 0 · this API is parked, no batches scheduled" : undefined}
+                      >
                       <td className="px-3 py-2.5 font-semibold text-white">
                         <div className="flex items-start gap-2">
                           <span
@@ -260,6 +285,33 @@ export default function ApisTab() {
                           </span>
                         )}
                       </td>
+                      <td className="px-3 py-2">
+                        <TopologyCell
+                          value={currentTopology}
+                          appliedTopology={api.topology ?? "linear"}
+                          isExpanded={isExpanded}
+                          onSelect={(kind) => {
+                            if (kind === "linear") {
+                              applyTopologyPreset(api.id, { kind: "linear" });
+                              setPendingKindByApi((p) => {
+                                const c = { ...p };
+                                delete c[api.id];
+                                return c;
+                              });
+                              if (isExpanded) setExpandedApiId(null);
+                            } else {
+                              setPendingKindByApi((p) => ({
+                                ...p,
+                                [api.id]: kind,
+                              }));
+                              setExpandedApiId(api.id);
+                            }
+                          }}
+                          onToggleExpand={() => {
+                            setExpandedApiId(isExpanded ? null : api.id);
+                          }}
+                        />
+                      </td>
                       <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-cyan-300">
                         {actualOutputKg.toLocaleString()}
                       </td>
@@ -304,14 +356,66 @@ export default function ApisTab() {
                           </button>
                         )}
                       </td>
-                    </tr>
+                      </tr>
+                      {isExpanded && currentTopology !== "linear" && (
+                        <tr className="border-t border-white/5">
+                          <td
+                            colSpan={9}
+                            className="bg-ink-900/40 px-3 py-3"
+                          >
+                            {currentTopology === "parallel" && (
+                              <ParallelTopologyEditor
+                                onApply={(spec) => {
+                                  applyTopologyPreset(api.id, spec);
+                                  setExpandedApiId(null);
+                                  setPendingKindByApi((p) => {
+                                    const c = { ...p };
+                                    delete c[api.id];
+                                    return c;
+                                  });
+                                }}
+                                onCancel={() => {
+                                  setExpandedApiId(null);
+                                  setPendingKindByApi((p) => {
+                                    const c = { ...p };
+                                    delete c[api.id];
+                                    return c;
+                                  });
+                                }}
+                              />
+                            )}
+                            {currentTopology === "side_chains" && (
+                              <SideChainsTopologyEditor
+                                onApply={(spec) => {
+                                  applyTopologyPreset(api.id, spec);
+                                  setExpandedApiId(null);
+                                  setPendingKindByApi((p) => {
+                                    const c = { ...p };
+                                    delete c[api.id];
+                                    return c;
+                                  });
+                                }}
+                                onCancel={() => {
+                                  setExpandedApiId(null);
+                                  setPendingKindByApi((p) => {
+                                    const c = { ...p };
+                                    delete c[api.id];
+                                    return c;
+                                  });
+                                }}
+                              />
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   );
                 }
               )}
               {filteredApis.length === 0 && (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className="py-12 text-center text-sm text-ink-300"
                   >
                     No APIs match. Click{" "}
@@ -398,14 +502,17 @@ function Th({
   align = "left",
   yellow,
   locked,
+  title,
 }: {
   children: React.ReactNode;
   align?: "left" | "right";
   yellow?: boolean;
   locked?: boolean;
+  title?: string;
 }) {
   return (
     <th
+      title={title}
       className={clsx(
         "border-b border-white/10 px-3 py-2 font-semibold",
         align === "right" ? "text-right" : "text-left",
@@ -471,6 +578,88 @@ function EditableNumCell({
       }}
       className={`cell-yellow ${width} rounded-md px-2 py-1 text-right font-mono text-sm tabular-nums transition`}
     />
+  );
+}
+
+function TopologyCell({
+  value,
+  appliedTopology,
+  isExpanded,
+  onSelect,
+  onToggleExpand,
+}: {
+  /** Current dropdown selection — may be a pending kind that hasn't yet
+   *  been applied. When it differs from `appliedTopology` we show a
+   *  small "draft" hint so the user knows to click "Apply" in the panel. */
+  value: ApiTopology;
+  /** What's actually persisted on the API row right now. */
+  appliedTopology: ApiTopology;
+  isExpanded: boolean;
+  onSelect: (kind: ApiTopology) => void;
+  onToggleExpand: () => void;
+}) {
+  const isDraft = value !== appliedTopology;
+  // Which icon represents which topology — purely cosmetic, but consistent
+  // with the editors and the StagesTab section header.
+  const icon =
+    value === "parallel" ? (
+      <GitMerge size={12} className="text-violet-300" />
+    ) : value === "side_chains" ? (
+      <Workflow size={12} className="text-cyan-300" />
+    ) : (
+      <GitBranch size={12} className="text-ink-300" />
+    );
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="shrink-0">{icon}</span>
+      <select
+        value={value}
+        onChange={(e) => onSelect(e.target.value as ApiTopology)}
+        className={clsx(
+          "rounded-md border bg-ink-900 px-2 py-1 font-mono text-[11px] text-white outline-none",
+          isDraft
+            ? "border-amber-300/50 focus:border-amber-300/80"
+            : "border-white/10 focus:border-cyan-300/50"
+        )}
+        title={
+          isDraft
+            ? `Draft: "${value}". Click the chevron to open the spec panel and Apply.`
+            : `Topology preset for this API. Linear is the default; Parallel converges sub-chains; Side chains add factor-driven sub-streams.`
+        }
+      >
+        <option value="linear" className="bg-ink-900">
+          Linear
+        </option>
+        <option value="parallel" className="bg-ink-900">
+          Parallel
+        </option>
+        <option value="side_chains" className="bg-ink-900">
+          Side chains
+        </option>
+      </select>
+      {value !== "linear" && (
+        <button
+          type="button"
+          onClick={onToggleExpand}
+          title={isExpanded ? "Collapse spec panel" : "Open spec panel"}
+          className="rounded-md border border-white/10 bg-white/5 p-1 text-ink-200 hover:bg-white/10"
+        >
+          {isExpanded ? (
+            <ChevronDown size={12} />
+          ) : (
+            <ChevronRight size={12} />
+          )}
+        </button>
+      )}
+      {isDraft && (
+        <span
+          className="rounded-md border border-amber-300/40 bg-amber-300/10 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-amber-300"
+          title="The dropdown selection differs from what's applied. Open the panel and click Apply to commit."
+        >
+          Draft
+        </span>
+      )}
+    </div>
   );
 }
 

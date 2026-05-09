@@ -3,6 +3,8 @@ import { isSupabaseEnabled, supabase } from "./supabase";
 import {
   migrateAgitator,
   migrateMoc,
+  normalizeApiTopology,
+  normalizeCascadePolicy,
   normalizeStageDagInputs,
 } from "../utils/storage";
 
@@ -79,9 +81,19 @@ function rowToProject(row: ProjectRow): Project {
         // hydrator so cloud rows written before `inputStageIds` existed
         // collapse to the linear-chain default and don't crash the
         // cascade / scheduler.
-        const stages = Array.isArray(rest.stages) ? rest.stages.slice() : [];
+        const stages = Array.isArray(rest.stages)
+          ? rest.stages.map((s: any) => ({
+              ...s,
+              cascadePolicy: normalizeCascadePolicy(s.cascadePolicy),
+            }))
+          : [];
         normalizeStageDagInputs(stages);
-        return { ...rest, stages, window: apiWindow };
+        return {
+          ...rest,
+          stages,
+          window: apiWindow,
+          topology: normalizeApiTopology(a.topology),
+        };
       })
     : [];
 

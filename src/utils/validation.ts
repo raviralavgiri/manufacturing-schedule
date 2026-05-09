@@ -20,7 +20,14 @@ export interface DagIssue {
  *   - first stage with non-empty `inputStageIds` (error)
  *   - self-references (error)
  *   - dangling references (id not in this API's stage set) (error)
- *   - multiple sink stages (warn — distribution rule applies)
+ *   - side-chain `cascadePolicy.factor <= 0` (error)
+ *   - side-chain `cascadePolicy.baseStageId` missing/unknown (error)
+ *   - side-chain anchor whose `baseStageId` is downstream of itself
+ *     (would be a cycle once you account for the implicit factor edge —
+ *     error)
+ *   - side-chain producing < 1 batch (warn — chain is too small to deliver)
+ *   - topology = "parallel" with no merge stage (warn)
+ *   - multiple MAIN sink stages (warn — distribution rule applies)
  *
  * Pure function — never mutates the API. Returns an empty array on a
  * clean linear chain.
@@ -38,6 +45,11 @@ export function validateApiDag(api: API): DagIssue[] {
   const sortedByNo = [...stages].sort((a, b) => a.stageNo - b.stageNo);
   const firstStageId = sortedByNo[0].id;
   const idSet = new Set(stages.map((s) => s.id));
+
+  // Side-chain stage set (anchors + continuations) — same definition as
+  // the cascade. We need it to refine the multi-sink warning so dangling
+  // side-chain "tails" are flagged separately from main-graph multi-sink.
+  const sideChainStageIds = identifySideChainStages(stages);
 
   // ─ Per-stage shape checks ───────────────────────────────────────────
   for (const s of stages) {
@@ -111,24 +123,159 @@ export function validateApiDag(api: API): DagIssue[] {
     });
   }
 
+  // ─ Side-chain (cascadePolicy) checks ────────────────────────────────
+  // Anchors must reference a real, valid baseStageId with factor > 0,
+  // and the baseStage must NOT be reachable forward from the anchor (else
+  // we'd have an implicit cycle through the factor edge).
+  for (const s of stages) {
+    if (!s.cascadePolicy || s.cascadePolicy.kind !== "side-chain") continue;
+    const policy = s.cascadePolicy;
+    if (!(policy.factor > 0)) {
+      issues.push({
+        apiId: api.id,
+        stageId: s.id,
+        level: "error",
+        msg: `Side-chain anchor "${s.stageName}" has factor ${policy.factor}; must be > 0.`,
+      });
+    }
+    if (!policy.baseStageId || !idSet.has(policy.baseStageId)) {
+      issues.push({
+        apiId: api.id,
+        stageId: s.id,
+        level: "error",
+        msg: `Side-chain anchor "${s.stageName}" references unknown base stage id "${policy.baseStageId ?? "(missing)"}".`,
+      });
+    } else {
+      // Cycle-via-factor check: walk forward from the anchor following
+      // both `inputStageIds`-driven successor edges AND the factor edge.
+      // If baseStage is reachable, we have an implicit cycle.
+      if (isReachableForward(stages, successors, s.id, policy.baseStageId)) {
+        const baseName =
+          stages.find((x) => x.id === policy.baseStageId)?.stageName ??
+          policy.baseStageId;
+        issues.push({
+          apiId: api.id,
+          stageId: s.id,
+          level: "error",
+          msg: `Side-chain anchor "${s.stageName}" has baseStage "${baseName}" downstream of itself — would form a cycle.`,
+        });
+      }
+    }
+  }
+
+  // Side chain producing < 1 batch — warn the user the chain is too
+  // small (typically due to a tiny factor combined with a small main
+  // output). Uses the most recent cascaded plannedBatches.
+  for (const s of stages) {
+    if (!sideChainStageIds.has(s.id)) continue;
+    if ((s.plannedBatches ?? 0) < 1) {
+      issues.push({
+        apiId: api.id,
+        stageId: s.id,
+        level: "warn",
+        msg: `Side-chain stage "${s.stageName}" produces 0 batches — factor or upstream output is too small.`,
+      });
+    }
+  }
+
+  // ─ Topology-level warnings ───────────────────────────────────────────
+  if (api.topology === "parallel") {
+    // A "parallel" API should have at least one stage that pulls from
+    // multiple predecessors — that's the merge stage. If none exists the
+    // scaffold either wasn't applied or was edited away.
+    const hasMerge = stages.some(
+      (s) => Array.isArray(s.inputStageIds) && s.inputStageIds.length >= 2
+    );
+    if (!hasMerge) {
+      issues.push({
+        apiId: api.id,
+        stageId: null,
+        level: "warn",
+        msg: `Topology is "parallel" but no merge stage (≥ 2 inputs) was found. Re-apply the topology preset on the APIs tab.`,
+      });
+    }
+  }
+
   // ─ Multi-sink warning ───────────────────────────────────────────────
-  // Sinks = stages with no successors. Multiple sinks means the API target
-  // gets split equally; flag so the user knows.
-  const sinks = stages.filter(
-    (s) => (successors.get(s.id)?.length ?? 0) === 0
+  // Sinks = stages with no successors AND that aren't side-chain stages
+  // (a side-chain stage with no successors is its own warning above —
+  // "produces 0 batches" also catches under-sized chains).
+  const mainSinks = stages.filter(
+    (s) =>
+      !sideChainStageIds.has(s.id) &&
+      (successors.get(s.id) ?? []).length === 0
   );
-  if (sinks.length > 1) {
+  if (mainSinks.length > 1) {
     issues.push({
       apiId: api.id,
       stageId: null,
       level: "warn",
-      msg: `${sinks.length} sink stages (${sinks
+      msg: `${mainSinks.length} sink stages (${mainSinks
         .map((s) => s.stageName)
         .join(", ")}). API target is distributed equally across sinks.`,
     });
   }
 
   return issues;
+}
+
+/**
+ * Identify the side-chain stage set — same fixed-point rule as cascade.ts.
+ * Duplicated here (rather than imported) to keep validation a leaf module
+ * with no scheduler dependencies.
+ */
+function identifySideChainStages(stages: StageMaster[]): Set<string> {
+  const out = new Set<string>();
+  for (const s of stages) {
+    if (s.cascadePolicy && s.cascadePolicy.kind === "side-chain") {
+      out.add(s.id);
+    }
+  }
+  if (out.size === 0) return out;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const s of stages) {
+      if (out.has(s.id)) continue;
+      const inputs = Array.isArray(s.inputStageIds) ? s.inputStageIds : [];
+      if (inputs.length === 0) continue;
+      if (inputs.every((id) => out.has(id))) {
+        out.add(s.id);
+        changed = true;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Forward reachability check: is `targetId` reachable from `fromId` by
+ * walking successors (the natural inputStageIds graph)? Used by the
+ * side-chain "baseStage downstream of anchor" cycle check — if the base
+ * is downstream we'd have a closed loop once you fold in the factor edge.
+ */
+function isReachableForward(
+  stages: StageMaster[],
+  successors: Map<string, string[]>,
+  fromId: string,
+  targetId: string
+): boolean {
+  if (fromId === targetId) return true;
+  const seen = new Set<string>();
+  const stack = [fromId];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    for (const next of successors.get(id) ?? []) {
+      if (next === targetId) return true;
+      if (!seen.has(next)) stack.push(next);
+    }
+  }
+  // Reference `stages` so the parameter is "used" — keeps the signature
+  // explicit for callers that may want to swap to a custom successor map.
+  void stages;
+  return false;
 }
 
 /**
