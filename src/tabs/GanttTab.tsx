@@ -22,8 +22,10 @@ import { computeWeeks, fmtDateTime } from "../utils/dates";
 import {
   downloadCsv,
   downloadElementAsPng,
+  downloadGanttGridAsXls,
   fileStamp,
   printPage,
+  type GanttGridRow,
 } from "../utils/exporters";
 import type { BatchScheduleEntry, Reactor } from "../types";
 
@@ -462,6 +464,87 @@ export default function GanttTab() {
                   `gantt_reactor_wise_${fileStamp()}.csv`,
                   headers,
                   rows
+                );
+              }}
+              onGanttXls={() => {
+                // Build a reactor × week grid coloured by API. For each
+                // reactor row, iterate every batch booked on that reactor
+                // and mark each week the batch overlaps with the API's
+                // color. If multiple batches share a week, the LAST one
+                // wins (so longer-running batches stay visible).
+                const weekStartMs = weeks.map((w) => w.startMs);
+                const weekMs = 7 * 24 * 3600 * 1000;
+                const ganttRows: GanttGridRow[] = reactors.map((r) => {
+                  const cells: GanttGridRow["weeks"] = weekStartMs.map(
+                    () => null
+                  );
+                  // ALL batches (not the filtered set) so the export is
+                  // complete regardless of which filter is active.
+                  schedule.batches.forEach((b) => {
+                    if (!b.reactorIds.includes(r.id)) return;
+                    const startWk = Math.max(
+                      0,
+                      Math.floor((b.startMs - fyStartMs) / weekMs)
+                    );
+                    const endWk = Math.min(
+                      cells.length - 1,
+                      Math.floor((b.endMs - 1 - fyStartMs) / weekMs)
+                    );
+                    if (endWk < 0 || startWk > cells.length - 1) return;
+                    const color =
+                      apiColorById.get(b.apiId) ?? b.apiColor ?? "#9ca3af";
+                    const text = b.apiId;
+                    const title = `${b.batchId} · ${b.apiName} · S${b.stageNo}`;
+                    for (let i = startWk; i <= endWk; i++) {
+                      cells[i] = { color, text, title };
+                    }
+                  });
+                  return {
+                    label: r.name,
+                    secondary: r.moc,
+                    weeks: cells,
+                  };
+                });
+
+                // Build quarter bands by walking the weeks list. quarterIn
+                // is 1..4; we just count consecutive weeks per quarter.
+                const quarterLabels: string[] = [];
+                const quarterSpans: number[] = [];
+                if (weeks.length > 0) {
+                  const monthOf = (i: number) =>
+                    weeks[i].start.toLocaleString("en-US", {
+                      month: "short",
+                    });
+                  // 4 equal slices is the simplest reading; matches the
+                  // header band on the in-app Gantt.
+                  const sliceSize = Math.max(1, Math.ceil(weeks.length / 4));
+                  for (let q = 0; q < 4; q++) {
+                    const a = q * sliceSize;
+                    const b = Math.min(weeks.length, a + sliceSize);
+                    if (a >= weeks.length) break;
+                    const span = b - a;
+                    quarterSpans.push(span);
+                    quarterLabels.push(
+                      `Q${q + 1} · ${monthOf(a)}-${monthOf(b - 1)}`
+                    );
+                  }
+                }
+                const weekLabels = weeks.map((w) =>
+                  w.start.toLocaleString("en-US", {
+                    day: "2-digit",
+                    month: "short",
+                  })
+                );
+                downloadGanttGridAsXls(
+                  `gantt_grid_${mode}_${fileStamp()}.xls`,
+                  {
+                    title: "Gantt Grid",
+                    subtitle: `${reactors.length} reactors × ${weeks.length} weeks · ${schedule.batches.length} batches · cell color = API`,
+                    quarterLabels,
+                    quarterSpans,
+                    weekLabels,
+                    rows: ganttRows,
+                  }
                 );
               }}
               onPng={async () => {

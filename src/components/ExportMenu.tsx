@@ -4,6 +4,7 @@ import {
   ChevronDown,
   Image as ImageIcon,
   FileText,
+  FileSpreadsheet,
   Printer,
   Loader2,
 } from "lucide-react";
@@ -13,6 +14,8 @@ interface Props {
   onCsv?: () => void;
   /** Extra CSV export action — typically "Reactor-wise Gantt CSV". */
   onReactorCsv?: () => void;
+  /** Visual Gantt grid as Excel — coloured cells per reactor × week. */
+  onGanttXls?: () => void;
   onPng?: () => Promise<void> | void;
   onPrint?: () => void;
   /** Override the button's primary label (default "Export"). */
@@ -24,6 +27,7 @@ interface Props {
 export default function ExportMenu({
   onCsv,
   onReactorCsv,
+  onGanttXls,
   onPng,
   onPrint,
   label = "Export",
@@ -98,6 +102,17 @@ export default function ExportMenu({
               onClick={() => {
                 setOpen(false);
                 onReactorCsv();
+              }}
+            />
+          )}
+          {onGanttXls && (
+            <ExportItem
+              icon={<FileSpreadsheet size={13} />}
+              title="Gantt grid (Excel)"
+              subtitle="reactor × week grid with colour fills"
+              onClick={() => {
+                setOpen(false);
+                onGanttXls();
               }}
             />
           )}
