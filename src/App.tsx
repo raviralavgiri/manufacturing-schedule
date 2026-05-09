@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import {
   Activity,
   AlertTriangle,
-  BarChart3,
   Beaker,
   CalendarDays,
   CheckCircle2,
@@ -29,7 +28,7 @@ import ScheduleTab from "./tabs/ScheduleTab";
 import GanttTab from "./tabs/GanttTab";
 import EquipmentTab from "./tabs/EquipmentTab";
 import ClashTab from "./tabs/ClashTab";
-import QuarterlyTab from "./tabs/QuarterlyTab";
+import DashboardTab from "./tabs/DashboardTab";
 
 type TabId =
   | "apis"
@@ -39,7 +38,7 @@ type TabId =
   | "gantt"
   | "equipment"
   | "clash"
-  | "quarterly";
+  | "dashboard";
 
 const TABS: {
   id: TabId;
@@ -98,11 +97,11 @@ const TABS: {
     desc: "Zero-clash sequencer proof",
   },
   {
-    id: "quarterly",
-    label: "Quarterly Summary",
-    icon: <BarChart3 size={18} />,
+    id: "dashboard",
+    label: "Dashboard",
+    icon: <Gauge size={18} />,
     accent: "lime",
-    desc: "Q1–Q4 + FY totals",
+    desc: "Monthly · Quarterly · Yearly",
   },
 ];
 
@@ -266,7 +265,7 @@ export default function App() {
           {active === "gantt" && <GanttTab />}
           {active === "equipment" && <EquipmentTab />}
           {active === "clash" && <ClashTab />}
-          {active === "quarterly" && <QuarterlyTab />}
+          {active === "dashboard" && <DashboardTab />}
         </div>
       </main>
 
