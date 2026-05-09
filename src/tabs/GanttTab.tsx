@@ -1122,17 +1122,6 @@ export default function GanttTab() {
                               <div className="text-ink-300">
                                 Cycle End: {new Date(b.endMs).toLocaleString()}
                               </div>
-                              {slotInfo &&
-                                slotInfo.processHours <
-                                  slotInfo.bctHours && (
-                                  <div className="text-ink-300">
-                                    Wait: {(
-                                      slotInfo.bctHours -
-                                      slotInfo.processHours
-                                    ).toFixed(1)}h · Process:{" "}
-                                    {slotInfo.processHours.toFixed(1)}h
-                                  </div>
-                                )}
                               <div className="text-ink-300">
                                 Analysis End:{" "}
                                 {new Date(b.analysisEndMs).toLocaleString()}

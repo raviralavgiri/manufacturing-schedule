@@ -177,14 +177,11 @@ function normalizeProject(p: any): Project | null {
             typeof s.bctHours === "number" && s.bctHours > 0
               ? s.bctHours
               : bcfHours;
-          // processHours defaults to bctHours (no wait, process fills the
-          // full slot). Clamp to ≤ bctHours just in case stored data is
-          // inconsistent.
-          const rawProcess =
-            typeof s.processHours === "number" && s.processHours > 0
-              ? s.processHours
-              : bctHours;
-          const processHours = Math.min(rawProcess, bctHours);
+          // processHours is unified with bctHours — the two were merged
+          // in the UI since users always set them equal in practice. Any
+          // legacy stored value is overwritten so process always fills
+          // the full slot.
+          const processHours = bctHours;
           return {
             ...rest,
             bcfHours,

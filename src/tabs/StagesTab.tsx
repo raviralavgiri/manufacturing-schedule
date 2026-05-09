@@ -19,7 +19,7 @@ import type { StageMaster } from "../types";
  *
  * Reactor master data (add/rename/delete/reclassify) lives on the dedicated
  * "Master Reactor" tab. This tab focuses on per-stage operational fields
- * (Stage name, Reactor pool, Batch size, Cycle hrs, Analysis hrs).
+ * (Stage name, Reactor pool, Batch size, BCF/BCT hrs, Analysis hrs, PCO hrs).
  */
 export default function StagesTab() {
   const apis = useStore((s) => s.apis);
@@ -167,11 +167,8 @@ export default function StagesTab() {
                 <Th align="right" yellow title="Batch Charging Frequency — interval between consecutive same-stage batch STARTS. start_n − start_(n−1) = BCF.">
                   BCF (h)
                 </Th>
-                <Th align="right" yellow title="Slot duration — reactor occupancy per batch. start + BCT = reactor free.">
+                <Th align="right" yellow title="Batch Cycle Time — slot duration on the reactor. The reactor is occupied for BCT hours per batch.">
                   BCT (h)
-                </Th>
-                <Th align="right" yellow title="Active processing time within the slot. (BCT − Process) = leading wait period rendered as a faded bar before the process portion on the Gantt.">
-                  Process (h)
                 </Th>
                 <Th align="right" yellow>
                   Analysis (h)
@@ -272,22 +269,11 @@ export default function StagesTab() {
                     </td>
                     <td
                       className="px-3 py-2 text-right"
-                      title="Slot duration — reactor occupancy per batch. start + BCT = reactor free."
+                      title="Batch Cycle Time — slot duration on the reactor. start + BCT = reactor free."
                     >
                       <EditableNumCell
                         value={r.bctHours}
                         onChange={(v) => updateStageField(r.id, "bctHours", v)}
-                      />
-                    </td>
-                    <td
-                      className="px-3 py-2 text-right"
-                      title="Active processing time within the slot. (BCT − Process) renders as a leading wait bar (faded) before the process portion on the Gantt."
-                    >
-                      <EditableNumCell
-                        value={r.processHours ?? r.bctHours}
-                        onChange={(v) =>
-                          updateStageField(r.id, "processHours", v)
-                        }
                       />
                     </td>
                     <td className="px-3 py-2 text-right">
@@ -390,18 +376,16 @@ export default function StagesTab() {
             <Pencil size={12} className="inline" /> Editable here:
           </span>
           Stage Name, Reactor Pool, Input/Batch (kg), Output/Batch (kg), BCF,
-          BCT, Process, Analysis, PCO. Reactors on the{" "}
+          BCT, Analysis, PCO. Reactors on the{" "}
           <span className="font-bold">Master Reactor</span> tab; API target on
           the <span className="font-bold">APIs</span> tab.
           <span className="mt-1 block text-amber-300/80">
             <span className="font-mono">BCF</span> = interval between
             same-stage batch STARTs:{" "}
             <span className="font-mono">start_n − start_(n−1) = BCF</span>.{" "}
-            <span className="font-mono">BCT</span> = slot duration (reactor
-            occupancy per batch).{" "}
-            <span className="font-mono">Process</span> = active processing
-            within the slot; the gap (BCT − Process) renders as a leading
-            wait period on the Gantt.{" "}
+            <span className="font-mono">BCT</span> = slot duration on the
+            reactor (reactor occupancy per batch — also the active
+            processing time).{" "}
             <span className="font-mono">PCO</span> = cleaning on campaign
             switch; campaigns auto-clean every{" "}
             <span className="font-mono">30 days</span>.

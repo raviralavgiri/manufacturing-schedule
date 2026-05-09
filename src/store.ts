@@ -63,7 +63,6 @@ export interface NewStageInput {
   reactorPool: string[];
   bcfHours: number;
   bctHours: number;
-  processHours: number;
   analysisHours: number;
   pcoHours: number;
   plannedBatches: number;
@@ -109,7 +108,6 @@ interface AppState {
       | "inputKgPerBatch"
       | "bcfHours"
       | "bctHours"
-      | "processHours"
       | "analysisHours"
       | "pcoHours"
       | "plannedBatches"
@@ -386,20 +384,16 @@ export const useStore = create<AppState>((set, get) => ({
         if (idx < 0) return a;
         const updatedStages = a.stages.map((s) => {
           if (s.id !== stageId) return s;
-          // Coupled fields:
-          //   - processHours can't exceed bctHours (slot ⊇ process)
-          //   - shrinking bctHours must shrink processHours to match
-          if (field === "processHours") {
-            return {
-              ...s,
-              processHours: Math.min(clamped, s.bctHours),
-            };
-          }
+          // BCT (slot duration) is the single source of truth for both
+          // reactor occupancy AND active processing — they were merged in
+          // the UI because in practice users always set them equal. We
+          // keep `processHours` in the data model for back-compat but
+          // mirror it onto bctHours on every write.
           if (field === "bctHours") {
             return {
               ...s,
               bctHours: clamped,
-              processHours: Math.min(s.processHours ?? clamped, clamped),
+              processHours: clamped,
             };
           }
           return { ...s, [field]: clamped };
@@ -482,8 +476,9 @@ export const useStore = create<AppState>((set, get) => ({
         reactorPool: input.reactorPool.slice(),
         bcfHours: Math.max(1, input.bcfHours),
         bctHours: bct,
-        // process can be at most the slot duration (BCT)
-        processHours: Math.min(bct, Math.max(1, input.processHours)),
+        // Process == BCT (the two were merged in the UI; processHours
+        // remains in the data model only for back-compat).
+        processHours: bct,
         analysisHours: Math.max(1, input.analysisHours),
         pcoHours: Math.max(0, input.pcoHours),
         plannedBatches: Math.max(1, input.plannedBatches),
