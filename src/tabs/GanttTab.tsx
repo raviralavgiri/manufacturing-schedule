@@ -467,47 +467,87 @@ export default function GanttTab() {
                 );
               }}
               onGanttXls={async () => {
-                // Build a reactor × week grid coloured by API. For each
-                // reactor row, iterate every batch booked on that reactor
-                // and mark each week the batch overlaps with the API's
-                // color. If multiple batches share a week, the LAST one
-                // wins (so longer-running batches stay visible).
-                const weekStartMs = weeks.map((w) => w.startMs);
+                // Build three Gantt-grid sheets (by-reactor, by-stage,
+                // by-api). Each sheet shares the same week / quarter
+                // header but rows + filtering differ. Cell color = API.
                 const weekMs = 7 * 24 * 3600 * 1000;
-                const ganttRows: GanttGridRow[] = reactors.map((r) => {
-                  const cells: GanttGridRow["weeks"] = weekStartMs.map(
-                    () => null
+                const totalWeeks = weeks.length;
+
+                // Helper: paint every week a batch overlaps onto the
+                // given cell array. Last write wins so longer-running
+                // batches stay visible if multiple share a week.
+                const paintBatchOnto = (
+                  cells: GanttGridRow["weeks"],
+                  b: BatchScheduleEntry
+                ) => {
+                  const startWk = Math.max(
+                    0,
+                    Math.floor((b.startMs - fyStartMs) / weekMs)
                   );
-                  // ALL batches (not the filtered set) so the export is
-                  // complete regardless of which filter is active.
+                  const endWk = Math.min(
+                    totalWeeks - 1,
+                    Math.floor((b.endMs - 1 - fyStartMs) / weekMs)
+                  );
+                  if (endWk < 0 || startWk > totalWeeks - 1) return;
+                  const color =
+                    apiColorById.get(b.apiId) ?? b.apiColor ?? "#9ca3af";
+                  const text = b.apiId;
+                  const title = `${b.batchId} · ${b.apiName} · S${b.stageNo}`;
+                  for (let i = startWk; i <= endWk; i++) {
+                    cells[i] = { color, text, title };
+                  }
+                };
+                const blankWeeks = (): GanttGridRow["weeks"] =>
+                  new Array(totalWeeks).fill(null);
+
+                // ─ By Reactor: row per reactor in master order
+                const reactorRows: GanttGridRow[] = reactors.map((r) => {
+                  const cells = blankWeeks();
                   schedule.batches.forEach((b) => {
-                    if (!b.reactorIds.includes(r.id)) return;
-                    const startWk = Math.max(
-                      0,
-                      Math.floor((b.startMs - fyStartMs) / weekMs)
-                    );
-                    const endWk = Math.min(
-                      cells.length - 1,
-                      Math.floor((b.endMs - 1 - fyStartMs) / weekMs)
-                    );
-                    if (endWk < 0 || startWk > cells.length - 1) return;
-                    const color =
-                      apiColorById.get(b.apiId) ?? b.apiColor ?? "#9ca3af";
-                    const text = b.apiId;
-                    const title = `${b.batchId} · ${b.apiName} · S${b.stageNo}`;
-                    for (let i = startWk; i <= endWk; i++) {
-                      cells[i] = { color, text, title };
-                    }
+                    if (b.reactorIds.includes(r.id)) paintBatchOnto(cells, b);
                   });
-                  return {
-                    label: r.name,
-                    secondary: r.moc,
-                    weeks: cells,
-                  };
+                  return { label: r.name, secondary: r.moc, weeks: cells };
                 });
 
-                // Build quarter bands by walking the weeks list. quarterIn
-                // is 1..4; we just count consecutive weeks per quarter.
+                // ─ By Stage: row per (api, stage) in api-id × stage-no order
+                const stageRows: GanttGridRow[] = [];
+                apis
+                  .slice()
+                  .sort((a, b) => a.id.localeCompare(b.id))
+                  .forEach((a) => {
+                    a.stages
+                      .slice()
+                      .sort((x, y) => x.stageNo - y.stageNo)
+                      .forEach((s) => {
+                        const cells = blankWeeks();
+                        schedule.batches.forEach((b) => {
+                          if (b.stageId === s.id) paintBatchOnto(cells, b);
+                        });
+                        stageRows.push({
+                          label: `${a.id} · S${s.stageNo}`,
+                          secondary: s.stageName,
+                          weeks: cells,
+                        });
+                      });
+                  });
+
+                // ─ By API: row per API
+                const apiRows: GanttGridRow[] = apis
+                  .slice()
+                  .sort((a, b) => a.id.localeCompare(b.id))
+                  .map((a) => {
+                    const cells = blankWeeks();
+                    schedule.batches.forEach((b) => {
+                      if (b.apiId === a.id) paintBatchOnto(cells, b);
+                    });
+                    return {
+                      label: a.id,
+                      secondary: a.name === a.id ? undefined : a.name,
+                      weeks: cells,
+                    };
+                  });
+
+                // Quarter bands — same on every sheet.
                 const quarterLabels: string[] = [];
                 const quarterSpans: number[] = [];
                 if (weeks.length > 0) {
@@ -515,8 +555,6 @@ export default function GanttTab() {
                     weeks[i].start.toLocaleString("en-US", {
                       month: "short",
                     });
-                  // 4 equal slices is the simplest reading; matches the
-                  // header band on the in-app Gantt.
                   const sliceSize = Math.max(1, Math.ceil(weeks.length / 4));
                   for (let q = 0; q < 4; q++) {
                     const a = q * sliceSize;
@@ -535,15 +573,37 @@ export default function GanttTab() {
                     month: "short",
                   })
                 );
+
                 await downloadGanttGridAsXls(
-                  `gantt_grid_${mode}_${fileStamp()}.xlsx`,
+                  `gantt_grid_${fileStamp()}.xlsx`,
                   {
-                    title: "Gantt Grid",
-                    subtitle: `${reactors.length} reactors × ${weeks.length} weeks · ${schedule.batches.length} batches · cell color = API`,
-                    quarterLabels,
-                    quarterSpans,
-                    weekLabels,
-                    rows: ganttRows,
+                    subtitle: `${reactors.length} reactors · ${apis.length} APIs · ${weeks.length} weeks · ${schedule.batches.length} batches · cell color = API`,
+                    sheets: [
+                      {
+                        sheetName: "By Reactor",
+                        rowHeader: "Reactor",
+                        quarterLabels,
+                        quarterSpans,
+                        weekLabels,
+                        rows: reactorRows,
+                      },
+                      {
+                        sheetName: "By Stage",
+                        rowHeader: "Stage",
+                        quarterLabels,
+                        quarterSpans,
+                        weekLabels,
+                        rows: stageRows,
+                      },
+                      {
+                        sheetName: "By API",
+                        rowHeader: "API",
+                        quarterLabels,
+                        quarterSpans,
+                        weekLabels,
+                        rows: apiRows,
+                      },
+                    ],
                   }
                 );
               }}

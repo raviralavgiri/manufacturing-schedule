@@ -108,8 +108,10 @@ export interface GanttGridRow {
 }
 
 export interface GanttGridSpec {
-  title: string;             // sheet title (becomes the workbook title cell)
-  subtitle?: string;         // small line below the title
+  /** Sheet tab label inside the workbook (e.g. "By Reactor"). */
+  sheetName: string;
+  /** Header label for the leftmost column (e.g. "Reactor", "Stage"). */
+  rowHeader: string;
   /** Quarter-band header. e.g. ["Q1 · Apr-Jun", "Q2 · Jul-Sep", ...] */
   quarterLabels: string[];
   /** Number of week columns each quarter spans, in order. */
@@ -118,6 +120,13 @@ export interface GanttGridSpec {
   weekLabels: string[];
   /** Body rows (one per reactor / stage / api). */
   rows: GanttGridRow[];
+}
+
+export interface GanttGridWorkbookSpec {
+  /** Workbook description shown in File → Info. */
+  subtitle?: string;
+  /** One sheet per spec, rendered in order as workbook tabs. */
+  sheets: GanttGridSpec[];
 }
 
 /** Convert any CSS hex like "#dd3c3c" or "#ddd" into the ARGB form ExcelJS
@@ -136,42 +145,23 @@ function cssHexToArgb(input: string): string {
 }
 
 /**
- * Build the .xlsx for a Gantt grid and trigger a download.
- *
- *   • Row 1: top-left "Reactor" label + Q1..Q4 merged across week columns.
- *   • Row 2: empty top-left + per-week date label header.
- *   • Row 3..N: reactor rows. Col A = "Name (MOC)", Cols B.. = coloured
- *     week cells. Idle weeks are blank. Busy weeks are filled with the
- *     API color and labelled with the API id.
- *   • First column + first two rows are frozen for easy scrolling.
+ * Render one Gantt-grid sheet inside an already-created workbook.
+ * Extracted so a workbook can hold multiple views (by-reactor / by-stage
+ * / by-api) as separate tabs.
  */
-export async function downloadGanttGridAsXls(
-  filename: string,
+function renderGanttSheet(
+  // Loose type — the import inside downloadGanttGridAsXls already pulled
+  // ExcelJS, so the worksheet object's exact type isn't worth threading.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  sheet: any,
   spec: GanttGridSpec
-): Promise<void> {
-  // Dynamic import keeps exceljs out of the main bundle until the user
-  // actually clicks "Gantt grid (Excel)". Bundle hit ~0 until then.
-  const ExcelJS = (await import("exceljs")).default;
-
-  const wb = new ExcelJS.Workbook();
-  wb.creator = "Pharma Planner";
-  wb.created = new Date();
-  const sheet = wb.addWorksheet("Gantt", {
-    views: [{ state: "frozen", xSplit: 1, ySplit: 2 }],
-  });
-
+): void {
   const totalWeeks = spec.weekLabels.length;
   const totalCols = 1 /* label */ + totalWeeks;
 
-  // ─ Title block (rows 1–2 reserved for the header table; the actual
-  //   title goes one row above as a banner).
-  // We keep the table from row 1 onward to mimic an Excel best-practice
-  // layout, but include a workbook property hint via the cell A1 description.
-  // (Skipping a separate banner keeps the freeze pane simple.)
-
-  // ─ Row 1: "Reactor" (col A) + quarter band (merged spans)
+  // ─ Row 1: row-header label (col A) + quarter band (merged spans)
   const r1 = sheet.getRow(1);
-  r1.getCell(1).value = "Reactor";
+  r1.getCell(1).value = spec.rowHeader;
   let colCursor = 2;
   spec.quarterLabels.forEach((label, i) => {
     const span = spec.quarterSpans[i] ?? 0;
@@ -193,7 +183,7 @@ export async function downloadGanttGridAsXls(
     colCursor = endCol + 1;
   });
 
-  // Style the row 1 corner cell ("Reactor")
+  // Style the row 1 corner cell
   const corner = sheet.getCell(1, 1);
   corner.font = { bold: true, color: { argb: "FFE5E7EB" }, size: 11 };
   corner.alignment = { horizontal: "left", vertical: "middle" };
@@ -235,7 +225,6 @@ export async function downloadGanttGridAsXls(
     r.weeks.forEach((w, i) => {
       const cell = row.getCell(2 + i);
       if (!w) {
-        // Idle — leave value empty; light fill keeps the grid visible.
         cell.fill = {
           type: "pattern",
           pattern: "solid",
@@ -257,9 +246,7 @@ export async function downloadGanttGridAsXls(
     });
   });
 
-  // ─ Borders on every body cell so Excel renders a clean grid even
-  //   without grid lines toggled on. Light grey for body, slightly darker
-  //   for the header rows.
+  // ─ Borders
   const lightBorder = { style: "thin" as const, color: { argb: "FFCBD5E1" } };
   const darkBorder = { style: "thin" as const, color: { argb: "FF475569" } };
   const lastRow = 2 + spec.rows.length;
@@ -276,22 +263,48 @@ export async function downloadGanttGridAsXls(
     }
   }
 
-  // ─ Column widths
-  sheet.getColumn(1).width = 22; // reactor label
+  // ─ Column widths + header row heights
+  // The "By Stage" and "By Reactor" sheets have longer left labels
+  // ("API-01 · S2 · Intermediate-2"), so widen the label column there.
+  const labelWidth = Math.max(
+    22,
+    Math.min(40, ...[Math.max(...spec.rows.map((r) => r.label.length + 4), 22)])
+  );
+  sheet.getColumn(1).width = labelWidth;
   for (let i = 2; i <= totalCols; i++) {
-    sheet.getColumn(i).width = 6; // each week column
+    sheet.getColumn(i).width = 6;
   }
-  // Header rows a bit taller for readability.
   sheet.getRow(1).height = 22;
   sheet.getRow(2).height = 18;
+}
 
-  // ─ Workbook metadata — surface the subtitle as a sheet description so
-  //   it shows in File → Info / Properties.
-  if (spec.subtitle) {
-    wb.description = spec.subtitle;
+/**
+ * Build a multi-sheet .xlsx workbook (one tab per Gantt view) and trigger a
+ * download. Each sheet gets its own frozen pane, merged Q1–Q4 header band,
+ * and coloured cell grid.
+ */
+export async function downloadGanttGridAsXls(
+  filename: string,
+  workbookSpec: GanttGridWorkbookSpec
+): Promise<void> {
+  // Dynamic import keeps exceljs out of the main bundle until the user
+  // actually clicks "Gantt grid (Excel)".
+  const ExcelJS = (await import("exceljs")).default;
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "Pharma Planner";
+  wb.created = new Date();
+  if (workbookSpec.subtitle) {
+    wb.description = workbookSpec.subtitle;
   }
 
-  // ─ Build & download
+  workbookSpec.sheets.forEach((spec) => {
+    const sheet = wb.addWorksheet(spec.sheetName, {
+      views: [{ state: "frozen", xSplit: 1, ySplit: 2 }],
+    });
+    renderGanttSheet(sheet, spec);
+  });
+
   const buf = await wb.xlsx.writeBuffer();
   const blob = new Blob([buf], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
