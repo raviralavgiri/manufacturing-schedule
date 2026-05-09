@@ -42,13 +42,16 @@ export default function ScheduleTab() {
   const [q, setQ] = useState("");
   const [apiFilter, setApiFilter] = useState<string>("ALL");
   const [reactorFilter, setReactorFilter] = useState<string>("ALL");
-  const [fyOnly, setFyOnly] = useState(false);
+  // Stage filter: matches a batch's stageId. We provide one option per
+  // distinct stageId across all APIs (e.g. "API-01-S2", "API-02-S1"…).
+  const [stageFilter, setStageFilter] = useState<string>("ALL");
 
   const filtered = useMemo(() => {
     return schedule.batches.filter((b) => {
       if (apiFilter !== "ALL" && b.apiId !== apiFilter) return false;
-      if (reactorFilter !== "ALL" && !b.reactorIds.includes(reactorFilter)) return false;
-      if (fyOnly && !b.inFY) return false;
+      if (reactorFilter !== "ALL" && !b.reactorIds.includes(reactorFilter))
+        return false;
+      if (stageFilter !== "ALL" && b.stageId !== stageFilter) return false;
       if (q) {
         const lower = q.toLowerCase();
         if (
@@ -61,7 +64,29 @@ export default function ScheduleTab() {
       }
       return true;
     });
-  }, [schedule.batches, q, apiFilter, reactorFilter, fyOnly]);
+  }, [schedule.batches, q, apiFilter, reactorFilter, stageFilter]);
+
+  // Distinct stage options for the filter dropdown — sorted by api id then
+  // stage no for predictability. Label combines the api id and stage label
+  // so "API-01 · S2 · Intermediate-2" is unambiguous.
+  const stageOptions = useMemo(() => {
+    const out: { value: string; label: string }[] = [];
+    apisRaw
+      .slice()
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .forEach((a) => {
+        a.stages
+          .slice()
+          .sort((x, y) => x.stageNo - y.stageNo)
+          .forEach((s) => {
+            out.push({
+              value: s.id,
+              label: `${a.id} · S${s.stageNo} · ${s.stageName}`,
+            });
+          });
+      });
+    return out;
+  }, [apisRaw]);
 
   // Simple windowed virtualization
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -275,17 +300,15 @@ export default function ScheduleTab() {
               })),
             ]}
           />
-          <button
-            onClick={() => setFyOnly((v) => !v)}
-            className={clsx(
-              "inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold transition",
-              fyOnly
-                ? "border-lime-300/40 bg-lime-300/10 text-lime-300"
-                : "border-white/10 bg-white/5 text-ink-200 hover:bg-white/10"
-            )}
-          >
-            <Filter size={12} /> FY only
-          </button>
+          <FilterDropdown
+            label="Stage"
+            value={stageFilter}
+            onChange={setStageFilter}
+            options={[
+              { v: "ALL", l: "All Stages" },
+              ...stageOptions.map((s) => ({ v: s.value, l: s.label })),
+            ]}
+          />
           <span className="ml-auto text-xs text-ink-300">
             Showing {filtered.length.toLocaleString()} /{" "}
             {schedule.batches.length.toLocaleString()}
@@ -295,7 +318,7 @@ export default function ScheduleTab() {
 
       <div ref={tableCardRef} className="schedule-table-card">
       <Card className="overflow-hidden p-0">
-        <div className="grid grid-cols-[110px_72px_120px_70px_140px_220px_180px_180px_180px_60px_60px_72px] gap-0 border-b border-white/10 bg-ink-900/80 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-ink-300">
+        <div className="grid grid-cols-[110px_72px_120px_70px_140px_220px_180px_180px_180px_60px_72px] gap-0 border-b border-white/10 bg-ink-900/80 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-ink-300">
           <span>Batch ID</span>
           <span>API</span>
           <span>Stage</span>
@@ -307,7 +330,6 @@ export default function ScheduleTab() {
           <span>Start</span>
           <span>End (Cycle)</span>
           <span>Analysis End</span>
-          <span className="text-center">FY</span>
           <span className="text-center">Clash</span>
           <span className="text-right">Out kg</span>
         </div>
@@ -329,7 +351,7 @@ export default function ScheduleTab() {
                 <div
                   key={b.batchId}
                   style={{ height: ROW_H }}
-                  className="grid grid-cols-[110px_72px_120px_70px_140px_220px_180px_180px_180px_60px_60px_72px] items-center gap-0 border-b border-white/5 px-3 text-xs hover:bg-white/[0.04]"
+                  className="grid grid-cols-[110px_72px_120px_70px_140px_220px_180px_180px_180px_60px_72px] items-center gap-0 border-b border-white/5 px-3 text-xs hover:bg-white/[0.04]"
                 >
                   <span className="font-mono text-[11px] text-ink-200 truncate">
                     {b.batchId}
@@ -380,13 +402,6 @@ export default function ScheduleTab() {
                   </span>
                   <span className="font-mono text-ink-300 truncate">
                     {fmtDateTime(b.analysisEndMs)}
-                  </span>
-                  <span className="text-center">
-                    {b.inFY ? (
-                      <Tag tone="lime">FY</Tag>
-                    ) : (
-                      <Tag tone="amber">Ovr</Tag>
-                    )}
                   </span>
                   <span className="text-center">
                     {b.clash ? (

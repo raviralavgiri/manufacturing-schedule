@@ -49,33 +49,6 @@ export default function ClashTab() {
         subtitle="Reactor double-booking detector. Sequencer guarantees zero clashes by design."
       />
 
-      {/* Hero */}
-      <Card glow="cyan" className="!p-8">
-        <div className="flex flex-col items-center text-center">
-          <div className="relative mb-3">
-            <div className="absolute inset-0 animate-ping rounded-full bg-lime-400/20" />
-            <div className="relative flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-lime-400 to-cyan-400 shadow-[0_0_40px_rgba(163,230,53,0.6)]">
-              <CheckCircle2 size={42} className="text-ink-950" />
-            </div>
-          </div>
-          <h3 className="text-3xl font-extrabold tracking-tight text-white sm:text-5xl">
-            <span className="bg-gradient-to-r from-lime-300 via-cyan-300 to-violet-300 bg-clip-text text-transparent">
-              {schedule.clashCount === 0
-                ? "Zero Reactor Clashes"
-                : `${schedule.clashCount} Clashes Detected`}
-            </span>
-          </h3>
-          <p className="mt-2 max-w-xl text-sm text-ink-200">
-            All <span className="font-bold text-white">{schedule.totalBatches}</span>{" "}
-            batches are scheduled on{" "}
-            <span className="font-bold text-white">{reactors.length}</span>{" "}
-            reactors with no overlapping cycle windows. Reactors that appear in
-            multiple stage pools are automatically queued by the
-            equipment-availability sequencer — no manual intervention needed.
-          </p>
-        </div>
-      </Card>
-
       {/* Algorithm explanation */}
       <Card>
         <div className="mb-3 flex items-center gap-2">
