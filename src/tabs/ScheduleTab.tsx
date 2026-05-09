@@ -15,11 +15,10 @@ import {
 const ROW_H = 40;
 
 // Grid template for the Schedule table.
-//   API | Stage | # | Reactor Pool | Start | End | Analysis End | Clash | Out
-// The actually-booked reactor is no longer a separate column — it's the
-// first reactor in the Reactor Pool tooltip and is always inside the pool
-// list, so showing both was redundant.
-const GRID_TEMPLATE = "72px 120px 70px 240px 180px 180px 180px 60px 72px";
+//   Batch ID | API | Stage | # | Reactor Pool | Start | End | Analysis End | Clash | Out
+// Batch ID is shown for traceability — useful when cross-referencing
+// CSV/Excel exports or discussing a specific batch with a colleague.
+const GRID_TEMPLATE = "130px 72px 120px 70px 240px 180px 180px 180px 60px 72px";
 
 export default function ScheduleTab() {
   const schedule = useStore((s) => s.schedule);
@@ -329,6 +328,9 @@ export default function ScheduleTab() {
           className="grid gap-0 border-b border-white/10 bg-ink-900/80 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-ink-300"
           style={{ gridTemplateColumns: GRID_TEMPLATE }}
         >
+          <span title="Stable internal identifier for this specific batch — used in CSV/Excel exports and for cross-referencing.">
+            Batch ID
+          </span>
           <span>API</span>
           <span>Stage</span>
           <span>#</span>
@@ -364,6 +366,12 @@ export default function ScheduleTab() {
                   }}
                   className="grid items-center gap-0 border-b border-white/5 px-3 text-xs hover:bg-white/[0.04]"
                 >
+                  <span
+                    className="font-mono text-[11px] text-ink-200 truncate"
+                    title={b.batchId}
+                  >
+                    {b.batchId}
+                  </span>
                   <span
                     className="flex items-center gap-1.5 font-semibold text-white truncate"
                     title={b.apiName}
