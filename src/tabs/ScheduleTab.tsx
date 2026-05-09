@@ -460,8 +460,11 @@ export default function ScheduleTab() {
                       <Tag tone="default">OK</Tag>
                     )}
                   </span>
-                  <span className="text-right font-mono font-semibold tabular-nums text-white">
-                    {b.outputKg}
+                  <span
+                    className="text-right font-mono font-semibold tabular-nums text-white"
+                    title={`Exact: ${b.outputKg.toFixed(2)} kg`}
+                  >
+                    {Math.round(b.outputKg).toLocaleString()}
                   </span>
                 </div>
                 );

@@ -297,10 +297,10 @@ export default function StagesTab() {
                     <td className="px-3 py-2.5 text-right font-mono tabular-nums text-ink-200">
                       <span
                         className="inline-flex items-center gap-1"
-                        title="Required input from this stage = next stage's actual output (or API target for the final stage)"
+                        title={`Required input from this stage = next stage's actual output (or API target for the final stage). Exact: ${r.demandKg.toFixed(2)} kg`}
                       >
                         <Lock size={10} className="text-ink-500" />
-                        {r.demandKg.toLocaleString()}
+                        {Math.round(r.demandKg).toLocaleString()}
                       </span>
                     </td>
                     <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-ink-200">
@@ -309,16 +309,19 @@ export default function StagesTab() {
                         {r.plannedBatches}
                       </span>
                     </td>
-                    <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-cyan-300">
-                      {actualOutput.toLocaleString()}
+                    <td
+                      className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-cyan-300"
+                      title={`Actual output = planned batches \u00d7 output/batch. Exact: ${actualOutput.toFixed(2)} kg`}
+                    >
+                      {Math.round(actualOutput).toLocaleString()}
                     </td>
                     <td
                       className="px-3 py-2.5 text-right font-mono tabular-nums text-ink-200"
-                      title="Total input consumed by this stage = planned batches × input/batch. This is the demand placed on the previous stage's output."
+                      title={`Total input consumed by this stage = planned batches \u00d7 input/batch. This is the demand placed on the previous stage's output. Exact: ${inputConsumed.toFixed(2)} kg`}
                     >
                       <span className="inline-flex items-center gap-1">
                         <Lock size={10} className="text-ink-500" />
-                        {inputConsumed.toLocaleString()}
+                        {Math.round(inputConsumed).toLocaleString()}
                       </span>
                     </td>
                     <td className="px-2 py-2 text-right">

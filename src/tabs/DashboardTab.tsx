@@ -366,7 +366,9 @@ export default function DashboardTab() {
                       color: chartTheme.tooltipText,
                     }}
                     labelStyle={{ color: chartTheme.tooltipText }}
-                    formatter={(v: number) => `${v.toLocaleString()} kg`}
+                    formatter={(v: number) =>
+                      `${Math.round(v).toLocaleString()} kg`
+                    }
                   />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   {apis.map((a) => (
@@ -516,9 +518,9 @@ export default function DashboardTab() {
                       : "text-lime-300";
                 const gapText =
                   r.gapKg > 0
-                    ? `−${r.gapKg.toLocaleString()}`
+                    ? `−${Math.round(r.gapKg).toLocaleString()}`
                     : r.gapKg < 0
-                      ? `+${(-r.gapKg).toLocaleString()}`
+                      ? `+${Math.round(-r.gapKg).toLocaleString()}`
                       : "0";
                 return (
                   <tr
@@ -541,10 +543,15 @@ export default function DashboardTab() {
                       </span>
                     </td>
                     <td className="px-3 py-1.5 text-right font-mono tabular-nums text-ink-200">
-                      {r.targetKg ? r.targetKg.toLocaleString() : "—"}
+                      {r.targetKg
+                        ? Math.round(r.targetKg).toLocaleString()
+                        : "—"}
                     </td>
-                    <td className="px-3 py-1.5 text-right font-mono tabular-nums font-bold text-cyan-300">
-                      {r.achievedKg.toLocaleString()}
+                    <td
+                      className="px-3 py-1.5 text-right font-mono tabular-nums font-bold text-cyan-300"
+                      title={`Exact: ${r.achievedKg.toFixed(2)} kg`}
+                    >
+                      {Math.round(r.achievedKg).toLocaleString()}
                     </td>
                     <td
                       className={clsx(
@@ -911,8 +918,9 @@ function PivotCell({
           "px-2 py-1 text-right font-mono tabular-nums",
           bold ? "font-extrabold text-amber-300" : "text-violet-200"
         )}
+        title={v.kg ? `Exact: ${v.kg.toFixed(2)} kg` : undefined}
       >
-        {v.kg ? v.kg.toLocaleString() : ""}
+        {v.kg ? Math.round(v.kg).toLocaleString() : ""}
       </td>
     </>
   );
