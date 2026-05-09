@@ -47,14 +47,34 @@ function rowToProject(row: ProjectRow): Project {
         };
       })
     : [];
-  const apis = Array.isArray(row.apis) ? row.apis : [];
-  const window =
+  // Project-level window — used as the per-API window fallback when an API
+  // was stored before the per-API `window` field existed.
+  const projectWindow =
     row.window &&
     typeof row.window === "object" &&
     typeof row.window.startMs === "number" &&
     typeof row.window.endMs === "number"
       ? row.window
       : { startMs: 0, endMs: 0 };
+
+  // Normalize each API: drop legacy `priority`; ensure `window` exists.
+  // Without this, cloud rows written before per-API windows crash the UI
+  // with "Cannot read properties of undefined (reading 'startMs')".
+  const apis = Array.isArray(row.apis)
+    ? row.apis.map((a: any) => {
+        const { priority: _legacyPriority, ...rest } = a;
+        void _legacyPriority;
+        const apiWindow =
+          a.window &&
+          typeof a.window === "object" &&
+          typeof a.window.startMs === "number" &&
+          typeof a.window.endMs === "number"
+            ? a.window
+            : { ...projectWindow };
+        return { ...rest, window: apiWindow };
+      })
+    : [];
+
   return {
     id: row.id,
     name: row.name,
@@ -64,7 +84,7 @@ function rowToProject(row: ProjectRow): Project {
         : Date.now(),
     apis,
     reactors,
-    window,
+    window: projectWindow,
   };
 }
 
