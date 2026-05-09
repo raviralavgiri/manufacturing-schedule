@@ -14,10 +14,12 @@ import {
 
 const ROW_H = 40;
 
-// Grid template for the Schedule table. Internal Batch IDs are not surfaced
-// in the UI — users identify batches via API + Stage + batch # which is
-// sufficient and avoids exposing internal id strings.
-const GRID_TEMPLATE = "72px 120px 70px 140px 220px 180px 180px 180px 60px 72px";
+// Grid template for the Schedule table.
+//   API | Stage | # | Reactor Pool | Start | End | Analysis End | Clash | Out
+// The actually-booked reactor is no longer a separate column — it's the
+// first reactor in the Reactor Pool tooltip and is always inside the pool
+// list, so showing both was redundant.
+const GRID_TEMPLATE = "72px 120px 70px 240px 180px 180px 180px 60px 72px";
 
 export default function ScheduleTab() {
   const schedule = useStore((s) => s.schedule);
@@ -330,8 +332,7 @@ export default function ScheduleTab() {
           <span>API</span>
           <span>Stage</span>
           <span>#</span>
-          <span>Reactor</span>
-          <span title="Eligible pool — reactors configured on the Stage tab. The 'Reactor' column to the left is the one this batch is actually booked on.">
+          <span title="Reactors this batch is booked on (first one is the primary reactor).">
             Reactor Pool
           </span>
           <span>Start</span>
@@ -381,25 +382,56 @@ export default function ScheduleTab() {
                   </span>
                   <span className="font-mono text-ink-300">{b.batchNo}</span>
                   <span
-                    className="font-mono font-semibold text-cyan-300 truncate"
-                    title={`Reactor: ${b.reactorIds
-                      .map((id) => {
-                        const r = reactors.find((x) => x.id === id);
-                        return r && r.name !== id ? `${r.name} (${id})` : id;
-                      })
-                      .join(" + ")}`}
-                  >
-                    {b.reactorIds
-                      .map((id) => reactors.find((x) => x.id === id)?.name ?? id)
-                      .join(", ")}
-                  </span>
-                  <span
                     className="font-mono text-[11px] text-violet-200 truncate"
-                    title={`Pool: ${poolLabel || "(empty)"}`}
+                    title={(() => {
+                      const bookedNames = b.reactorIds
+                        .map(
+                          (id) =>
+                            reactors.find((x) => x.id === id)?.name ?? id
+                        )
+                        .join(" + ");
+                      return `Booked: ${bookedNames || "—"} · Eligible pool: ${poolLabel || "(empty)"}`;
+                    })()}
                   >
-                    {poolLabel || (
-                      <span className="text-ink-500">—</span>
-                    )}
+                    {(() => {
+                      // Reactors actually booked for this batch — render
+                      // these in cyan/bold first, then the rest of the
+                      // eligible pool dimmed so the user sees both at once.
+                      const bookedSet = new Set(b.reactorIds);
+                      const bookedNames = b.reactorIds.map(
+                        (id) =>
+                          reactors.find((x) => x.id === id)?.name ?? id
+                      );
+                      const others = pool
+                        .filter((id) => !bookedSet.has(id))
+                        .map(
+                          (id) =>
+                            reactors.find((x) => x.id === id)?.name ?? id
+                        );
+                      if (bookedNames.length === 0 && others.length === 0) {
+                        return <span className="text-ink-500">—</span>;
+                      }
+                      return (
+                        <>
+                          {bookedNames.length > 0 && (
+                            <span className="font-semibold text-cyan-300">
+                              {bookedNames.join(" + ")}
+                            </span>
+                          )}
+                          {others.length > 0 && (
+                            <>
+                              {bookedNames.length > 0 && (
+                                <span className="text-ink-500">
+                                  {" "}
+                                  ·{" "}
+                                </span>
+                              )}
+                              <span>{others.join(", ")}</span>
+                            </>
+                          )}
+                        </>
+                      );
+                    })()}
                   </span>
                   <span className="font-mono text-ink-200 truncate">
                     {fmtDateTime(b.startMs)}
