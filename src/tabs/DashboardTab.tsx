@@ -39,7 +39,20 @@ import {
  */
 
 type Granularity = "monthly" | "quarterly" | "yearly";
-type Metric = "kg" | "batches";
+
+// Categorical palette for stage-number stacking. Cycles after 8 stages
+// (which is more than any realistic API has). Tuned to match the rest
+// of the app's accent palette.
+const STAGE_COLORS = [
+  "#22d3ee", // S1 — cyan
+  "#a78bfa", // S2 — violet
+  "#f472b6", // S3 — pink
+  "#a3e635", // S4 — lime
+  "#fbbf24", // S5 — amber
+  "#fb7185", // S6 — rose
+  "#38bdf8", // S7 — sky
+  "#fdba74", // S8 — orange
+];
 
 interface Bucket {
   /** Stable string key — used as a React key + Recharts dataKey. */
@@ -83,8 +96,9 @@ export default function DashboardTab() {
   }, [apis]);
 
   // ─── User toggles ──────────────────────────────────────────────────
+  // Single shared slicer. Drives both the "Output (kg) by API" chart
+  // and the "Batches by stage" chart below.
   const [gran, setGran] = useState<Granularity>("monthly");
-  const [metric, setMetric] = useState<Metric>("kg");
 
   // ─── Buckets for the time axis ─────────────────────────────────────
   // Quarterly buckets are derived from the existing plan-window quarter
@@ -113,8 +127,14 @@ export default function DashboardTab() {
     return -1;
   };
 
-  // ─── Aggregate per-bucket per-API (for the chart) ─────────────────
-  const chartData = useMemo(() => {
+  // ─── Aggregated chart data ────────────────────────────────────────
+  // Two independent datasets fed off the same buckets. The split lets
+  // the user see "what was produced (kg)" and "where the work landed
+  // (stages)" side by side without switching modes.
+  //
+  //   chartDataByApi  : output kg, one Bar per API
+  //   chartDataByStage: batch count, one Bar per stage number (S1, S2, …)
+  const chartDataByApi = useMemo(() => {
     const rows: Record<string, number | string>[] = buckets.map((b) => ({
       name: b.label,
     }));
@@ -122,12 +142,37 @@ export default function DashboardTab() {
     schedule.batches.forEach((b) => {
       const i = bucketIndexFor(b.startMs);
       if (i < 0 || i >= rows.length) return;
-      const inc = metric === "kg" ? b.outputKg : 1;
-      rows[i][b.apiId] = ((rows[i][b.apiId] as number) ?? 0) + inc;
+      rows[i][b.apiId] = ((rows[i][b.apiId] as number) ?? 0) + b.outputKg;
     });
     return rows;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buckets, apis, schedule, metric, gran, weeks]);
+  }, [buckets, apis, schedule, gran, weeks]);
+
+  // Distinct stage numbers in the schedule, sorted ascending. Used as
+  // both the column key (S1, S2, …) and the legend order.
+  const stageNos = useMemo(() => {
+    const s = new Set<number>();
+    schedule.batches.forEach((b) => s.add(b.stageNo));
+    apis.forEach((a) => a.stages.forEach((st) => s.add(st.stageNo)));
+    return Array.from(s).sort((a, b) => a - b);
+  }, [apis, schedule]);
+
+  const chartDataByStage = useMemo(() => {
+    const rows: Record<string, number | string>[] = buckets.map((b) => ({
+      name: b.label,
+    }));
+    stageNos.forEach((n) =>
+      rows.forEach((r) => (r[`S${n}`] = 0))
+    );
+    schedule.batches.forEach((b) => {
+      const i = bucketIndexFor(b.startMs);
+      if (i < 0 || i >= rows.length) return;
+      const k = `S${b.stageNo}`;
+      rows[i][k] = ((rows[i][k] as number) ?? 0) + 1;
+    });
+    return rows;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buckets, stageNos, schedule, gran, weeks]);
 
   // ─── KPI numbers ───────────────────────────────────────────────────
   const totalBatches = schedule.totalBatches;
@@ -261,81 +306,146 @@ export default function DashboardTab() {
         />
       </div>
 
-      {/* ─── Granularity + metric toggles + chart ────────────────── */}
+      {/* ─── Production-over-time: two charts driven by one slicer ── */}
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-3 pb-3">
-          <h3 className="text-sm font-bold uppercase tracking-wider text-white">
-            Production over time
-          </h3>
-          <div className="flex flex-wrap items-center gap-2">
-            <Toggle
-              value={gran}
-              onChange={setGran}
-              options={[
-                { v: "monthly", l: "Monthly" },
-                { v: "quarterly", l: "Quarterly" },
-                { v: "yearly", l: "Yearly" },
-              ]}
-            />
-            <span className="text-ink-500">·</span>
-            <Toggle
-              value={metric}
-              onChange={setMetric}
-              options={[
-                { v: "kg", l: "Output (kg)" },
-                { v: "batches", l: "Batches" },
-              ]}
-            />
+          <div>
+            <h3 className="text-sm font-bold uppercase tracking-wider text-white">
+              Production over time
+            </h3>
+            <p className="text-[11px] text-ink-400">
+              Same time bucket on both charts — output (kg) split by API
+              on the left, batch count split by stage on the right.
+            </p>
+          </div>
+          <Toggle
+            value={gran}
+            onChange={setGran}
+            options={[
+              { v: "monthly", l: "Monthly" },
+              { v: "quarterly", l: "Quarterly" },
+              { v: "yearly", l: "Yearly" },
+            ]}
+          />
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          {/* ── Chart 1: Output (kg) stacked by API ──────────────── */}
+          <div>
+            <div className="mb-2 flex items-center justify-between text-[11px]">
+              <span className="font-bold uppercase tracking-wider text-cyan-300">
+                Output (kg) — by API
+              </span>
+              <span className="font-mono text-ink-400">
+                {totalOutputT.toFixed(1)} t total
+              </span>
+            </div>
+            <div style={{ width: "100%", height: 300 }}>
+              <ResponsiveContainer>
+                <BarChart data={chartDataByApi}>
+                  <CartesianGrid
+                    stroke={chartTheme.grid}
+                    strokeDasharray="3 3"
+                  />
+                  <XAxis
+                    dataKey="name"
+                    stroke={chartTheme.axis}
+                    fontSize={11}
+                    interval={0}
+                    angle={gran === "monthly" ? -25 : 0}
+                    textAnchor={gran === "monthly" ? "end" : "middle"}
+                    height={gran === "monthly" ? 50 : 30}
+                  />
+                  <YAxis stroke={chartTheme.axis} fontSize={11} />
+                  <Tooltip
+                    contentStyle={{
+                      background: chartTheme.tooltipBg,
+                      border: `1px solid ${chartTheme.tooltipBorder}`,
+                      borderRadius: 8,
+                      fontSize: 12,
+                      color: chartTheme.tooltipText,
+                    }}
+                    labelStyle={{ color: chartTheme.tooltipText }}
+                    formatter={(v: number) => `${v.toLocaleString()} kg`}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  {apis.map((a) => (
+                    <Bar
+                      key={a.id}
+                      dataKey={a.id}
+                      name={a.name}
+                      stackId="api"
+                      fill={a.color}
+                      radius={[0, 0, 0, 0]}
+                    />
+                  ))}
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* ── Chart 2: Batches stacked by stage number ────────── */}
+          <div>
+            <div className="mb-2 flex items-center justify-between text-[11px]">
+              <span className="font-bold uppercase tracking-wider text-violet-300">
+                Batches — by stage
+              </span>
+              <span className="font-mono text-ink-400">
+                {totalBatches.toLocaleString()} batches total
+              </span>
+            </div>
+            <div style={{ width: "100%", height: 300 }}>
+              <ResponsiveContainer>
+                <BarChart data={chartDataByStage}>
+                  <CartesianGrid
+                    stroke={chartTheme.grid}
+                    strokeDasharray="3 3"
+                  />
+                  <XAxis
+                    dataKey="name"
+                    stroke={chartTheme.axis}
+                    fontSize={11}
+                    interval={0}
+                    angle={gran === "monthly" ? -25 : 0}
+                    textAnchor={gran === "monthly" ? "end" : "middle"}
+                    height={gran === "monthly" ? 50 : 30}
+                  />
+                  <YAxis stroke={chartTheme.axis} fontSize={11} />
+                  <Tooltip
+                    contentStyle={{
+                      background: chartTheme.tooltipBg,
+                      border: `1px solid ${chartTheme.tooltipBorder}`,
+                      borderRadius: 8,
+                      fontSize: 12,
+                      color: chartTheme.tooltipText,
+                    }}
+                    labelStyle={{ color: chartTheme.tooltipText }}
+                    formatter={(v: number) =>
+                      `${v} batch${v === 1 ? "" : "es"}`
+                    }
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  {stageNos.map((n, i) => (
+                    <Bar
+                      key={n}
+                      dataKey={`S${n}`}
+                      name={`Stage ${n}`}
+                      stackId="stage"
+                      fill={STAGE_COLORS[i % STAGE_COLORS.length]}
+                      radius={[0, 0, 0, 0]}
+                    />
+                  ))}
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
         </div>
-        <div style={{ width: "100%", height: 320 }}>
-          <ResponsiveContainer>
-            <BarChart data={chartData}>
-              <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" />
-              <XAxis
-                dataKey="name"
-                stroke={chartTheme.axis}
-                fontSize={11}
-                interval={0}
-                angle={gran === "monthly" ? -25 : 0}
-                textAnchor={gran === "monthly" ? "end" : "middle"}
-                height={gran === "monthly" ? 50 : 30}
-              />
-              <YAxis stroke={chartTheme.axis} fontSize={11} />
-              <Tooltip
-                contentStyle={{
-                  background: chartTheme.tooltipBg,
-                  border: `1px solid ${chartTheme.tooltipBorder}`,
-                  borderRadius: 8,
-                  fontSize: 12,
-                  color: chartTheme.tooltipText,
-                }}
-                labelStyle={{ color: chartTheme.tooltipText }}
-                formatter={(v: number) =>
-                  metric === "kg"
-                    ? `${v.toLocaleString()} kg`
-                    : `${v} batch${v === 1 ? "" : "es"}`
-                }
-              />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              {apis.map((a) => (
-                <Bar
-                  key={a.id}
-                  dataKey={a.id}
-                  name={a.name}
-                  stackId="api"
-                  fill={a.color}
-                  radius={[0, 0, 0, 0]}
-                />
-              ))}
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
+
         <div className="mt-2 text-[10px] text-ink-400">
           {gran === "monthly" &&
-            `${buckets.length} months in plan window. Tap a bar segment to see per-API contribution.`}
+            `${buckets.length} months in plan window.`}
           {gran === "quarterly" &&
-            `Plan window split into 4 equal quarters. Use the pivot table below for API × Stage × Quarter detail.`}
+            `Plan window split into 4 equal quarters. See the pivot table below for API × Stage × Quarter detail.`}
           {gran === "yearly" &&
             `${buckets.length} calendar year${buckets.length === 1 ? "" : "s"} touched by plan window.`}
         </div>
