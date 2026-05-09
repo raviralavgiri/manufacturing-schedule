@@ -389,58 +389,61 @@ export default function ScheduleTab() {
                     S{b.stageNo} · {b.stageName}
                   </span>
                   <span className="font-mono text-ink-300">{b.batchNo}</span>
-                  <span
-                    className="font-mono text-[11px] text-violet-200 truncate"
-                    title={(() => {
-                      const bookedNames = b.reactorIds
-                        .map(
-                          (id) =>
-                            reactors.find((x) => x.id === id)?.name ?? id
-                        )
-                        .join(" + ");
-                      return `Booked: ${bookedNames || "—"} · Eligible pool: ${poolLabel || "(empty)"}`;
-                    })()}
-                  >
-                    {(() => {
-                      // Reactors actually booked for this batch — render
-                      // these in cyan/bold first, then the rest of the
-                      // eligible pool dimmed so the user sees both at once.
-                      const bookedSet = new Set(b.reactorIds);
-                      const bookedNames = b.reactorIds.map(
-                        (id) =>
-                          reactors.find((x) => x.id === id)?.name ?? id
-                      );
-                      const others = pool
-                        .filter((id) => !bookedSet.has(id))
-                        .map(
-                          (id) =>
-                            reactors.find((x) => x.id === id)?.name ?? id
-                        );
-                      if (bookedNames.length === 0 && others.length === 0) {
-                        return <span className="text-ink-500">—</span>;
-                      }
+                  {(() => {
+                    // Resolve booked vs configured pool, plus detect
+                    // SUBSTITUTION = when a booked reactor wasn't in the
+                    // stage's configured pool (the scheduler grabbed a
+                    // like-for-like spare). We surface that explicitly so
+                    // users don't wonder why some rows show 2 reactors and
+                    // others show 3 in the same stage.
+                    const poolSet = new Set(pool);
+                    const nameOf = (id: string) =>
+                      reactors.find((x) => x.id === id)?.name ?? id;
+                    const bookedNames = b.reactorIds.map(nameOf);
+                    const poolNames = pool.map(nameOf);
+                    const isSubstituted = b.reactorIds.some(
+                      (id) => !poolSet.has(id)
+                    );
+                    const tooltip = isSubstituted
+                      ? `Booked: ${bookedNames.join(" + ") || "—"} (substituted — not in configured pool) · Configured pool: ${poolLabel || "(empty)"}`
+                      : `Booked: ${bookedNames.join(" + ") || "—"} · Configured pool: ${poolLabel || "(empty)"}`;
+                    if (bookedNames.length === 0 && poolNames.length === 0) {
                       return (
-                        <>
-                          {bookedNames.length > 0 && (
-                            <span className="font-semibold text-cyan-300">
-                              {bookedNames.join(" + ")}
-                            </span>
-                          )}
-                          {others.length > 0 && (
-                            <>
-                              {bookedNames.length > 0 && (
-                                <span className="text-ink-500">
-                                  {" "}
-                                  ·{" "}
-                                </span>
-                              )}
-                              <span>{others.join(", ")}</span>
-                            </>
-                          )}
-                        </>
+                        <span
+                          className="font-mono text-[11px] text-ink-500 truncate"
+                          title={tooltip}
+                        >
+                          —
+                        </span>
                       );
-                    })()}
-                  </span>
+                    }
+                    return (
+                      <span
+                        className="flex items-center gap-1.5 truncate font-mono text-[11px] text-violet-200"
+                        title={tooltip}
+                      >
+                        <span className="shrink-0 font-semibold text-cyan-300">
+                          {bookedNames.join(" + ") || "—"}
+                        </span>
+                        {isSubstituted && (
+                          <span
+                            className="shrink-0 rounded-full border border-amber-300/40 bg-amber-300/10 px-1.5 py-px text-[9px] font-bold uppercase tracking-wider text-amber-300"
+                            title="Substituted: this reactor is not in the stage's configured pool — the scheduler picked a like-for-like spare because the configured reactors were all busy."
+                          >
+                            sub
+                          </span>
+                        )}
+                        {poolNames.length > 0 && (
+                          <>
+                            <span className="shrink-0 text-ink-500">·</span>
+                            <span className="truncate">
+                              {poolNames.join(", ")}
+                            </span>
+                          </>
+                        )}
+                      </span>
+                    );
+                  })()}
                   <span className="font-mono text-ink-200 truncate">
                     {fmtDateTime(b.startMs)}
                   </span>
