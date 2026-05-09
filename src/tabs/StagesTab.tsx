@@ -11,9 +11,8 @@ import { clsx } from "clsx";
 import { useStore } from "../store";
 import { Card, SectionHeader } from "../components/Primitives";
 import AddStageForm from "../components/AddStageForm";
-import PriorityPill from "../components/PriorityPill";
 import ReactorPoolEditor from "../components/ReactorPoolEditor";
-import type { Priority, StageMaster } from "../types";
+import type { StageMaster } from "../types";
 
 /**
  * Stages tab — operational details for each stage.
@@ -28,7 +27,6 @@ export default function StagesTab() {
   const updateStageField = useStore((s) => s.updateStageField);
   const setStageName = useStore((s) => s.setStageName);
   const setStageReactorPool = useStore((s) => s.setStageReactorPool);
-  const setApiPriority = useStore((s) => s.setApiPriority);
   const removeStage = useStore((s) => s.removeStage);
   const recentlyAddedStageId = useStore((s) => s.recentlyAddedStageId);
   const clearRecentlyAdded = useStore((s) => s.clearRecentlyAdded);
@@ -39,17 +37,13 @@ export default function StagesTab() {
   const newRowRef = useRef<HTMLTableRowElement>(null);
 
   const sortedApis = useMemo(
-    () =>
-      [...apis].sort(
-        (a, b) => a.priority - b.priority || a.id.localeCompare(b.id)
-      ),
+    () => [...apis].sort((a, b) => a.id.localeCompare(b.id)),
     [apis]
   );
 
   const rows = useMemo(() => {
     const all: (StageMaster & {
       color: string;
-      priority: Priority;
       apiDisplayName: string;
       /** Output demand on this stage = next stage's input consumed (or api.targetKg for final). */
       demandKg: number;
@@ -73,7 +67,6 @@ export default function StagesTab() {
         all.push({
           ...s,
           color: a.color,
-          priority: a.priority,
           apiDisplayName: a.name,
           demandKg: demandByStageId.get(s.id) ?? 0,
         })
@@ -236,10 +229,6 @@ export default function StagesTab() {
                         >
                           {r.apiDisplayName}
                         </span>
-                        <PriorityPill
-                          value={r.priority}
-                          onChange={(p) => setApiPriority(r.apiId, p)}
-                        />
                       </div>
                     </td>
                     <td className="px-3 py-2.5 text-ink-100">S{r.stageNo}</td>

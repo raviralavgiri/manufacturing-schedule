@@ -3,12 +3,12 @@ import { API_PALETTE, REACTORS, buildSeed, refreshPaletteColors } from "./data/s
 import { runScheduler } from "./scheduler/scheduler";
 import { cascadePlannedBatches } from "./scheduler/cascade";
 import type {
+  AgitatorType,
   API,
+  MOC,
   PlanWindow,
-  Priority,
   Project,
   Reactor,
-  ReactorClass,
   ScheduleResult,
   StageMaster,
 } from "./types";
@@ -123,22 +123,24 @@ interface AppState {
   removeStage: (stageId: string) => void;
 
   // ─ API actions (operate on active project) ──────────────────────
-  setApiPriority: (apiId: string, priority: Priority) => void;
   setApiName: (apiId: string, name: string) => void;
   setApiTargetOutput: (apiId: string, targetKg: number) => void;
-  setWindow: (startMs: number, endMs: number) => void;
+  /** Set ONE api's plan window (per-API window replaces the old global). */
+  setApiWindow: (apiId: string, startMs: number, endMs: number) => void;
   setApiStageCount: (apiId: string, count: number) => void;
   addAPI: (withDefaultFinalStage?: boolean) => string;
   removeAPI: (apiId: string) => void;
 
   // ─ Reactor actions (operate on active project) ──────────────────
   setReactorName: (reactorId: string, name: string) => void;
-  setReactorClass: (reactorId: string, cls: ReactorClass) => void;
+  setReactorMoc: (reactorId: string, moc: MOC) => void;
+  setReactorAgitator: (reactorId: string, agitator: AgitatorType) => void;
   setReactorCapacity: (reactorId: string, capacityKg: number) => void;
   addReactor: (input: {
     id: string;
     name?: string;
-    reactorClass: ReactorClass;
+    moc: MOC;
+    agitatorType?: AgitatorType;
     capacityKg: number;
   }) =>
     | { ok: true; id: string }
@@ -513,16 +515,6 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   // ─ API actions ─────────────────────────────────────────────────
-  setApiPriority: (apiId, priority) => {
-    mutateActive(set, get, (p) => {
-      const apis = p.apis.map((a) =>
-        a.id === apiId ? { ...a, priority } : a
-      );
-      return { ...p, apis };
-    });
-    scheduleRecompute(set, get, true);
-  },
-
   setApiName: (apiId, name) => {
     const trimmed = name.trim();
     if (!trimmed) return;
@@ -552,15 +544,29 @@ export const useStore = create<AppState>((set, get) => ({
     scheduleRecompute(set, get);
   },
 
-  setWindow: (startMs, endMs) => {
+  setApiWindow: (apiId, startMs, endMs) => {
     if (
       !Number.isFinite(startMs) ||
       !Number.isFinite(endMs) ||
       endMs <= startMs
     )
       return;
-    const planWindow: PlanWindow = { startMs, endMs };
-    mutateActive(set, get, (p) => ({ ...p, window: planWindow }));
+    const apiWindow: PlanWindow = { startMs, endMs };
+    mutateActive(set, get, (p) => {
+      const apis = p.apis.map((a) =>
+        a.id === apiId ? { ...a, window: apiWindow } : a
+      );
+      // Recompute the project-level display window from the union of API
+      // windows so Gantt / Schedule / Equipment all stay aligned.
+      const win =
+        apis.length > 0
+          ? {
+              startMs: Math.min(...apis.map((x) => x.window.startMs)),
+              endMs: Math.max(...apis.map((x) => x.window.endMs)),
+            }
+          : p.window;
+      return { ...p, apis, window: win };
+    });
     scheduleRecompute(set, get, true);
   },
 
@@ -582,7 +588,7 @@ export const useStore = create<AppState>((set, get) => ({
           }
         } else {
           const defaultPool = reactors
-            .filter((r) => r.reactorClass === "SSR")
+            .filter((r) => r.moc === "SS")
             .slice(0, 2)
             .map((r) => r.id);
           while (stages.length < target) {
@@ -635,7 +641,7 @@ export const useStore = create<AppState>((set, get) => ({
               batchSizeKg: 100,
               inputKgPerBatch: 100,
               reactorPool: p.reactors
-                .filter((r) => r.reactorClass === "GLR")
+                .filter((r) => r.moc === "GL")
                 .slice(0, 2)
                 .map((r) => r.id),
               bcfHours: 120,
@@ -647,14 +653,15 @@ export const useStore = create<AppState>((set, get) => ({
             },
           ]
         : [];
+      // New API inherits the project window as its starting plan window.
       const newApi: API = cascadePlannedBatches({
         id: newId,
         name: newId,
         color,
-        priority: 3,
         targetKg: withDefaultFinalStage ? 500 : 0,
         projectionKg: 0,
         stages,
+        window: { ...p.window },
       });
       return { ...p, apis: [...p.apis, newApi] };
     });
@@ -682,12 +689,30 @@ export const useStore = create<AppState>((set, get) => ({
     }));
   },
 
-  setReactorClass: (reactorId, cls) => {
-    if (cls !== "SSR" && cls !== "GLR") return;
+  setReactorMoc: (reactorId, moc) => {
+    const valid: MOC[] = ["SS", "GL", "Hastelloy", "Halar lined"];
+    if (!valid.includes(moc)) return;
     mutateActive(set, get, (p) => ({
       ...p,
       reactors: p.reactors.map((r) =>
-        r.id === reactorId ? { ...r, reactorClass: cls } : r
+        r.id === reactorId ? { ...r, moc } : r
+      ),
+    }));
+  },
+
+  setReactorAgitator: (reactorId, agitator) => {
+    const valid: AgitatorType[] = [
+      "Anchor",
+      "RCI",
+      "PBT",
+      "MIG",
+      "Hydrofoil",
+    ];
+    if (!valid.includes(agitator)) return;
+    mutateActive(set, get, (p) => ({
+      ...p,
+      reactors: p.reactors.map((r) =>
+        r.id === reactorId ? { ...r, agitatorType: agitator } : r
       ),
     }));
   },
@@ -711,12 +736,21 @@ export const useStore = create<AppState>((set, get) => ({
     const cap = Math.round(input.capacityKg);
     if (!Number.isFinite(cap) || cap <= 0)
       return { ok: false, error: "Capacity must be a positive number." };
-    if (
-      input.reactorClass !== "SSR" &&
-      input.reactorClass !== "GLR"
-    ) {
-      return { ok: false, error: "Class must be SSR or GLR." };
+    const validMoc: MOC[] = ["SS", "GL", "Hastelloy", "Halar lined"];
+    if (!validMoc.includes(input.moc)) {
+      return { ok: false, error: "MOC must be SS, GL, Hastelloy, or Halar lined." };
     }
+    const validAg: AgitatorType[] = [
+      "Anchor",
+      "RCI",
+      "PBT",
+      "MIG",
+      "Hydrofoil",
+    ];
+    const agitatorType: AgitatorType =
+      input.agitatorType && validAg.includes(input.agitatorType)
+        ? input.agitatorType
+        : "Anchor";
     const state = get();
     const active = getActive(state);
     if (active.reactors.some((r) => r.id === trimmedId)) {
@@ -725,15 +759,14 @@ export const useStore = create<AppState>((set, get) => ({
     const newReactor: Reactor = {
       id: trimmedId,
       name: (input.name ?? "").trim() || trimmedId,
-      reactorClass: input.reactorClass,
+      moc: input.moc,
+      agitatorType,
       capacityKg: cap,
     };
     mutateActive(set, get, (p) => ({
       ...p,
       reactors: [...p.reactors, newReactor],
     }));
-    // Reactor list change doesn't affect existing schedule (no stage uses it
-    // yet), so no recompute needed.
     return { ok: true, id: trimmedId };
   },
 

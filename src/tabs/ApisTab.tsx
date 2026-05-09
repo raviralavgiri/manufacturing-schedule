@@ -6,32 +6,28 @@ import {
   Pencil,
   Search,
   Lock,
-  CalendarRange,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
-import { Card, SectionHeader, Tag } from "../components/Primitives";
-import PriorityPill from "../components/PriorityPill";
+import { Card, SectionHeader } from "../components/Primitives";
 import { fmtIsoDate, parseIsoDate } from "../utils/dates";
-import type { API, Priority } from "../types";
 
 /**
  * APIs tab — high-level "what we want to make" view.
  * One row per API, with the few inputs that drive the schedule:
  *   - API Name        (editable display label)
- *   - Priority        (P1..P5 dropdown)
+ *   - Plan Window     (per-API start/end date inputs)
+ *   - Stages          (1–24)
  *   - Target Output   (kg; edits the FINAL stage's plannedBatches)
  *
- * For per-stage details (reactor pool, cycle/analysis hours, batch size, ...)
- * use the Stages tab.
+ * For per-stage details (reactor pool, BCF/BCT/Process, etc.) use the
+ * Stages tab.
  */
 export default function ApisTab() {
   const apis = useStore((s) => s.apis);
   const setApiName = useStore((s) => s.setApiName);
-  const setApiPriority = useStore((s) => s.setApiPriority);
   const setApiTargetOutput = useStore((s) => s.setApiTargetOutput);
-  const planWindow = useStore((s) => s.window);
-  const setWindow = useStore((s) => s.setWindow);
+  const setApiWindow = useStore((s) => s.setApiWindow);
   const setApiStageCount = useStore((s) => s.setApiStageCount);
   const addAPI = useStore((s) => s.addAPI);
   const removeAPI = useStore((s) => s.removeAPI);
@@ -47,10 +43,7 @@ export default function ApisTab() {
   const newRowRef = useRef<HTMLTableRowElement>(null);
 
   const sortedApis = useMemo(
-    () =>
-      [...apis].sort(
-        (a, b) => a.priority - b.priority || a.id.localeCompare(b.id)
-      ),
+    () => [...apis].sort((a, b) => a.id.localeCompare(b.id)),
     [apis]
   );
 
@@ -116,7 +109,7 @@ export default function ApisTab() {
     <div className="space-y-4">
       <SectionHeader
         title="APIs"
-        subtitle={`${apis.length} APIs · ${(totalKg / 1000).toFixed(1)}t total projected output. Edit name, target qty, and priority here. Stage-level details live in the Stages tab.`}
+        subtitle={`${apis.length} APIs · ${(totalKg / 1000).toFixed(1)}t total projected output. Edit name, plan window, stages, and target qty here. Stage-level details live in the Stages tab.`}
         right={
           <div className="flex items-center gap-2">
             <div className="relative">
@@ -175,20 +168,13 @@ export default function ApisTab() {
         }
       />
 
-      {/* Global plan window — applies to every API */}
-      <PlanWindowStrip
-        startMs={planWindow.startMs}
-        endMs={planWindow.endMs}
-        onChange={(s, e) => setWindow(s, e)}
-      />
-
       <Card className="overflow-hidden p-0">
         <div className="max-h-[68vh] overflow-auto">
           <table className="min-w-full text-sm">
             <thead className="sticky top-0 z-10 bg-ink-900/90 backdrop-blur-md">
               <tr className="text-left text-[11px] uppercase tracking-wider text-ink-300">
                 <Th yellow>API Name</Th>
-                <Th yellow>Priority</Th>
+                <Th yellow>Plan Window</Th>
                 <Th align="right" yellow>
                   Stages
                 </Th>
@@ -249,10 +235,13 @@ export default function ApisTab() {
                           </div>
                         </div>
                       </td>
-                      <td className="px-3 py-2.5">
-                        <PriorityPill
-                          value={api.priority}
-                          onChange={(p) => setApiPriority(api.id, p)}
+                      <td className="px-3 py-2">
+                        <ApiWindowCell
+                          startMs={api.window.startMs}
+                          endMs={api.window.endMs}
+                          onChange={(s, e) =>
+                            setApiWindow(api.id, s, e)
+                          }
                         />
                       </td>
                       <td className="px-3 py-2 text-right">
@@ -347,10 +336,10 @@ export default function ApisTab() {
           <span className="mr-1 font-bold">
             <Pencil size={12} className="inline" /> Editable here:
           </span>
-          API Name, Priority, Stages (1–24), Target Output. The{" "}
-          <span className="font-bold">Plan Window</span> above the table sets
-          the production span for every API — batches cannot start before its
-          Start Date; any batch finishing after the End Date is flagged "Ovr".
+          API Name, Plan Window (per-API start/end), Stages (1–24), Target
+          Output. Each API's plan window is independent — batches cannot start
+          before that API's Start Date; any batch finishing after its End
+          Date is flagged "Ovr".
         </div>
         <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs text-ink-300">
           <span className="mr-1 font-bold text-ink-100">
@@ -370,7 +359,7 @@ export default function ApisTab() {
   );
 }
 
-function PlanWindowStrip({
+function ApiWindowCell({
   startMs,
   endMs,
   onChange,
@@ -381,56 +370,31 @@ function PlanWindowStrip({
 }) {
   const startIso = fmtIsoDate(startMs);
   const endIso = fmtIsoDate(endMs);
-  const days = Math.max(1, Math.round((endMs - startMs) / (24 * 3600 * 1000)));
-  const weeks = Math.max(1, Math.round(days / 7));
-  const months = Math.max(1, Math.round(days / 30));
-
   return (
-    <div
-      className="flex flex-wrap items-center gap-3 rounded-2xl border border-cyan-300/30 px-4 py-3 shadow-glow ring-1 ring-cyan-300/20"
-      style={{
-        background:
-          "linear-gradient(90deg, rgba(0,240,255,0.10) 0%, rgba(167,139,250,0.06) 50%, rgba(244,114,182,0.06) 100%)",
-      }}
-    >
-      <div className="flex items-center gap-2">
-        <CalendarRange size={16} className="text-cyan-300" />
-        <span className="text-[11px] font-bold uppercase tracking-[0.2em] text-cyan-200">
-          Plan Window
-        </span>
-      </div>
-      <div className="flex items-center gap-2">
-        <input
-          type="date"
-          value={startIso}
-          max={endIso}
-          onChange={(e) => {
-            const next = parseIsoDate(e.target.value);
-            if (Number.isFinite(next) && next < endMs) onChange(next, endMs);
-          }}
-          className="cell-yellow rounded-lg px-3 py-1.5 font-mono text-sm tabular-nums transition"
-        />
-        <span className="text-cyan-300/70">→</span>
-        <input
-          type="date"
-          value={endIso}
-          min={startIso}
-          onChange={(e) => {
-            const next = parseIsoDate(e.target.value);
-            if (Number.isFinite(next) && next > startMs) onChange(startMs, next);
-          }}
-          className="cell-yellow rounded-lg px-3 py-1.5 font-mono text-sm tabular-nums transition"
-        />
-      </div>
-      <div className="ml-auto flex items-center gap-3 text-[11px] font-semibold text-ink-300">
-        <span className="font-mono tabular-nums text-cyan-200">
-          {weeks} weeks
-        </span>
-        <span className="text-ink-400">·</span>
-        <span className="font-mono tabular-nums text-violet-200">
-          ~{months} months
-        </span>
-      </div>
+    <div className="flex items-center gap-1">
+      <input
+        type="date"
+        value={startIso}
+        max={endIso}
+        onChange={(e) => {
+          const next = parseIsoDate(e.target.value);
+          if (Number.isFinite(next) && next < endMs) onChange(next, endMs);
+        }}
+        className="cell-yellow w-[130px] rounded-md px-2 py-1 font-mono text-[11px] tabular-nums transition"
+        title="Plan window start (per-API)"
+      />
+      <span className="text-ink-400">→</span>
+      <input
+        type="date"
+        value={endIso}
+        min={startIso}
+        onChange={(e) => {
+          const next = parseIsoDate(e.target.value);
+          if (Number.isFinite(next) && next > startMs) onChange(startMs, next);
+        }}
+        className="cell-yellow w-[130px] rounded-md px-2 py-1 font-mono text-[11px] tabular-nums transition"
+        title="Plan window end (per-API)"
+      />
     </div>
   );
 }

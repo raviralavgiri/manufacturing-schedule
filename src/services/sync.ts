@@ -1,6 +1,6 @@
 import type { Project } from "../types";
 import { isSupabaseEnabled, supabase } from "./supabase";
-import { migrateReactorClass } from "../utils/storage";
+import { migrateAgitator, migrateMoc } from "../utils/storage";
 
 export type SyncStatus =
   | "disabled"
@@ -31,12 +31,19 @@ function rowToProject(row: ProjectRow): Project {
   // they survived from the old workspace shape.
   const reactors = Array.isArray(row.reactors)
     ? row.reactors.map((r: any) => {
-        const { shared: _shared, ...rest } = r;
+        // Strip legacy fields (`shared`, `reactorClass`) and rebuild with
+        // the current schema: { id, name, moc, agitatorType, capacityKg }.
+        const {
+          shared: _shared,
+          reactorClass: legacyClass,
+          ...rest
+        } = r;
         void _shared;
         return {
           ...rest,
           name: r.name ?? r.id,
-          reactorClass: migrateReactorClass(r.reactorClass),
+          moc: migrateMoc(r.moc ?? legacyClass),
+          agitatorType: migrateAgitator(r.agitatorType),
         };
       })
     : [];

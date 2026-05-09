@@ -39,7 +39,7 @@ export default function EquipmentTab() {
       return {
         id: r.id,
         name: r.name,
-        cls: r.reactorClass,
+        cls: r.moc,
         util: Math.min(util, 100),
         batchCount: schedule.reactorUsage[r.id]?.batchCount ?? 0,
         busyHours: total,
@@ -112,7 +112,7 @@ export default function EquipmentTab() {
                   >
                     <span className="truncate">{r.name}</span>
                     <span className="text-[9px] uppercase text-ink-400">
-                      {r.cls === "GLR" ? "GLR" : "SSR"}
+                      {r.cls}
                     </span>
                   </span>
                   <span className="font-mono font-bold tabular-nums text-cyan-300">

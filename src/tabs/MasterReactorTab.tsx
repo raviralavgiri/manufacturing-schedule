@@ -11,32 +11,36 @@ import {
 import { clsx } from "clsx";
 import { useStore } from "../store";
 import { Card, SectionHeader } from "../components/Primitives";
-import type { ReactorClass } from "../types";
+import {
+  AGITATOR_VALUES,
+  MOC_VALUES,
+  type AgitatorType,
+  type MOC,
+} from "../types";
 
-const CLASS_ORDER: ReactorClass[] = ["SSR", "GLR"];
-const CLASS_LABEL: Record<ReactorClass, string> = {
-  SSR: "SSR",
-  GLR: "GLR",
-};
-const CLASS_FULL: Record<ReactorClass, string> = {
-  SSR: "Stainless Steel Reactor",
-  GLR: "Glass Lined Reactor",
+const MOC_FULL: Record<MOC, string> = {
+  SS: "Stainless Steel",
+  GL: "Glass Lined",
+  Hastelloy: "Hastelloy",
+  "Halar lined": "Halar lined",
 };
 
 /**
  * Master Reactor tab — single source of truth for the reactor fleet.
  *
- * Layout: a single sticky-header table grouped by class (SSR / GLR).
- *   • id is immutable (referenced by every stage's `reactorPool`).
- *   • Click name / class toggle / capacity to edit.
- *   • Trash → confirm-inline. Cannot delete a reactor that is the only
- *     entry in some stage's pool — the store's removeReactor enforces it.
+ * Each reactor row has:
+ *   • id (immutable)
+ *   • name (editable display label)
+ *   • MOC (Material of Construction): SS / GL / Hastelloy / Halar lined
+ *   • Agitator: Anchor / RCI / PBT / MIG / Hydrofoil
+ *   • Capacity (L)
  */
 export default function MasterReactorTab() {
   const reactors = useStore((s) => s.reactors);
   const apis = useStore((s) => s.apis);
   const setReactorName = useStore((s) => s.setReactorName);
-  const setReactorClass = useStore((s) => s.setReactorClass);
+  const setReactorMoc = useStore((s) => s.setReactorMoc);
+  const setReactorAgitator = useStore((s) => s.setReactorAgitator);
   const setReactorCapacity = useStore((s) => s.setReactorCapacity);
   const addReactor = useStore((s) => s.addReactor);
   const removeReactor = useStore((s) => s.removeReactor);
@@ -59,16 +63,18 @@ export default function MasterReactorTab() {
 
   const groupedReactors = useMemo(() => {
     const sorted = [...reactors].sort((a, b) => {
-      const aIdx = CLASS_ORDER.indexOf(a.reactorClass);
-      const bIdx = CLASS_ORDER.indexOf(b.reactorClass);
+      const aIdx = MOC_VALUES.indexOf(a.moc);
+      const bIdx = MOC_VALUES.indexOf(b.moc);
       if (aIdx !== bIdx) return aIdx - bIdx;
       return a.id.localeCompare(b.id);
     });
-    const buckets: Record<ReactorClass, typeof sorted> = {
-      SSR: [],
-      GLR: [],
+    const buckets: Record<MOC, typeof sorted> = {
+      SS: [],
+      GL: [],
+      Hastelloy: [],
+      "Halar lined": [],
     };
-    sorted.forEach((r) => buckets[r.reactorClass].push(r));
+    sorted.forEach((r) => buckets[r.moc].push(r));
     return buckets;
   }, [reactors]);
 
@@ -76,7 +82,9 @@ export default function MasterReactorTab() {
     <div className="space-y-4">
       <SectionHeader
         title="Master Reactor"
-        subtitle={`${reactors.length} reactors across the fleet · ${groupedReactors.SSR.length} SSR, ${groupedReactors.GLR.length} GLR. Click any name, class, or capacity to edit; ID is immutable.`}
+        subtitle={`${reactors.length} reactors across the fleet · ${MOC_VALUES
+          .map((m) => `${groupedReactors[m].length} ${m}`)
+          .join(", ")}. Click any field to edit; ID is immutable.`}
         right={
           <button
             onClick={() => setShowAdd((v) => !v)}
@@ -95,7 +103,7 @@ export default function MasterReactorTab() {
       {showAdd && (
         <AddReactorForm
           existingIds={reactors.map((r) => r.id)}
-          existingByClass={groupedReactors}
+          existingByMoc={groupedReactors}
           onCancel={() => setShowAdd(false)}
           onAdd={(input) => {
             const result = addReactor(input);
@@ -113,8 +121,11 @@ export default function MasterReactorTab() {
                 <Th className="w-8">&nbsp;</Th>
                 <Th className="w-24">ID</Th>
                 <Th yellow>Name</Th>
+                <Th yellow className="w-36">
+                  MOC
+                </Th>
                 <Th yellow className="w-32">
-                  Class
+                  Agitator
                 </Th>
                 <Th yellow align="right" className="w-28">
                   Capacity (L)
@@ -128,16 +139,17 @@ export default function MasterReactorTab() {
               </tr>
             </thead>
             <tbody>
-              {CLASS_ORDER.map((cls) => {
-                const list = groupedReactors[cls];
+              {MOC_VALUES.map((moc) => {
+                const list = groupedReactors[moc];
                 return (
-                  <ReactorClassGroup
-                    key={cls}
-                    cls={cls}
+                  <ReactorMocGroup
+                    key={moc}
+                    moc={moc}
                     list={list}
                     usageByReactor={usageByReactor}
                     onName={setReactorName}
-                    onClass={setReactorClass}
+                    onMoc={setReactorMoc}
+                    onAgitator={setReactorAgitator}
                     onCapacity={setReactorCapacity}
                     onDelete={removeReactor}
                   />
@@ -145,7 +157,7 @@ export default function MasterReactorTab() {
               })}
               {reactors.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-sm text-ink-300">
+                  <td colSpan={8} className="py-12 text-center text-sm text-ink-300">
                     No reactors yet. Click{" "}
                     <span className="font-bold text-cyan-300">+ Add Reactor</span>{" "}
                     above to create one.
@@ -163,9 +175,9 @@ export default function MasterReactorTab() {
             <Lock size={11} className="inline" /> ID is immutable:
           </span>
           Stage reactor pools reference reactors by id (e.g.{" "}
-          <span className="font-mono text-cyan-300">"R101"</span>). Renaming is
-          purely a display change; deleting an id rewrites every stage's pool
-          to drop it.
+          <span className="font-mono text-cyan-300">"R101"</span>). Renaming
+          is purely a display change; deleting an id rewrites every stage's
+          pool to drop it.
         </div>
         <div className="rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-xs text-amber-200">
           <span className="mr-1 font-bold">
@@ -180,22 +192,30 @@ export default function MasterReactorTab() {
   );
 }
 
-// ─── Class group (subheader row + body rows) ─────────────────────────────────
+// ─── MOC group (subheader row + body rows) ───────────────────────────────────
 
-function ReactorClassGroup({
-  cls,
+function ReactorMocGroup({
+  moc,
   list,
   usageByReactor,
   onName,
-  onClass,
+  onMoc,
+  onAgitator,
   onCapacity,
   onDelete,
 }: {
-  cls: ReactorClass;
-  list: { id: string; name: string; reactorClass: ReactorClass; capacityKg: number }[];
+  moc: MOC;
+  list: {
+    id: string;
+    name: string;
+    moc: MOC;
+    agitatorType: AgitatorType;
+    capacityKg: number;
+  }[];
   usageByReactor: Record<string, number>;
   onName: (rid: string, v: string) => void;
-  onClass: (rid: string, c: ReactorClass) => void;
+  onMoc: (rid: string, v: MOC) => void;
+  onAgitator: (rid: string, v: AgitatorType) => void;
   onCapacity: (rid: string, v: number) => void;
   onDelete: (rid: string, opts?: { cascade?: boolean }) =>
     | { ok: true }
@@ -204,30 +224,30 @@ function ReactorClassGroup({
   return (
     <>
       <tr className="bg-white/[0.04]">
-        <td colSpan={7} className="px-3 py-1.5">
+        <td colSpan={8} className="px-3 py-1.5">
           <div className="flex items-center gap-2">
             <span
               className="inline-block h-2 w-2 rounded-sm"
               style={{
-                background: classColor(cls),
-                boxShadow: `0 0 6px ${classColor(cls)}80`,
+                background: mocColor(moc),
+                boxShadow: `0 0 6px ${mocColor(moc)}80`,
               }}
             />
             <span className="text-[10px] font-bold uppercase tracking-wider text-ink-200">
-              {CLASS_FULL[cls]} ({list.length})
+              {MOC_FULL[moc]} ({list.length})
             </span>
-            <span className="text-[10px] text-ink-500">· {CLASS_LABEL[cls]}</span>
+            <span className="text-[10px] text-ink-500">· {moc}</span>
           </div>
         </td>
       </tr>
       {list.length === 0 ? (
         <tr>
           <td
-            colSpan={7}
+            colSpan={8}
             className="border-t border-white/5 px-3 py-3 text-xs text-ink-400"
           >
-            No {CLASS_FULL[cls].toLowerCase()} reactors. Add one above to make
-            this class available to stage pools.
+            No {MOC_FULL[moc].toLowerCase()} reactors. Add one above to make
+            this MOC available to stage pools.
           </td>
         </tr>
       ) : (
@@ -237,11 +257,13 @@ function ReactorClassGroup({
             zebra={i % 2 === 0}
             id={r.id}
             name={r.name}
-            reactorClass={r.reactorClass}
+            moc={r.moc}
+            agitatorType={r.agitatorType}
             capacityKg={r.capacityKg}
             stagesUsing={usageByReactor[r.id] ?? 0}
             onName={(v) => onName(r.id, v)}
-            onClass={(c) => onClass(r.id, c)}
+            onMoc={(v) => onMoc(r.id, v)}
+            onAgitator={(v) => onAgitator(r.id, v)}
             onCapacity={(v) => onCapacity(r.id, v)}
             onDelete={(cascade) => onDelete(r.id, { cascade })}
           />
@@ -257,22 +279,26 @@ function ReactorRow({
   zebra,
   id,
   name,
-  reactorClass,
+  moc,
+  agitatorType,
   capacityKg,
   stagesUsing,
   onName,
-  onClass,
+  onMoc,
+  onAgitator,
   onCapacity,
   onDelete,
 }: {
   zebra: boolean;
   id: string;
   name: string;
-  reactorClass: ReactorClass;
+  moc: MOC;
+  agitatorType: AgitatorType;
   capacityKg: number;
   stagesUsing: number;
   onName: (v: string) => void;
-  onClass: (c: ReactorClass) => void;
+  onMoc: (v: MOC) => void;
+  onAgitator: (v: AgitatorType) => void;
   onCapacity: (v: number) => void;
   onDelete: (cascade: boolean) =>
     | { ok: true }
@@ -310,8 +336,8 @@ function ReactorRow({
           <span
             className="inline-block h-2 w-2 rounded-sm"
             style={{
-              background: classColor(reactorClass),
-              boxShadow: `0 0 6px ${classColor(reactorClass)}80`,
+              background: mocColor(moc),
+              boxShadow: `0 0 6px ${mocColor(moc)}80`,
             }}
           />
         </td>
@@ -333,7 +359,22 @@ function ReactorRow({
           />
         </td>
         <td className="px-3 py-2">
-          <ClassToggle value={reactorClass} onChange={onClass} />
+          <SelectCell
+            value={moc}
+            options={MOC_VALUES as readonly string[] as readonly MOC[]}
+            onChange={(v) => onMoc(v as MOC)}
+            ariaLabel={`Reactor ${id} MOC`}
+          />
+        </td>
+        <td className="px-3 py-2">
+          <SelectCell
+            value={agitatorType}
+            options={
+              AGITATOR_VALUES as readonly string[] as readonly AgitatorType[]
+            }
+            onChange={(v) => onAgitator(v as AgitatorType)}
+            ariaLabel={`Reactor ${id} Agitator`}
+          />
         </td>
         <td className="px-3 py-2 text-right">
           <EditableNumCell value={capacityKg} onChange={onCapacity} />
@@ -360,7 +401,7 @@ function ReactorRow({
       </tr>
       {(confirmDelete || error) && (
         <tr className={clsx("border-t border-white/5", zebra && "bg-white/[0.01]")}>
-          <td colSpan={7} className="px-3 pb-3">
+          <td colSpan={8} className="px-3 pb-3">
             {confirmDelete && (
               <div className="rounded-md border border-rose-300/30 bg-rose-400/10 p-2 text-[11px] text-rose-200">
                 <div className="mb-1.5 font-semibold">
@@ -407,15 +448,15 @@ function ReactorRow({
 
 // ─── Add Reactor form ────────────────────────────────────────────────────────
 
-const CLASS_PREFIX: Record<ReactorClass, string> = {
-  SSR: "R1",
-  GLR: "R3",
+const MOC_PREFIX: Record<MOC, string> = {
+  SS: "R1",
+  GL: "R3",
+  Hastelloy: "R4",
+  "Halar lined": "R5",
 };
 
-function suggestNextId(cls: ReactorClass, existingIds: string[]): string {
-  const prefix = CLASS_PREFIX[cls];
-  // Pull numeric suffixes from existing ids that match the convention
-  // (e.g. "R101" → 101). Free-form ids like "R-PILOT-1" are ignored.
+function suggestNextId(moc: MOC, existingIds: string[]): string {
+  const prefix = MOC_PREFIX[moc];
   const usedNums = new Set<number>();
   existingIds.forEach((id) => {
     if (!id.startsWith(prefix)) return;
@@ -433,37 +474,39 @@ function suggestNextId(cls: ReactorClass, existingIds: string[]): string {
 
 function AddReactorForm({
   existingIds,
-  existingByClass,
+  existingByMoc,
   onCancel,
   onAdd,
 }: {
   existingIds: string[];
-  existingByClass: Record<ReactorClass, { id: string; capacityKg: number }[]>;
+  existingByMoc: Record<MOC, { id: string; capacityKg: number }[]>;
   onCancel: () => void;
   onAdd: (input: {
     id: string;
     name: string;
-    reactorClass: ReactorClass;
+    moc: MOC;
+    agitatorType: AgitatorType;
     capacityKg: number;
   }) => { ok: true; id: string } | { ok: false; error: string };
 }) {
-  const [cls, setCls] = useState<ReactorClass>("SSR");
+  const [moc, setMoc] = useState<MOC>("SS");
+  const [agitator, setAgitator] = useState<AgitatorType>("Anchor");
   const initialCapacity = useMemo(() => {
-    const peers = existingByClass[cls];
-    if (peers.length === 0) return cls === "GLR" ? 1000 : 200;
+    const peers = existingByMoc[moc];
+    if (peers.length === 0) return moc === "GL" ? 1000 : 200;
     const mean = peers.reduce((a, b) => a + b.capacityKg, 0) / peers.length;
     return Math.round(mean);
-  }, [cls, existingByClass]);
-  const [id, setId] = useState(() => suggestNextId("SSR", existingIds));
+  }, [moc, existingByMoc]);
+  const [id, setId] = useState(() => suggestNextId("SS", existingIds));
   const [idTouched, setIdTouched] = useState(false);
   const [name, setName] = useState("");
   const [capacity, setCapacity] = useState(String(initialCapacity));
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!idTouched) setId(suggestNextId(cls, existingIds));
+    if (!idTouched) setId(suggestNextId(moc, existingIds));
     setCapacity(String(initialCapacity));
-  }, [cls, idTouched, existingIds, initialCapacity]);
+  }, [moc, idTouched, existingIds, initialCapacity]);
 
   const submit = () => {
     setError(null);
@@ -475,7 +518,8 @@ function AddReactorForm({
     const result = onAdd({
       id: id.trim(),
       name: name.trim(),
-      reactorClass: cls,
+      moc,
+      agitatorType: agitator,
       capacityKg: capNum,
     });
     if (!result.ok) setError(result.error);
@@ -489,10 +533,26 @@ function AddReactorForm({
           New Reactor
         </h3>
       </div>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-5">
         <div>
-          <Label>Class</Label>
-          <ClassToggle value={cls} onChange={setCls} />
+          <Label>MOC</Label>
+          <SelectCell
+            value={moc}
+            options={MOC_VALUES as readonly string[] as readonly MOC[]}
+            onChange={(v) => setMoc(v as MOC)}
+            ariaLabel="New reactor MOC"
+          />
+        </div>
+        <div>
+          <Label>Agitator</Label>
+          <SelectCell
+            value={agitator}
+            options={
+              AGITATOR_VALUES as readonly string[] as readonly AgitatorType[]
+            }
+            onChange={(v) => setAgitator(v as AgitatorType)}
+            ariaLabel="New reactor agitator"
+          />
         </div>
         <div>
           <Label>ID</Label>
@@ -558,36 +618,31 @@ function AddReactorForm({
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function ClassToggle({
+/** Compact <select>-style dropdown styled to match the yellow editable cells. */
+function SelectCell<T extends string>({
   value,
+  options,
   onChange,
+  ariaLabel,
 }: {
-  value: ReactorClass;
-  onChange: (v: ReactorClass) => void;
+  value: T;
+  options: readonly T[];
+  onChange: (v: T) => void;
+  ariaLabel?: string;
 }) {
   return (
-    <div className="inline-flex w-full overflow-hidden rounded-md border border-white/10 bg-white/5">
-      {CLASS_ORDER.map((opt) => {
-        const on = opt === value;
-        return (
-          <button
-            key={opt}
-            type="button"
-            onClick={() => onChange(opt)}
-            title={CLASS_FULL[opt]}
-            className={clsx(
-              "flex-1 px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition",
-              on
-                ? "bg-cyan-300/15 text-cyan-200 shadow-[inset_0_0_0_1px_rgba(0,240,255,0.4)]"
-                : "text-ink-300 hover:bg-white/5 hover:text-white"
-            )}
-            aria-pressed={on}
-          >
-            {CLASS_LABEL[opt]}
-          </button>
-        );
-      })}
-    </div>
+    <select
+      value={value}
+      aria-label={ariaLabel}
+      onChange={(e) => onChange(e.target.value as T)}
+      className="cell-yellow w-full rounded-md border border-amber-300/30 bg-amber-300/10 px-2 py-1 text-left font-mono text-[11px] tabular-nums text-amber-100 transition focus:border-cyan-300/50 focus:outline-none"
+    >
+      {options.map((opt) => (
+        <option key={opt} value={opt} className="bg-ink-900 text-white">
+          {opt}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -705,6 +760,16 @@ function EditableNumCell({
   );
 }
 
-function classColor(cls: ReactorClass): string {
-  return cls === "GLR" ? "#f472b6" : "#00f0ff";
+function mocColor(moc: MOC): string {
+  switch (moc) {
+    case "GL":
+      return "#f472b6"; // pink-400
+    case "Hastelloy":
+      return "#a78bfa"; // violet-400
+    case "Halar lined":
+      return "#fbbf24"; // amber-400
+    case "SS":
+    default:
+      return "#00f0ff"; // cyan
+  }
 }

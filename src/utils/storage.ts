@@ -136,8 +136,19 @@ function normalizeProject(p: any): Project | null {
     return null;
   }
 
+  // Determine project-level window first — used as the fallback when an API
+  // has no per-API window stored yet.
+  let projectWin: PlanWindow = { startMs: FY_START_MS, endMs: FY_END_MS };
+  if (
+    p.window &&
+    typeof p.window.startMs === "number" &&
+    typeof p.window.endMs === "number" &&
+    p.window.endMs > p.window.startMs
+  ) {
+    projectWin = p.window;
+  }
+
   const migratedApis = p.apis.map((a: any) => {
-    const priority = (a.priority ?? 3) as API["priority"];
     let targetKg = a.targetKg;
     if (typeof targetKg !== "number" || targetKg < 0) {
       const stages = Array.isArray(a.stages) ? a.stages : [];
@@ -190,38 +201,54 @@ function normalizeProject(p: any): Project | null {
           };
         })
       : [];
+    // Drop `priority` (no longer part of the model) and `startMs/endMs`
+    // legacy direct-on-api fields.
     const {
       startMs: _legacyStart,
       endMs: _legacyEnd,
+      priority: _legacyPriority,
+      window: storedWindow,
       ...rest
-    } = a as API & { startMs?: number; endMs?: number };
+    } = a as API & { startMs?: number; endMs?: number; priority?: any };
     void _legacyStart;
     void _legacyEnd;
-    return { ...rest, priority, targetKg, stages };
+    void _legacyPriority;
+    // Per-API window: prefer the stored value; fall back to the project's
+    // window (= every API gets the old global window after migration).
+    const apiWindow: PlanWindow =
+      storedWindow &&
+      typeof storedWindow.startMs === "number" &&
+      typeof storedWindow.endMs === "number" &&
+      storedWindow.endMs > storedWindow.startMs
+        ? storedWindow
+        : { ...projectWin };
+    return { ...rest, targetKg, stages, window: apiWindow };
   });
   const apis = refreshPaletteColors(migratedApis as API[]) as API[];
 
   const reactors: Reactor[] = Array.isArray(p.reactors)
     ? p.reactors.map((r: any) => {
-        const { shared: _shared, ...rest } = r;
+        const { shared: _shared, reactorClass: legacyClass, ...rest } = r;
         void _shared;
         return {
           ...rest,
           name: r.name ?? r.id,
-          reactorClass: migrateReactorClass(r.reactorClass),
+          moc: migrateMoc(r.moc ?? legacyClass),
+          agitatorType: migrateAgitator(r.agitatorType),
         };
       })
     : [];
 
-  let win: PlanWindow = { startMs: FY_START_MS, endMs: FY_END_MS };
-  if (
-    p.window &&
-    typeof p.window.startMs === "number" &&
-    typeof p.window.endMs === "number" &&
-    p.window.endMs > p.window.startMs
-  ) {
-    win = p.window;
-  }
+  // The project-level window is now derived from the union of API windows;
+  // it's stored only as a display-range cache, not authoritative. If APIs
+  // exist, recompute it; otherwise keep whatever was stored / FY default.
+  const win: PlanWindow =
+    apis.length > 0
+      ? {
+          startMs: Math.min(...apis.map((x) => x.window.startMs)),
+          endMs: Math.max(...apis.map((x) => x.window.endMs)),
+        }
+      : projectWin;
 
   return {
     id: typeof p.id === "string" ? p.id : crypto.randomUUID(),
@@ -341,17 +368,42 @@ export function persistedSavedAt(): number | null {
   }
 }
 
-// ─── Reactor class migration helper ────────────────────────────────────────
+// ─── Reactor MOC + agitator migration helpers ─────────────────────────────
 //
-// Migration chain (all legacy values → current "SSR" | "GLR"):
-//   "SSR", "GLR"                           → pass-through (current)
-//   "Intermediate"                         → "SSR"
-//   "Small", "Medium", or anything unknown → "SSR"
-//   "Cleanroom" or "Large"                 → "GLR"
+// Migration chain for the wetted-surface MOC field:
+//   "SS" | "GL" | "Hastelloy" | "Halar lined"             → pass-through
+//   "SSR" | "Intermediate" | "Small" | "Medium"           → "SS"
+//   "GLR" | "Cleanroom"    | "Large"                      → "GL"
+//   anything else (incl. undefined) → "SS" (most common default)
 // Exported because services/sync.ts uses it on cloud reads too.
-export function migrateReactorClass(value: unknown): Reactor["reactorClass"] {
-  if (value === "SSR" || value === "GLR") return value;
-  if (value === "Cleanroom" || value === "Large") return "GLR";
-  // "Intermediate" | "Small" | "Medium" | anything else → SSR
-  return "SSR";
+export function migrateMoc(value: unknown): Reactor["moc"] {
+  if (
+    value === "SS" ||
+    value === "GL" ||
+    value === "Hastelloy" ||
+    value === "Halar lined"
+  ) {
+    return value;
+  }
+  if (value === "GLR" || value === "Cleanroom" || value === "Large") {
+    return "GL";
+  }
+  return "SS";
+}
+
+/** Legacy alias for migrateMoc — keeps services/sync.ts source-compatible
+ *  while we sweep all callers. */
+export const migrateReactorClass = migrateMoc;
+
+export function migrateAgitator(value: unknown): Reactor["agitatorType"] {
+  if (
+    value === "Anchor" ||
+    value === "RCI" ||
+    value === "PBT" ||
+    value === "MIG" ||
+    value === "Hydrofoil"
+  ) {
+    return value;
+  }
+  return "Anchor";
 }

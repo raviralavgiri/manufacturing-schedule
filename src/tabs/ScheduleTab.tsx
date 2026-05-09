@@ -24,10 +24,21 @@ export default function ScheduleTab() {
   const apis = useMemo(
     () =>
       [...apisRaw].sort(
-        (a, b) => a.priority - b.priority || a.id.localeCompare(b.id)
+        (a, b) => a.id.localeCompare(b.id)
       ),
     [apisRaw]
   );
+
+  // Stage-id → reactor pool list (= the "loop" of eligible reactors). Lets
+  // each batch row show the pool that was configured on the Stage tab,
+  // alongside the actually-assigned reactor.
+  const stagePoolById = useMemo(() => {
+    const m = new Map<string, string[]>();
+    apisRaw.forEach((a) =>
+      a.stages.forEach((s) => m.set(s.id, s.reactorPool))
+    );
+    return m;
+  }, [apisRaw]);
   const [q, setQ] = useState("");
   const [apiFilter, setApiFilter] = useState<string>("ALL");
   const [reactorFilter, setReactorFilter] = useState<string>("ALL");
@@ -84,6 +95,7 @@ export default function ScheduleTab() {
         "Batch #",
         "Reactor ID",
         "Reactor Name",
+        "Reactor Pool",
         "Start",
         "End (cycle)",
         "Analysis End",
@@ -103,6 +115,9 @@ export default function ScheduleTab() {
         b.reactorIds
           .map((id) => reactors.find((x) => x.id === id)?.name ?? id)
           .join(" + "),
+        (stagePoolById.get(b.stageId) ?? [])
+          .map((id) => reactors.find((x) => x.id === id)?.name ?? id)
+          .join(" | "),
         fmtDateTime(b.startMs),
         fmtDateTime(b.endMs),
         fmtDateTime(b.analysisEndMs),
@@ -280,12 +295,15 @@ export default function ScheduleTab() {
 
       <div ref={tableCardRef} className="schedule-table-card">
       <Card className="overflow-hidden p-0">
-        <div className="grid grid-cols-[110px_72px_120px_70px_140px_180px_180px_180px_60px_60px_72px] gap-0 border-b border-white/10 bg-ink-900/80 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-ink-300">
+        <div className="grid grid-cols-[110px_72px_120px_70px_140px_220px_180px_180px_180px_60px_60px_72px] gap-0 border-b border-white/10 bg-ink-900/80 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-ink-300">
           <span>Batch ID</span>
           <span>API</span>
           <span>Stage</span>
           <span>#</span>
           <span>Reactor</span>
+          <span title="Eligible pool — reactors configured on the Stage tab. The 'Reactor' column to the left is the one this batch is actually booked on.">
+            Reactor Pool
+          </span>
           <span>Start</span>
           <span>End (Cycle)</span>
           <span>Analysis End</span>
@@ -302,11 +320,16 @@ export default function ScheduleTab() {
             style={{ height: filtered.length * ROW_H, position: "relative" }}
           >
             <div style={{ position: "absolute", top: startIdx * ROW_H, left: 0, right: 0 }}>
-              {visible.map((b) => (
+              {visible.map((b) => {
+                const pool = stagePoolById.get(b.stageId) ?? [];
+                const poolLabel = pool
+                  .map((id) => reactors.find((x) => x.id === id)?.name ?? id)
+                  .join(", ");
+                return (
                 <div
                   key={b.batchId}
                   style={{ height: ROW_H }}
-                  className="grid grid-cols-[110px_72px_120px_70px_140px_180px_180px_180px_60px_60px_72px] items-center gap-0 border-b border-white/5 px-3 text-xs hover:bg-white/[0.04]"
+                  className="grid grid-cols-[110px_72px_120px_70px_140px_220px_180px_180px_180px_60px_60px_72px] items-center gap-0 border-b border-white/5 px-3 text-xs hover:bg-white/[0.04]"
                 >
                   <span className="font-mono text-[11px] text-ink-200 truncate">
                     {b.batchId}
@@ -341,6 +364,14 @@ export default function ScheduleTab() {
                       .map((id) => reactors.find((x) => x.id === id)?.name ?? id)
                       .join(", ")}
                   </span>
+                  <span
+                    className="font-mono text-[11px] text-violet-200 truncate"
+                    title={`Pool: ${poolLabel || "(empty)"}`}
+                  >
+                    {poolLabel || (
+                      <span className="text-ink-500">—</span>
+                    )}
+                  </span>
                   <span className="font-mono text-ink-200 truncate">
                     {fmtDateTime(b.startMs)}
                   </span>
@@ -368,7 +399,8 @@ export default function ScheduleTab() {
                     {b.outputKg}
                   </span>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>

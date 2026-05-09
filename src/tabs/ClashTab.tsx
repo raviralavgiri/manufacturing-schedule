@@ -34,7 +34,7 @@ export default function ClashTab() {
         return {
           id: r.id,
           name: r.name,
-          cls: r.reactorClass,
+          cls: r.moc,
           batches,
           stagesUsing,
         };
@@ -160,7 +160,7 @@ export default function ClashTab() {
                   {s.name}
                 </div>
                 <div className="mb-2 text-[10px] uppercase tracking-wider text-violet-300">
-                  {s.cls === "GLR" ? "GLR" : "SSR"} · contended
+                  {s.cls} · contended
                 </div>
                 <div className="space-y-0.5 font-mono text-[11px] text-ink-200">
                   <div>

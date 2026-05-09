@@ -35,7 +35,7 @@ export default function QuarterlyTab() {
   const apis = useMemo(
     () =>
       [...apisRaw].sort(
-        (a, b) => a.priority - b.priority || a.id.localeCompare(b.id)
+        (a, b) => a.id.localeCompare(b.id)
       ),
     [apisRaw]
   );

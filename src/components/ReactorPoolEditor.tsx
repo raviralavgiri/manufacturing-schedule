@@ -37,15 +37,19 @@ export default function ReactorPoolEditor({
 
   const reactorsByClass = useMemo(
     () => ({
-      SSR: reactors.filter((r) => r.reactorClass === "SSR"),
-      GLR: reactors.filter((r) => r.reactorClass === "GLR"),
+      SS: reactors.filter((r) => r.moc === "SS"),
+      GL: reactors.filter((r) => r.moc === "GL"),
+      Hastelloy: reactors.filter((r) => r.moc === "Hastelloy"),
+      "Halar lined": reactors.filter((r) => r.moc === "Halar lined"),
     }),
     [reactors]
   );
 
   const classLabel: Record<keyof typeof reactorsByClass, string> = {
-    SSR: "SSR",
-    GLR: "GLR",
+    SS: "SS",
+    GL: "GL",
+    Hastelloy: "Hastelloy",
+    "Halar lined": "Halar lined",
   };
 
   const toggle = (rid: string) => {
@@ -104,7 +108,7 @@ export default function ReactorPoolEditor({
             </div>
           </div>
           <div className="space-y-2">
-            {(["SSR", "GLR"] as const).map((cls) => (
+            {(["SS", "GL", "Hastelloy", "Halar lined"] as const).map((cls) => (
               <div key={cls} className="flex flex-wrap items-center gap-1">
                 <span
                   className="mr-1 inline-block w-14 text-[9px] font-bold uppercase tracking-wider text-ink-400"

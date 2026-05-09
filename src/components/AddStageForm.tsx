@@ -15,10 +15,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
   const addAPI = useStore((s) => s.addAPI);
 
   const apis = useMemo(
-    () =>
-      [...apisRaw].sort(
-        (a, b) => a.priority - b.priority || a.id.localeCompare(b.id)
-      ),
+    () => [...apisRaw].sort((a, b) => a.id.localeCompare(b.id)),
     [apisRaw]
   );
   const [apiId, setApiId] = useState<string>(apis[0]?.id ?? "");
@@ -55,11 +52,11 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
       const isFirst = api.stages.length === 0;
       const suggested = isFirst
         ? reactors
-            .filter((r) => r.reactorClass === "SSR")
+            .filter((r) => r.moc === "SS")
             .slice(0, 4)
             .map((r) => r.id)
         : reactors
-            .filter((r) => r.reactorClass === "SSR")
+            .filter((r) => r.moc === "SS")
             .slice(0, 3)
             .map((r) => r.id);
       setReactorPool(suggested);
@@ -129,16 +126,20 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
     onAdded(newId);
   };
 
-  const reactorsByClass = useMemo(() => {
+  const reactorsByMoc = useMemo(() => {
     return {
-      SSR: reactors.filter((r) => r.reactorClass === "SSR"),
-      GLR: reactors.filter((r) => r.reactorClass === "GLR"),
+      SS: reactors.filter((r) => r.moc === "SS"),
+      GL: reactors.filter((r) => r.moc === "GL"),
+      Hastelloy: reactors.filter((r) => r.moc === "Hastelloy"),
+      "Halar lined": reactors.filter((r) => r.moc === "Halar lined"),
     };
   }, [reactors]);
 
-  const classLabel: Record<keyof typeof reactorsByClass, string> = {
-    SSR: "SSR",
-    GLR: "GLR",
+  const mocLabel: Record<keyof typeof reactorsByMoc, string> = {
+    SS: "SS",
+    GL: "GL",
+    Hastelloy: "Hastelloy",
+    "Halar lined": "Halar lined",
   };
 
   return (
@@ -171,7 +172,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
             >
               {apis.map((a) => (
                 <option key={a.id} value={a.id} className="bg-ink-900">
-                  P{a.priority} · {a.name === a.id ? a.id : `${a.name} (${a.id})`} · {a.stages.length}st
+                  {a.name === a.id ? a.id : `${a.name} (${a.id})`} · {a.stages.length}st
                 </option>
               ))}
             </select>
@@ -285,15 +286,15 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
           </button>
         </div>
         <div className="space-y-2">
-          {(["SSR", "GLR"] as const).map((cls) => (
+          {(["SS", "GL", "Hastelloy", "Halar lined"] as const).map((cls) => (
             <div key={cls} className="flex flex-wrap items-center gap-1.5">
               <span
-                className="mr-1 inline-block w-16 text-[10px] font-bold uppercase tracking-wider text-ink-400"
+                className="mr-1 inline-block w-20 text-[10px] font-bold uppercase tracking-wider text-ink-400"
                 title={cls}
               >
-                {classLabel[cls]}
+                {mocLabel[cls]}
               </span>
-              {reactorsByClass[cls].map((r) => {
+              {reactorsByMoc[cls].map((r) => {
                 const on = reactorPool.includes(r.id);
                 return (
                   <button

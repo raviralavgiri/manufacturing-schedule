@@ -1,4 +1,5 @@
-import type { API, Priority, Reactor, StageMaster } from "../types";
+import type { API, Reactor, StageMaster } from "../types";
+import { FY_END_MS, FY_START_MS } from "../utils/dates";
 
 // Deterministic PRNG (mulberry32) so the demo is reproducible
 function mulberry32(seed: number) {
@@ -58,44 +59,43 @@ export function refreshPaletteColors<T extends { color?: string }>(
   }));
 }
 
-// Reactors: 20 total. Two classes:
-//   • SSR (Stainless Steel Reactor) R1xx + R2xx — upstream / intermediate stages
-//   • GLR (Glass Lined Reactor)     R3xx        — glass-lined for the Final API stage
-// `id` is the stable internal reference; `name` is the editable display label.
-// (Whether a reactor is "shared" across stages is no longer a stored flag —
-// it's derived live from current pool memberships in the Clash tab.)
+// Reactors: 20 total. Two MOC families:
+//   • SS (Stainless Steel)  R1xx + R2xx — upstream / intermediate stages
+//   • GL (Glass Lined)      R3xx        — final API stage
+// All seeded with an Anchor agitator by default; user can edit per reactor.
 function r(
   id: string,
-  cls: Reactor["reactorClass"],
-  capacityKg: number
+  moc: Reactor["moc"],
+  capacityKg: number,
+  agitatorType: Reactor["agitatorType"] = "Anchor"
 ): Reactor {
-  return { id, name: id, reactorClass: cls, capacityKg };
+  return { id, name: id, moc, capacityKg, agitatorType };
 }
 
 export const REACTORS: Reactor[] = [
-  // SSR R1xx — small/medium upstream reactors.
-  r("R101", "SSR", 200),
-  r("R102", "SSR", 200),
-  r("R103", "SSR", 250),
-  r("R104", "SSR", 250),
-  r("R105", "SSR", 300),
-  r("R106", "SSR", 300),
-  r("R107", "SSR", 350),
-  r("R108", "SSR", 350),
-  // SSR R2xx — larger upstream reactors.
-  r("R201", "SSR", 500),
-  r("R202", "SSR", 500),
-  r("R203", "SSR", 600),
-  r("R204", "SSR", 600),
-  r("R205", "SSR", 700),
-  r("R206", "SSR", 700),
-  // GLR R3xx — glass-lined reactors for the final API stage.
-  r("R301", "GLR", 1000),
-  r("R302", "GLR", 1000),
-  r("R303", "GLR", 1200),
-  r("R304", "GLR", 1200),
-  r("R305", "GLR", 1500),
-  r("R306", "GLR", 1500),
+  // SS R1xx — small/medium upstream reactors.
+  r("R101", "SS", 200, "Anchor"),
+  r("R102", "SS", 200, "Anchor"),
+  r("R103", "SS", 250, "PBT"),
+  r("R104", "SS", 250, "PBT"),
+  r("R105", "SS", 300, "RCI"),
+  r("R106", "SS", 300, "RCI"),
+  r("R107", "SS", 350, "Hydrofoil"),
+  r("R108", "SS", 350, "Hydrofoil"),
+  // SS R2xx — larger upstream reactors.
+  r("R201", "SS", 500, "Anchor"),
+  r("R202", "SS", 500, "Anchor"),
+  r("R203", "SS", 600, "MIG"),
+  r("R204", "SS", 600, "MIG"),
+  r("R205", "SS", 700, "PBT"),
+  r("R206", "SS", 700, "PBT"),
+  // GL R3xx — glass-lined reactors for the final API stage.
+  r("R301", "GL", 1000, "Anchor"),
+  r("R302", "GL", 1000, "Anchor"),
+  r("R303", "GL", 1200, "RCI"),
+  r("R304", "GL", 1200, "RCI"),
+  r("R305", "GL", 1500, "Hydrofoil"),
+  r("R306", "GL", 1500, "Hydrofoil"),
 ];
 
 // Distribution of stage counts per API to total 82 stages over 20 APIs:
@@ -245,22 +245,15 @@ export function buildSeed(): { apis: API[]; reactors: Reactor[] } {
     const targetKg = finalStage
       ? finalStage.batchSizeKg * finalStage.plannedBatches
       : 0;
-    // Priority distribution: 2x P1, 4x P2, 8x P3, 4x P4, 2x P5  (total 20)
-    const priorityByIdx: Priority[] = [
-      1, 1,                      // 2 critical
-      2, 2, 2, 2,                // 4 high
-      3, 3, 3, 3, 3, 3, 3, 3,    // 8 medium
-      4, 4, 4, 4,                // 4 low
-      5, 5,                      // 2 lowest
-    ];
     return {
       id: apiId,
       name: apiName,
       color: API_PALETTE[apiIdx % API_PALETTE.length],
-      priority: priorityByIdx[apiIdx] ?? 3,
       targetKg,
       projectionKg,
       stages,
+      // Per-API plan window (default = the FY range; user can edit per row).
+      window: { startMs: FY_START_MS, endMs: FY_END_MS },
     };
   });
 

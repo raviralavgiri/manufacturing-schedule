@@ -1,16 +1,41 @@
 /**
- * Reactor classification.
+ * Material of Construction (MOC) of a reactor — the wetted-surface metallurgy.
  *
- * - "SSR" (Stainless Steel Reactor)  — upstream / intermediate-stage equipment.
- * - "GLR" (Glass Lined Reactor)      — glass-lined equipment, typically
- *                                      used for the final API stage.
+ *   - "SS"          — Stainless Steel (was the old "SSR" class)
+ *   - "GL"          — Glass Lined     (was the old "GLR" class)
+ *   - "Hastelloy"   — corrosion-resistant nickel-molybdenum alloy
+ *   - "Halar lined" — ECTFE polymer liner
  */
-export type ReactorClass = "SSR" | "GLR";
+export type MOC = "SS" | "GL" | "Hastelloy" | "Halar lined";
+export const MOC_VALUES: readonly MOC[] = [
+  "SS",
+  "GL",
+  "Hastelloy",
+  "Halar lined",
+] as const;
+
+/** Agitator / impeller geometry options used for reactor records. */
+export type AgitatorType =
+  | "Anchor"
+  | "RCI"
+  | "PBT"
+  | "MIG"
+  | "Hydrofoil";
+export const AGITATOR_VALUES: readonly AgitatorType[] = [
+  "Anchor",
+  "RCI",
+  "PBT",
+  "MIG",
+  "Hydrofoil",
+] as const;
 
 export interface Reactor {
   id: string;            // stable internal reference (e.g. "R101")
   name: string;          // editable display name (defaults to id)
-  reactorClass: ReactorClass;
+  /** Material of Construction (was: reactorClass = SSR | GLR). */
+  moc: MOC;
+  /** Agitator / impeller type. */
+  agitatorType: AgitatorType;
   capacityKg: number;
 }
 
@@ -77,13 +102,10 @@ export interface StageMaster {
   plannedBatches: number;
 }
 
-export type Priority = 1 | 2 | 3 | 4 | 5;
-
 export interface API {
   id: string;
   name: string;
   color: string;
-  priority: Priority;
   /**
    * Final-API output target in kg. Drives the cascading derivation of
    * `plannedBatches` for every stage:
@@ -94,11 +116,18 @@ export interface API {
   /** Legacy field, kept for back-compat with old Quarterly summary code. */
   projectionKg: number;
   stages: StageMaster[];
+  /**
+   * Per-API plan window. Each API has its own start/end dates — batches
+   * outside this window are flagged "Ovr". The project-level window is
+   * derived from the union of API windows for display purposes.
+   */
+  window: PlanWindow;
 }
 
 /**
- * Global plan window that applies to every API. Batches cannot start before
- * `startMs`; any batch finishing after `endMs` is flagged "Ovr".
+ * A start/end date range. Used per-API as `API.window` for scheduling, and
+ * also at the project level as a derived display range (= min start, max
+ * end across all APIs).
  */
 export interface PlanWindow {
   startMs: number;

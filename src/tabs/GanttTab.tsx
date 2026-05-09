@@ -13,7 +13,6 @@ import {
 import { clsx } from "clsx";
 import { useStore } from "../store";
 import { Card, SectionHeader } from "../components/Primitives";
-import PriorityPill from "../components/PriorityPill";
 import MultiSelectPopover, {
   ClearFiltersButton,
   type Option as MsOption,
@@ -35,12 +34,9 @@ export default function GanttTab() {
   const reactors = useStore((s) => s.reactors);
   const schedule = useStore((s) => s.schedule);
 
-  // Sort by priority (1 = highest) for stable, priority-aware row ordering
+  // Stable id-alphabetical row ordering (priority sort dropped).
   const apis = useMemo(
-    () =>
-      [...apisRaw].sort(
-        (a, b) => a.priority - b.priority || a.id.localeCompare(b.id)
-      ),
+    () => [...apisRaw].sort((a, b) => a.id.localeCompare(b.id)),
     [apisRaw]
   );
 
@@ -106,7 +102,6 @@ export default function GanttTab() {
         label: a.name === a.id ? a.id : a.name,
         color: a.color,
         secondary: a.name === a.id ? undefined : `id: ${a.id}`,
-        group: `Priority P${a.priority}`,
       })),
     [apis]
   );
@@ -132,7 +127,7 @@ export default function GanttTab() {
       reactors.map((r) => ({
         value: r.id,
         label: r.name,
-        group: r.reactorClass,
+        group: r.moc,
         secondary: r.name === r.id ? undefined : `id: ${r.id}`,
       })),
     [reactors]
@@ -170,7 +165,7 @@ export default function GanttTab() {
       label: string;
       stageNo?: number;
       color: string;
-      reactorClass?: Reactor["reactorClass"];
+      moc?: Reactor["moc"];
     }[] = [];
 
     if (mode === "by-reactor") {
@@ -179,8 +174,8 @@ export default function GanttTab() {
           key: r.id,
           reactorId: r.id,
           label: r.name,
-          color: classColor(r.reactorClass),
-          reactorClass: r.reactorClass,
+          color: classColor(r.moc),
+          moc: r.moc,
         });
       });
       return out;
@@ -438,7 +433,7 @@ export default function GanttTab() {
                     rows.push([
                       rid,
                       r?.name ?? rid,
-                      r?.reactorClass ?? "",
+                      r?.moc ?? "",
                       b.batchId,
                       b.apiId,
                       b.apiName,
@@ -616,9 +611,6 @@ export default function GanttTab() {
                       }}
                     />
                     <span className="truncate">{a.name}</span>
-                    <span className="ml-auto shrink-0">
-                      <PriorityPill value={a.priority} readOnly />
-                    </span>
                   </div>
                 );
               })}
@@ -627,7 +619,7 @@ export default function GanttTab() {
               reactors.map((r) => {
                 const batchCount = grouped.get(r.id)?.length ?? 0;
                 if (anyFilterActive && batchCount === 0) return null;
-                const cls = classColor(r.reactorClass);
+                const cls = classColor(r.moc);
                 return (
                   <div
                     key={r.id}
@@ -645,9 +637,9 @@ export default function GanttTab() {
                     <span className="truncate">{r.name}</span>
                     <span
                       className="shrink-0 text-[9px] uppercase text-ink-400"
-                      title={r.reactorClass}
+                      title={r.moc}
                     >
-                      {r.reactorClass === "GLR" ? "GLR" : "SSR"}
+                      {r.moc}
                     </span>
                     <span className="ml-auto font-mono text-[10px] text-ink-400 tabular-nums">
                       {batchCount}
@@ -1140,6 +1132,16 @@ function monthForBand(
   return `${a.toLocaleString("en", { month: "short" })}–${b.toLocaleString("en", { month: "short" })}`;
 }
 
-function classColor(cls: Reactor["reactorClass"]): string {
-  return cls === "GLR" ? "#f472b6" : "#00f0ff";
+function classColor(cls: Reactor["moc"]): string {
+  switch (cls) {
+    case "GL":
+      return "#f472b6"; // pink-400
+    case "Hastelloy":
+      return "#a78bfa"; // violet-400
+    case "Halar lined":
+      return "#fbbf24"; // amber-400
+    case "SS":
+    default:
+      return "#00f0ff"; // cyan
+  }
 }

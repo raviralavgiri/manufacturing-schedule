@@ -86,14 +86,32 @@ export function runScheduler(
   reactors: Reactor[],
   planWindow?: PlanWindow
 ): ScheduleResult {
-  const windowStart =
+  // Per-API plan windows are authoritative now; the project-level planWindow
+  // arg is used only to anchor the weekly-occupancy heatmap range. We derive
+  // it from min(start)/max(end) across API windows, falling back to FY.
+  const apiStartMs = (a: API): number =>
+    a.window && Number.isFinite(a.window.startMs)
+      ? a.window.startMs
+      : FY_START_MS;
+  const apiEndMs = (a: API): number =>
+    a.window && Number.isFinite(a.window.endMs)
+      ? a.window.endMs
+      : FY_END_MS;
+  const projectStart =
     planWindow && Number.isFinite(planWindow.startMs)
       ? planWindow.startMs
+      : apis.length > 0
+      ? Math.min(...apis.map(apiStartMs))
       : FY_START_MS;
-  const windowEnd =
+  const projectEnd =
     planWindow && Number.isFinite(planWindow.endMs)
       ? planWindow.endMs
+      : apis.length > 0
+      ? Math.max(...apis.map(apiEndMs))
       : FY_END_MS;
+  // Used by the weekly occupancy heatmap (not authoritative for inFY).
+  const windowStart = projectStart;
+  const windowEnd = projectEnd;
   const reactorBookings = new Map<string, BookedSlot[]>();
   const reactorLoadHours = new Map<string, number>();
   const reactorBatchCount = new Map<string, number>();
@@ -113,9 +131,9 @@ export function runScheduler(
   const allBatches: BatchScheduleEntry[] = [];
   let clashCount = 0;
 
-  const apisInPriorityOrder = [...apis].sort(
-    (a, b) => a.priority - b.priority || a.id.localeCompare(b.id)
-  );
+  // Priority sort dropped — APIs are processed in stable id-alphabetical
+  // order. Round-robin across APIs ensures fair scheduling.
+  const apisInOrder = [...apis].sort((a, b) => a.id.localeCompare(b.id));
 
   let maxBatches = 0;
   apis.forEach((a) =>
@@ -124,11 +142,12 @@ export function runScheduler(
     })
   );
 
+  // Each API's earliest stage-start anchor is its OWN window start.
   const apiStageLastEnd = new Map<string, number[]>();
   apis.forEach((a) =>
     apiStageLastEnd.set(
       a.id,
-      a.stages.map(() => windowStart)
+      a.stages.map(() => apiStartMs(a))
     )
   );
 
@@ -333,7 +352,9 @@ export function runScheduler(
   }
 
   for (let round = 0; round < maxBatches; round++) {
-    for (const api of apisInPriorityOrder) {
+    for (const api of apisInOrder) {
+      const apiStart = apiStartMs(api);
+      const apiEnd = apiEndMs(api);
       for (let sIdx = 0; sIdx < api.stages.length; sIdx++) {
         const stage = api.stages[sIdx];
         if (round >= stage.plannedBatches) continue;
@@ -361,7 +382,7 @@ export function runScheduler(
 
         const prevStageReady =
           sIdx === 0
-            ? windowStart
+            ? apiStart
             : apiStageLastEnd.get(api.id)![sIdx - 1] + bufferMs;
 
         // BCF gate: the next batch of THIS stage cannot start before
@@ -374,7 +395,7 @@ export function runScheduler(
 
         const earliestStart = Math.max(
           prevStageReady,
-          windowStart,
+          apiStart, // per-API window start
           bcfGate
         );
 
@@ -470,7 +491,8 @@ export function runScheduler(
           startMs,
           endMs: cycleEndMs,
           analysisEndMs,
-          inFY: startMs >= windowStart && cycleEndMs <= windowEnd,
+          // "In FY" now means: within THIS API's plan window.
+          inFY: startMs >= apiStart && cycleEndMs <= apiEnd,
           clash,
           outputKg: stage.batchSizeKg,
           inputKg:
