@@ -12,7 +12,6 @@ import {
   Tooltip,
   CartesianGrid,
   Legend,
-  Treemap,
 } from "recharts";
 
 interface PivotRow {
@@ -93,40 +92,38 @@ export default function QuarterlyTab() {
     });
   }, [apis, schedule, apiOrder, weeks]);
 
-  const quarterTotals = useMemo(() => {
-    const out = [
-      { name: "Q1 · Apr-Jun", batches: 0, kg: 0 },
-      { name: "Q2 · Jul-Sep", batches: 0, kg: 0 },
-      { name: "Q3 · Oct-Dec", batches: 0, kg: 0 },
-      { name: "Q4 · Jan-Mar", batches: 0, kg: 0 },
+  // Per-quarter, per-API output (kg). Each row is one quarter; each API
+  // contributes a stacked segment so the user sees both quarter totals
+  // and the per-API split at a glance.
+  //
+  // Recharts wants the data shaped as:
+  //   [
+  //     { name: "Q1 · …", "API-01": 1250, "API-02": 800, ... },
+  //     { name: "Q2 · …", "API-01": 980,  "API-02": 1100, ... },
+  //   ]
+  // and one <Bar> per API key, all using the same stackId.
+  const perApiPerQuarter = useMemo(() => {
+    const rows: Record<string, number | string>[] = [
+      { name: "Q1 · Apr-Jun" },
+      { name: "Q2 · Jul-Sep" },
+      { name: "Q3 · Oct-Dec" },
+      { name: "Q4 · Jan-Mar" },
     ];
     pivot.forEach((r) => {
-      out[0].batches += r.q1.batches;
-      out[0].kg += r.q1.kg;
-      out[1].batches += r.q2.batches;
-      out[1].kg += r.q2.kg;
-      out[2].batches += r.q3.batches;
-      out[2].kg += r.q3.kg;
-      out[3].batches += r.q4.batches;
-      out[3].kg += r.q4.kg;
+      rows[0][r.apiId] = ((rows[0][r.apiId] as number) ?? 0) + r.q1.kg;
+      rows[1][r.apiId] = ((rows[1][r.apiId] as number) ?? 0) + r.q2.kg;
+      rows[2][r.apiId] = ((rows[2][r.apiId] as number) ?? 0) + r.q3.kg;
+      rows[3][r.apiId] = ((rows[3][r.apiId] as number) ?? 0) + r.q4.kg;
     });
-    return out;
-  }, [pivot]);
-
-  const treemapData = useMemo(() => {
-    const byApi = new Map<string, { name: string; size: number; fill: string }>();
-    pivot.forEach((r) => {
-      const cur = byApi.get(r.apiId);
-      if (cur) cur.size += r.total.kg;
-      else
-        byApi.set(r.apiId, {
-          name: r.apiName,
-          size: r.total.kg,
-          fill: r.apiColor,
-        });
+    // Make sure every API key exists on every row even if zero, so the
+    // stacked bar renders cleanly.
+    apis.forEach((a) => {
+      rows.forEach((row) => {
+        if (row[a.id] === undefined) row[a.id] = 0;
+      });
     });
-    return Array.from(byApi.values()).filter((d) => d.size > 0);
-  }, [pivot]);
+    return rows;
+  }, [pivot, apis]);
 
   const fyTotalKg = pivot.reduce((a, r) => a + r.total.kg, 0);
   const fyTotalBatches = pivot.reduce((a, r) => a + r.total.batches, 0);
@@ -138,73 +135,46 @@ export default function QuarterlyTab() {
         subtitle={`Batches and output (kg) per API/Stage broken down by Q1–Q4 + FY total · ${fyTotalBatches} batches · ${(fyTotalKg / 1000).toFixed(1)} t output`}
       />
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card>
-          <h3 className="mb-2 text-sm font-bold uppercase tracking-wider text-white">
-            Quarterly Totals
-          </h3>
-          <div style={{ width: "100%", height: 260 }}>
-            <ResponsiveContainer>
-              <BarChart data={quarterTotals}>
-                <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="name"
-                  stroke={chartTheme.axis}
-                  fontSize={11}
-                />
-                <YAxis yAxisId="left" stroke="#00f0ff" fontSize={11} />
-                <YAxis
-                  yAxisId="right"
-                  orientation="right"
-                  stroke="#a78bfa"
-                  fontSize={11}
-                />
-                <Tooltip
-                  contentStyle={{
-                    background: chartTheme.tooltipBg,
-                    border: `1px solid ${chartTheme.tooltipBorder}`,
-                    borderRadius: 8,
-                    fontSize: 12,
-                    color: chartTheme.tooltipText,
-                  }}
-                  labelStyle={{ color: chartTheme.tooltipText }}
-                />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Bar
-                  yAxisId="left"
-                  dataKey="batches"
-                  fill="#00f0ff"
-                  name="Batches"
-                  radius={[6, 6, 0, 0]}
-                />
-                <Bar
-                  yAxisId="right"
-                  dataKey="kg"
-                  fill="#a78bfa"
-                  name="Output (kg)"
-                  radius={[6, 6, 0, 0]}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-
-        <Card>
-          <h3 className="mb-2 text-sm font-bold uppercase tracking-wider text-white">
-            FY Output by API (Treemap, kg)
-          </h3>
-          <div style={{ width: "100%", height: 260 }}>
-            <ResponsiveContainer>
-              <Treemap
-                data={treemapData}
-                dataKey="size"
-                stroke="rgba(255,255,255,0.15)"
-                content={<CustomTreemapContent />}
+      <Card>
+        <h3 className="mb-2 text-sm font-bold uppercase tracking-wider text-white">
+          Quarterly Output (kg) — stacked by API
+        </h3>
+        <div style={{ width: "100%", height: 320 }}>
+          <ResponsiveContainer>
+            <BarChart data={perApiPerQuarter}>
+              <CartesianGrid stroke={chartTheme.grid} strokeDasharray="3 3" />
+              <XAxis
+                dataKey="name"
+                stroke={chartTheme.axis}
+                fontSize={11}
               />
-            </ResponsiveContainer>
-          </div>
-        </Card>
-      </div>
+              <YAxis stroke={chartTheme.axis} fontSize={11} />
+              <Tooltip
+                contentStyle={{
+                  background: chartTheme.tooltipBg,
+                  border: `1px solid ${chartTheme.tooltipBorder}`,
+                  borderRadius: 8,
+                  fontSize: 12,
+                  color: chartTheme.tooltipText,
+                }}
+                labelStyle={{ color: chartTheme.tooltipText }}
+                formatter={(v: number) => `${v.toLocaleString()} kg`}
+              />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              {apis.map((a) => (
+                <Bar
+                  key={a.id}
+                  dataKey={a.id}
+                  name={a.name === a.id ? a.id : `${a.name} (${a.id})`}
+                  stackId="api"
+                  fill={a.color}
+                  radius={[0, 0, 0, 0]}
+                />
+              ))}
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </Card>
 
       {/* Pivot table */}
       <Card className="overflow-hidden p-0">
@@ -386,55 +356,3 @@ function PivotCell({
   );
 }
 
-interface TreemapNodeProps {
-  x?: number;
-  y?: number;
-  width?: number;
-  height?: number;
-  name?: string;
-  size?: number;
-  fill?: string;
-}
-function CustomTreemapContent(props: TreemapNodeProps) {
-  const { x = 0, y = 0, width = 0, height = 0, name, size = 0, fill = "#888" } = props;
-  if (width < 4 || height < 4) return null;
-  return (
-    <g>
-      <rect
-        x={x}
-        y={y}
-        width={width}
-        height={height}
-        style={{
-          fill,
-          fillOpacity: 0.6,
-          stroke: "rgba(255,255,255,0.2)",
-          strokeWidth: 1,
-        }}
-      />
-      {width > 50 && height > 24 && (
-        <>
-          <text
-            x={x + 6}
-            y={y + 16}
-            fill="#fff"
-            fontSize={11}
-            fontWeight={700}
-            style={{ pointerEvents: "none" }}
-          >
-            {name}
-          </text>
-          <text
-            x={x + 6}
-            y={y + 30}
-            fill="rgba(255,255,255,0.7)"
-            fontSize={10}
-            style={{ pointerEvents: "none" }}
-          >
-            {size.toLocaleString()} kg
-          </text>
-        </>
-      )}
-    </g>
-  );
-}

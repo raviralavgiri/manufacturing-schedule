@@ -48,6 +48,13 @@ const CAMPAIGN_MAX_MS = 30 * 24 * 3600 * 1000;
  * eligible reactors; the scheduler picks whichever one becomes free earliest
  * at the candidate start time. So pool size determines achievable concurrency.
  *
+ * SUBSTITUTION RULE: when a stage's explicit pool reactor is busy, the
+ * scheduler may auto-substitute any like-for-like reactor — same capacity,
+ * MOC (material of construction), and agitator type. The "effective pool"
+ * for each stage = explicit reactorPool ∪ every spec-equivalent reactor
+ * across the whole reactor list. Explicit picks are tried first; substitutes
+ * only win when they're earlier-free.
+ *
  *   pool = [R101, R102, R103], BCF = 24h, BCT = 72h
  *      → B1 on R1 [0, 72]
  *        B2 on R2 [24, 96]   ← 24h after B1 — BCF honoured
@@ -112,6 +119,43 @@ export function runScheduler(
   // Used by the weekly occupancy heatmap (not authoritative for inFY).
   const windowStart = projectStart;
   const windowEnd = projectEnd;
+  // ─ Reactor substitution rule ─────────────────────────────────────────────
+  // Two reactors are "interchangeable" iff they have the same capacity, MOC,
+  // and agitator type. When a stage's explicit reactorPool reactor is busy,
+  // the scheduler may substitute any like-for-like reactor as long as it's
+  // free and ready. We pre-compute groups keyed by spec, then expose an
+  // expanded pool per stage that includes every interchangeable substitute.
+  const specKey = (r: Reactor): string =>
+    `${r.moc}|${r.agitatorType}|${r.capacityKg}`;
+  const groupBySpec = new Map<string, string[]>();
+  reactors.forEach((r) => {
+    const k = specKey(r);
+    const list = groupBySpec.get(k);
+    if (list) list.push(r.id);
+    else groupBySpec.set(k, [r.id]);
+  });
+  const reactorById = new Map(reactors.map((r) => [r.id, r]));
+  function expandPool(explicit: string[]): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const rid of explicit) {
+      const r = reactorById.get(rid);
+      if (!r) continue;
+      if (!seen.has(rid)) {
+        seen.add(rid);
+        out.push(rid); // explicit picks always come first (priority)
+      }
+      const group = groupBySpec.get(specKey(r)) ?? [];
+      for (const sub of group) {
+        if (!seen.has(sub)) {
+          seen.add(sub);
+          out.push(sub); // substitutes follow as fallbacks
+        }
+      }
+    }
+    return out;
+  }
+
   const reactorBookings = new Map<string, BookedSlot[]>();
   const reactorLoadHours = new Map<string, number>();
   const reactorBatchCount = new Map<string, number>();
@@ -399,13 +443,18 @@ export function runScheduler(
           bcfGate
         );
 
-        // POOL pick: probe every reactor in the pool with a single-reactor
-        // findTrainSlot call, then choose the one that becomes free earliest.
-        // Each call respects per-reactor PCO + 30-day campaign rules.
+        // POOL pick with substitution: the EFFECTIVE pool is the explicit
+        // reactorPool plus every like-for-like substitute (same capacity +
+        // MOC + agitator). For each candidate reactor in the effective pool,
+        // probe its earliest-free slot and pick the overall best. Explicit
+        // picks come first in the iteration order so a tie is broken in
+        // favour of the user's original choice — substitutes only "win" if
+        // they're materially earlier.
+        const effectivePool = expandPool(stage.reactorPool);
         let bestStart = Infinity;
-        let bestReactor = stage.reactorPool[0];
+        let bestReactor = effectivePool[0] ?? stage.reactorPool[0];
         let bestKind: "none" | "pco" | "campaign" = "none";
-        for (const rid of stage.reactorPool) {
+        for (const rid of effectivePool) {
           const probe = findTrainSlot(
             [rid],
             earliestStart,
