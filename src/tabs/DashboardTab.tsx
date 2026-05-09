@@ -22,6 +22,7 @@ import {
   Tooltip,
   CartesianGrid,
   Legend,
+  LabelList,
 } from "recharts";
 
 /**
@@ -457,10 +458,20 @@ export default function DashboardTab() {
                       key={n}
                       dataKey={n}
                       name={n}
-                      stackId="stage"
                       fill={STAGE_COLORS[i % STAGE_COLORS.length]}
-                      radius={[0, 0, 0, 0]}
-                    />
+                      radius={[2, 2, 0, 0]}
+                    >
+                      {/* Show batch count above each bar; hide zeros */}
+                      <LabelList
+                        dataKey={n}
+                        position="top"
+                        fill={chartTheme.axis}
+                        fontSize={10}
+                        formatter={(val: unknown) =>
+                          typeof val === "number" && val > 0 ? val : ""
+                        }
+                      />
+                    </Bar>
                   ))}
                 </BarChart>
               </ResponsiveContainer>
