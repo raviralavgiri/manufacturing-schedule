@@ -148,31 +148,56 @@ export default function DashboardTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [buckets, apis, schedule, gran, weeks]);
 
-  // Distinct stage numbers in the schedule, sorted ascending. Used as
-  // both the column key (S1, S2, …) and the legend order.
-  const stageNos = useMemo(() => {
-    const s = new Set<number>();
-    schedule.batches.forEach((b) => s.add(b.stageNo));
-    apis.forEach((a) => a.stages.forEach((st) => s.add(st.stageNo)));
-    return Array.from(s).sort((a, b) => a - b);
+  // Distinct stage NAMES across all APIs (e.g., "DT1", "DT3", "Final
+  // API"). Two APIs that happen to use the same stage name are
+  // combined into one segment in the chart — this is usually the
+  // intended behavior for a cross-API view. To split them, we'd need
+  // to key by `${apiId}·${stageName}`.
+  //
+  // Order: by FIRST appearance in the apis list (which is sorted by
+  // apiId). This keeps DT1 left of DT2 left of DT3 left of Final API
+  // for the typical 4-stage chemistry path.
+  const stageNames = useMemo(() => {
+    const seen = new Set<string>();
+    const ordered: string[] = [];
+    apis.forEach((a) =>
+      a.stages
+        .slice()
+        .sort((x, y) => x.stageNo - y.stageNo)
+        .forEach((st) => {
+          const n = (st.stageName || "").trim() || `S${st.stageNo}`;
+          if (!seen.has(n)) {
+            seen.add(n);
+            ordered.push(n);
+          }
+        })
+    );
+    // Catch any stage names that exist on batches but not on apis
+    // (e.g., legacy data or after a delete).
+    schedule.batches.forEach((b) => {
+      const n = (b.stageName || "").trim() || `S${b.stageNo}`;
+      if (!seen.has(n)) {
+        seen.add(n);
+        ordered.push(n);
+      }
+    });
+    return ordered;
   }, [apis, schedule]);
 
   const chartDataByStage = useMemo(() => {
     const rows: Record<string, number | string>[] = buckets.map((b) => ({
       name: b.label,
     }));
-    stageNos.forEach((n) =>
-      rows.forEach((r) => (r[`S${n}`] = 0))
-    );
+    stageNames.forEach((n) => rows.forEach((r) => (r[n] = 0)));
     schedule.batches.forEach((b) => {
       const i = bucketIndexFor(b.startMs);
       if (i < 0 || i >= rows.length) return;
-      const k = `S${b.stageNo}`;
+      const k = (b.stageName || "").trim() || `S${b.stageNo}`;
       rows[i][k] = ((rows[i][k] as number) ?? 0) + 1;
     });
     return rows;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buckets, stageNos, schedule, gran, weeks]);
+  }, [buckets, stageNames, schedule, gran, weeks]);
 
   // ─── KPI numbers ───────────────────────────────────────────────────
   const totalBatches = schedule.totalBatches;
@@ -427,11 +452,11 @@ export default function DashboardTab() {
                     }
                   />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
-                  {stageNos.map((n, i) => (
+                  {stageNames.map((n, i) => (
                     <Bar
                       key={n}
-                      dataKey={`S${n}`}
-                      name={`Stage ${n}`}
+                      dataKey={n}
+                      name={n}
                       stackId="stage"
                       fill={STAGE_COLORS[i % STAGE_COLORS.length]}
                       radius={[0, 0, 0, 0]}
