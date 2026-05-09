@@ -100,6 +100,21 @@ export interface StageMaster {
    */
   pcoHours: number;
   plannedBatches: number;
+  /**
+   * DAG predecessor list: ids of OTHER stages on the same API whose output
+   * feeds this stage's input. Replaces the old "previous stageNo" linear
+   * assumption with a real dependency graph.
+   *
+   *   - First stage of an API → empty array (no predecessors).
+   *   - Linear chain (legacy default) → [previous-stage-by-stageNo].
+   *   - Convergence (S3 + S7 → S8) → S8.inputStageIds = [S3.id, S7.id].
+   *   - Side-stream (S2 ← {S1, S2i}) → S2.inputStageIds = [S1.id, S2i.id].
+   *
+   * Cascade demand from each successor ADDS UP at this stage (see
+   * cascadePlannedBatches). The scheduler waits for batch N's analysis-end
+   * on every predecessor before starting batch N here ("any_done" rule).
+   */
+  inputStageIds: string[];
 }
 
 export interface API {

@@ -182,6 +182,12 @@ function normalizeProject(p: any): Project | null {
           // legacy stored value is overwritten so process always fills
           // the full slot.
           const processHours = bctHours;
+          // Carry through the raw inputStageIds; we do a second pass below
+          // to default missing/empty values to "previous stage by stageNo"
+          // so legacy linear data behaves identically.
+          const rawInputs = Array.isArray(s.inputStageIds)
+            ? s.inputStageIds.filter((x: unknown) => typeof x === "string")
+            : null;
           return {
             ...rest,
             bcfHours,
@@ -195,9 +201,15 @@ function normalizeProject(p: any): Project | null {
               typeof s.pcoHours === "number" && s.pcoHours >= 0
                 ? s.pcoHours
                 : 8,
+            inputStageIds: rawInputs ?? [],
+            // Sentinel: stash whether the source had a stored array. If not,
+            // we'll fill it with the linear-chain default in the next pass
+            // so legacy data is migrated transparently.
+            __inputsWereStored: rawInputs !== null,
           };
         })
       : [];
+    normalizeStageDagInputs(stages);
     // Drop `priority` (no longer part of the model) and `startMs/endMs`
     // legacy direct-on-api fields.
     const {
@@ -415,6 +427,56 @@ export function migrateMoc(value: unknown): Reactor["moc"] {
 /** Legacy alias for migrateMoc — keeps services/sync.ts source-compatible
  *  while we sweep all callers. */
 export const migrateReactorClass = migrateMoc;
+
+/**
+ * Normalize the `inputStageIds` DAG-predecessor field for every stage of
+ * an API in place. Used by both the local v1/v2/v3 hydrators here and the
+ * cloud-row reader in services/sync.ts so every load path produces the
+ * same canonical shape.
+ *
+ * Rules (matching types.ts doc):
+ *   - The first stage by `stageNo` always gets `[]` (no predecessors).
+ *   - If the field was MISSING from storage OR ended up empty after
+ *     filtering dangling refs, default to `[previous stage by stageNo]`
+ *     so legacy linear chains keep working.
+ *   - Self-references are dropped; ids that don't exist in the API's stage
+ *     set are filtered out (guards against stale references after deletes).
+ *
+ * The `__inputsWereStored` sentinel placed by the migration pass tells us
+ * whether the source actually carried the field; absent that sentinel we
+ * conservatively assume it was stored (i.e. an empty array means "really
+ * empty", not "missing").
+ */
+export function normalizeStageDagInputs(stages: any[]): void {
+  if (!Array.isArray(stages) || stages.length === 0) return;
+  const sortedByNo = [...stages].sort((x, y) => x.stageNo - y.stageNo);
+  const idSet = new Set(sortedByNo.map((s) => s.id));
+  sortedByNo.forEach((s, idx) => {
+    const stored: string[] = Array.isArray(s.inputStageIds)
+      ? s.inputStageIds.filter(
+          (x: unknown) => typeof x === "string"
+        )
+      : [];
+    const wasStored =
+      "__inputsWereStored" in s
+        ? !!s.__inputsWereStored
+        : Array.isArray(s.inputStageIds);
+    if (idx === 0) {
+      s.inputStageIds = [];
+    } else if (!wasStored || stored.length === 0) {
+      s.inputStageIds = [sortedByNo[idx - 1].id];
+    } else {
+      const filtered = stored.filter(
+        (id) => id !== s.id && idSet.has(id)
+      );
+      // Filtering wiped everything (dangling refs only) → fall back to
+      // the linear default rather than orphaning the stage.
+      s.inputStageIds =
+        filtered.length === 0 ? [sortedByNo[idx - 1].id] : filtered;
+    }
+    if ("__inputsWereStored" in s) delete s.__inputsWereStored;
+  });
+}
 
 export function migrateAgitator(value: unknown): Reactor["agitatorType"] {
   if (

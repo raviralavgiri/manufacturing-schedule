@@ -905,6 +905,20 @@ export default function GanttTab() {
                   })()}
               </div>
 
+              {/*
+               * TODO(dag-arrows): render thin dotted SVG connectors from
+               * each batch's start to its predecessor batches' analysisEnd
+               * positions, so DAG dependencies (multi-predecessor, side
+               * streams) are visually traceable. Punted in this pass —
+               * the by-stage / by-api / by-reactor modes plus the
+               * collapsed-API + filter logic make precise placement
+               * non-trivial, and the spec said "build correctness first;
+               * leave a TODO if it's getting too complex". The data we'd
+               * need is already on each batch entry (batchNo, stageId,
+               * apiId) — combine with stage.inputStageIds + the per-batch
+               * analysisEndMs map to draw the lines.
+               */}
+
               {/* Body grid + bars */}
               <div className="relative">
                 {/* Row backgrounds with vertical week guides */}

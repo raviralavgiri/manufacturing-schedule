@@ -6,12 +6,14 @@ import {
   Trash2,
   Lock,
   Beaker,
+  GitBranch,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
 import { Card, SectionHeader } from "../components/Primitives";
 import AddStageForm from "../components/AddStageForm";
 import ReactorPoolEditor from "../components/ReactorPoolEditor";
+import StageInputsEditor from "../components/StageInputsEditor";
 import type { StageMaster } from "../types";
 
 /**
@@ -27,6 +29,7 @@ export default function StagesTab() {
   const updateStageField = useStore((s) => s.updateStageField);
   const setStageName = useStore((s) => s.setStageName);
   const setStageReactorPool = useStore((s) => s.setStageReactorPool);
+  const setStageInputs = useStore((s) => s.setStageInputs);
   const removeStage = useStore((s) => s.removeStage);
   const recentlyAddedStageId = useStore((s) => s.recentlyAddedStageId);
   const clearRecentlyAdded = useStore((s) => s.clearRecentlyAdded);
@@ -45,30 +48,57 @@ export default function StagesTab() {
     const all: (StageMaster & {
       color: string;
       apiDisplayName: string;
-      /** Output demand on this stage = next stage's input consumed (or api.targetKg for final). */
+      /** Output demand on this stage = sum of successors' input consumed (or api.targetKg share for sinks). */
       demandKg: number;
+      /** Other stages on the same API — fed to the InputsEditor as candidates. */
+      siblings: StageMaster[];
+      /** True for the first stage of the API (lowest stageNo) — locks the inputs cell. */
+      isFirstStage: boolean;
     })[] = [];
     sortedApis.forEach((a) => {
       const sortedStages = [...a.stages].sort((x, y) => x.stageNo - y.stageNo);
-      // Walk backwards to compute the OUTPUT demand on each stage. Demand
-      // for stage N = input consumed by stage N+1 = planned(N+1) * input/batch(N+1).
-      let nextDemand = a.targetKg;
+      // DAG-aware demand calc: each stage's output demand = sum over
+      // successors of (successor.inputPerBatch × successor.plannedBatches).
+      // Sinks (no successors) get their share of api.targetKg (split equally
+      // when there is more than one sink — same rule as cascade.ts).
+      const successors = new Map<string, StageMaster[]>();
+      sortedStages.forEach((s) => successors.set(s.id, []));
+      sortedStages.forEach((s) =>
+        (s.inputStageIds ?? []).forEach((pid) => {
+          const list = successors.get(pid);
+          if (list) list.push(s);
+        })
+      );
+      const sinks = sortedStages.filter(
+        (s) => (successors.get(s.id)?.length ?? 0) === 0
+      );
+      const perSinkTarget = sinks.length === 0 ? 0 : a.targetKg / sinks.length;
+      const sinkIds = new Set(sinks.map((s) => s.id));
       const demandByStageId = new Map<string, number>();
-      for (let i = sortedStages.length - 1; i >= 0; i--) {
-        const s = sortedStages[i];
-        demandByStageId.set(s.id, nextDemand);
-        const inputPerBatch =
-          typeof s.inputKgPerBatch === "number" && s.inputKgPerBatch > 0
-            ? s.inputKgPerBatch
-            : s.batchSizeKg;
-        nextDemand = inputPerBatch * s.plannedBatches;
-      }
+      sortedStages.forEach((s) => {
+        if (sinkIds.has(s.id)) {
+          demandByStageId.set(s.id, perSinkTarget);
+        } else {
+          const succs = successors.get(s.id) ?? [];
+          const demand = succs.reduce((acc, succ) => {
+            const ipb =
+              typeof succ.inputKgPerBatch === "number" && succ.inputKgPerBatch > 0
+                ? succ.inputKgPerBatch
+                : succ.batchSizeKg;
+            return acc + ipb * succ.plannedBatches;
+          }, 0);
+          demandByStageId.set(s.id, demand);
+        }
+      });
+      const firstId = sortedStages[0]?.id;
       sortedStages.forEach((s) =>
         all.push({
           ...s,
           color: a.color,
           apiDisplayName: a.name,
           demandKg: demandByStageId.get(s.id) ?? 0,
+          siblings: sortedStages.filter((x) => x.id !== s.id),
+          isFirstStage: s.id === firstId,
         })
       );
     });
@@ -158,6 +188,12 @@ export default function StagesTab() {
                 <Th>Stage</Th>
                 <Th yellow>Stage Name</Th>
                 <Th yellow>Reactor Pool</Th>
+                <Th
+                  yellow
+                  title="DAG predecessors — stages whose output feeds this stage's input. Default = the immediate previous stage. Multi-select to model convergence (S3+S7→S8) or sub-streams (S2 ← {S1, S2i})."
+                >
+                  Inputs from
+                </Th>
                 <Th align="right" yellow>
                   Input/Batch (kg)
                 </Th>
@@ -241,6 +277,23 @@ export default function StagesTab() {
                         reactors={reactors}
                         onChange={(pool) => setStageReactorPool(r.id, pool)}
                       />
+                    </td>
+                    <td className="px-3 py-2 text-left">
+                      {r.isFirstStage ? (
+                        <span
+                          className="inline-flex items-center gap-1 font-mono text-xs text-ink-500"
+                          title="The first stage of an API has no predecessors."
+                        >
+                          <Lock size={10} /> —
+                        </span>
+                      ) : (
+                        <StageInputsEditor
+                          value={r.inputStageIds ?? []}
+                          siblings={r.siblings}
+                          stageId={r.id}
+                          onChange={(ids) => setStageInputs(r.id, ids)}
+                        />
+                      )}
                     </td>
                     <td className="px-3 py-2 text-right">
                       <EditableNumCell
@@ -359,7 +412,7 @@ export default function StagesTab() {
               {rows.length === 0 && (
                 <tr>
                   <td
-                    colSpan={16}
+                    colSpan={17}
                     className="py-12 text-center text-sm text-ink-300"
                   >
                     No stages match. Click{" "}
@@ -378,10 +431,17 @@ export default function StagesTab() {
           <span className="mr-1 font-bold">
             <Pencil size={12} className="inline" /> Editable here:
           </span>
-          Stage Name, Reactor Pool, Input/Batch (kg), Output/Batch (kg), BCF,
-          BCT, Analysis, PCO. Reactors on the{" "}
+          Stage Name, Reactor Pool, Inputs from, Input/Batch (kg), Output/Batch
+          (kg), BCF, BCT, Analysis, PCO. Reactors on the{" "}
           <span className="font-bold">Master Reactor</span> tab; API target on
           the <span className="font-bold">APIs</span> tab.
+          <span className="mt-1 block text-amber-300/80">
+            <GitBranch size={11} className="mr-0.5 inline" />{" "}
+            <span className="font-mono">Inputs from</span> = DAG predecessor
+            stages whose output feeds this stage. Default is the immediate
+            previous stage. Pick multiple for convergence (S3+S7→S8) or a
+            sub-stream (S2 ← {"{"}S1, S2i{"}"}).
+          </span>
           <span className="mt-1 block text-amber-300/80">
             <span className="font-mono">BCF</span> = interval between
             same-stage batch STARTs:{" "}

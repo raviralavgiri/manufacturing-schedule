@@ -1,7 +1,14 @@
 import { useMemo } from "react";
-import { CheckCircle2, ShieldCheck, GitBranch, Zap } from "lucide-react";
+import {
+  CheckCircle2,
+  ShieldCheck,
+  GitBranch,
+  Zap,
+  AlertTriangle,
+} from "lucide-react";
 import { useStore } from "../store";
 import { Card, SectionHeader, Tag } from "../components/Primitives";
+import { validateApiDag, type DagIssue } from "../utils/validation";
 
 export default function ClashTab() {
   const reactors = useStore((s) => s.reactors);
@@ -42,12 +49,98 @@ export default function ClashTab() {
       .sort((a, b) => b.stagesUsing - a.stagesUsing || a.id.localeCompare(b.id));
   }, [reactors, apis, schedule]);
 
+  // DAG validation surfaces non-clash structural issues — cycles, dangling
+  // refs, multi-sink layouts. Computed live from the current API set so any
+  // edit on the Stages tab reflects here within one render.
+  const dagIssues = useMemo(() => {
+    const out: DagIssue[] = [];
+    apis.forEach((a) => out.push(...validateApiDag(a)));
+    return out;
+  }, [apis]);
+  const dagErrors = dagIssues.filter((i) => i.level === "error");
+  const dagWarns = dagIssues.filter((i) => i.level === "warn");
+  const stageNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    apis.forEach((a) =>
+      a.stages.forEach((s) =>
+        m.set(s.id, `${a.name} · S${s.stageNo} ${s.stageName}`)
+      )
+    );
+    return m;
+  }, [apis]);
+
   return (
     <div className="space-y-4">
       <SectionHeader
         title="Clash Report"
         subtitle="Reactor double-booking detector. Sequencer guarantees zero clashes by design."
       />
+
+      {/* DAG issues — structural problems with the stage dependency graph.
+          Errors will cause cascade.ts to fall back to linear order; warnings
+          (e.g. multi-sink) are informational only. */}
+      <Card>
+        <div className="mb-3 flex items-center gap-2">
+          <GitBranch size={18} className="text-violet-300" />
+          <h3 className="text-sm font-bold uppercase tracking-wider text-white">
+            DAG Issues
+          </h3>
+          <Tag tone={dagErrors.length > 0 ? "rose" : dagWarns.length > 0 ? "amber" : "lime"}>
+            {dagErrors.length === 0 && dagWarns.length === 0
+              ? "All clear"
+              : `${dagErrors.length} error${dagErrors.length === 1 ? "" : "s"}, ${dagWarns.length} warning${dagWarns.length === 1 ? "" : "s"}`}
+          </Tag>
+          <span className="text-[11px] text-ink-400">
+            Stage-graph structure (predecessors / successors / sinks)
+          </span>
+        </div>
+        <p className="mb-3 text-xs text-ink-300">
+          Validation of every API's <span className="font-mono">inputStageIds</span>{" "}
+          graph. Errors trigger a fall-back to legacy linear cascade so the
+          schedule stays valid; the user is expected to fix them in the Stages
+          tab. Warnings (multi-sink) are advisory.
+        </p>
+        {dagIssues.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-white/10 bg-white/[0.02] p-4 text-center text-xs text-lime-300">
+            <CheckCircle2 size={12} className="mr-1 inline" />
+            Every API's stage graph is acyclic, fully connected, and has exactly one sink.
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {dagIssues.map((i, idx) => {
+              const isErr = i.level === "error";
+              const target = i.stageId
+                ? stageNameById.get(i.stageId) ?? i.stageId
+                : i.apiId;
+              return (
+                <div
+                  key={idx}
+                  className={
+                    isErr
+                      ? "flex items-start gap-2 rounded-md border border-rose-300/30 bg-rose-400/8 px-3 py-1.5 text-xs text-rose-200"
+                      : "flex items-start gap-2 rounded-md border border-amber-300/30 bg-amber-400/8 px-3 py-1.5 text-xs text-amber-200"
+                  }
+                >
+                  <AlertTriangle
+                    size={12}
+                    className={
+                      isErr
+                        ? "mt-0.5 shrink-0 text-rose-300"
+                        : "mt-0.5 shrink-0 text-amber-300"
+                    }
+                  />
+                  <span className="flex-1">
+                    <span className="mr-1 font-mono text-[10px] uppercase tracking-wider opacity-80">
+                      [{i.apiId}]
+                    </span>
+                    <span className="font-bold">{target}:</span> {i.msg}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
 
       {/* Algorithm explanation */}
       <Card>

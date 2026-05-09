@@ -66,6 +66,12 @@ export interface NewStageInput {
   analysisHours: number;
   pcoHours: number;
   plannedBatches: number;
+  /**
+   * DAG predecessors for the new stage. Optional — when omitted, addStage
+   * defaults to `[lastExistingStageId]` (linear chain) for non-first stages
+   * and `[]` for the first stage of an API.
+   */
+  inputStageIds?: string[];
 }
 
 interface AppState {
@@ -117,6 +123,14 @@ interface AppState {
   setStageOutput: (stageId: string, outputKg: number) => void;
   setStageName: (stageId: string, name: string) => void;
   setStageReactorPool: (stageId: string, pool: string[]) => void;
+  /**
+   * Replace a stage's DAG predecessor list. Re-runs the cascade for the
+   * owning API (because dependency topology changes upstream demand) and
+   * triggers `forceRecompute` of the schedule. Self-references and unknown
+   * ids are filtered. The first stage of an API (lowest stageNo) is
+   * locked to `[]` regardless of input.
+   */
+  setStageInputs: (stageId: string, ids: string[]) => void;
   addStage: (input: NewStageInput) => string;
   removeStage: (stageId: string) => void;
 
@@ -453,6 +467,35 @@ export const useStore = create<AppState>((set, get) => ({
     scheduleRecompute(set, get, true);
   },
 
+  setStageInputs: (stageId, ids) => {
+    mutateActive(set, get, (p) => {
+      const apis = p.apis.map((a) => {
+        if (!a.stages.some((s) => s.id === stageId)) return a;
+        // Locate this API's first-stage id (lowest stageNo) so we can lock
+        // it to []. Self-refs and unknown ids are filtered as defense in
+        // depth — UI guards against them but cloud edits could sneak in.
+        const sorted = [...a.stages].sort((x, y) => x.stageNo - y.stageNo);
+        const firstId = sorted[0]?.id;
+        const idSet = new Set(a.stages.map((s) => s.id));
+        const stages = a.stages.map((s) => {
+          if (s.id !== stageId) return s;
+          if (s.id === firstId) {
+            return { ...s, inputStageIds: [] };
+          }
+          const cleaned = ids.filter(
+            (x) => typeof x === "string" && x !== s.id && idSet.has(x)
+          );
+          return { ...s, inputStageIds: cleaned };
+        });
+        // Topology change → re-cascade so plannedBatches / projectionKg
+        // reflect the new demand graph before scheduling kicks in.
+        return cascadePlannedBatches({ ...a, stages });
+      });
+      return { ...p, apis };
+    });
+    scheduleRecompute(set, get, true);
+  },
+
   addStage: (input) => {
     let newId = "";
     mutateActive(set, get, (p) => {
@@ -463,6 +506,31 @@ export const useStore = create<AppState>((set, get) => ({
           ? 1
           : Math.max(...api.stages.map((s) => s.stageNo)) + 1;
       newId = `${api.id}-S${nextStageNo}`;
+
+      // DAG predecessor default: linear chain ([lastExistingStage]) for
+      // non-first stages, [] for the first. Caller-supplied list wins
+      // when provided; we still scrub self-refs / unknown ids.
+      const stageIdSet = new Set(api.stages.map((s) => s.id));
+      const isFirst = api.stages.length === 0;
+      let inputStageIds: string[];
+      if (isFirst) {
+        inputStageIds = [];
+      } else if (Array.isArray(input.inputStageIds)) {
+        inputStageIds = input.inputStageIds.filter(
+          (id) => typeof id === "string" && id !== newId && stageIdSet.has(id)
+        );
+        if (inputStageIds.length === 0) {
+          const last = [...api.stages].sort(
+            (x, y) => x.stageNo - y.stageNo
+          )[api.stages.length - 1];
+          inputStageIds = last ? [last.id] : [];
+        }
+      } else {
+        const last = [...api.stages].sort(
+          (x, y) => x.stageNo - y.stageNo
+        )[api.stages.length - 1];
+        inputStageIds = last ? [last.id] : [];
+      }
 
       const bct = Math.max(1, input.bctHours);
       const newStage: StageMaster = {
@@ -482,6 +550,7 @@ export const useStore = create<AppState>((set, get) => ({
         analysisHours: Math.max(1, input.analysisHours),
         pcoHours: Math.max(0, input.pcoHours),
         plannedBatches: Math.max(1, input.plannedBatches),
+        inputStageIds,
       };
       const apis = p.apis.map((a) =>
         a.id === api.id
@@ -499,10 +568,33 @@ export const useStore = create<AppState>((set, get) => ({
     mutateActive(set, get, (p) => {
       const apis = p.apis.map((a) => {
         if (!a.stages.some((s) => s.id === stageId)) return a;
-        return cascadePlannedBatches({
-          ...a,
-          stages: a.stages.filter((s) => s.id !== stageId),
+        // Drop any dangling references to the deleted stage from siblings'
+        // inputStageIds. If a sibling ends up with an empty list and
+        // wasn't the first stage, fall back to its previous-by-stageNo
+        // sibling so the cascade has a sensible chain to walk.
+        const remainingSorted = a.stages
+          .filter((s) => s.id !== stageId)
+          .sort((x, y) => x.stageNo - y.stageNo);
+        const remainingIds = new Set(remainingSorted.map((s) => s.id));
+        const stages = remainingSorted.map((s, idx) => {
+          const filtered = (s.inputStageIds ?? []).filter((id) =>
+            remainingIds.has(id)
+          );
+          let next = filtered;
+          if (idx === 0) {
+            next = [];
+          } else if (filtered.length === 0) {
+            next = [remainingSorted[idx - 1].id];
+          }
+          if (
+            next.length === s.inputStageIds.length &&
+            next.every((id, i) => id === s.inputStageIds[i])
+          ) {
+            return s;
+          }
+          return { ...s, inputStageIds: next };
         });
+        return cascadePlannedBatches({ ...a, stages });
       });
       return { ...p, apis };
     });
@@ -590,6 +682,7 @@ export const useStore = create<AppState>((set, get) => ({
             const nextNo = stages.length + 1;
             const isFinal = nextNo === target;
             const out = isFinal ? 100 : 80;
+            const prev = stages[stages.length - 1];
             stages.push({
               id: `${a.id}-S${nextNo}`,
               apiId: a.id,
@@ -606,6 +699,8 @@ export const useStore = create<AppState>((set, get) => ({
               analysisHours: isFinal ? 48 : 24,
               pcoHours: isFinal ? 12 : 8,
               plannedBatches: 1,
+              // Linear default for auto-created stages (matches seed).
+              inputStageIds: prev ? [prev.id] : [],
             });
           }
         }
@@ -645,6 +740,7 @@ export const useStore = create<AppState>((set, get) => ({
               analysisHours: 48,
               pcoHours: 12,
               plannedBatches: 5,
+              inputStageIds: [],
             },
           ]
         : [];

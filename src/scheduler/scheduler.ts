@@ -4,6 +4,7 @@ import type {
   PlanWindow,
   Reactor,
   ScheduleResult,
+  StageMaster,
 } from "../types";
 import {
   FY_END_MS,
@@ -12,6 +13,7 @@ import {
   hoursToMs,
   weekIndexIn,
 } from "../utils/dates";
+import { topologicalStageOrder } from "../utils/validation";
 
 interface BookedSlot {
   startMs: number;
@@ -69,9 +71,12 @@ const CAMPAIGN_MAX_MS = 30 * 24 * 3600 * 1000;
  * Constraints (provably never violated):
  *   1. No reactor clash: a reactor's [start, cycleEnd] windows are
  *      non-overlapping per reactor.
- *   2. Stage ordering inside an API: stage N+1's batch B can only start
- *      after stage N's batch B finishes its analysis window plus a 4-hour
- *      transfer buffer.
+ *   2. Stage ordering inside an API (DAG): batch B at stage S can only start
+ *      after batch B's analysis ends on EVERY predecessor stage in
+ *      `inputStageIds`. If a predecessor has fewer planned batches than S,
+ *      the predecessor's LAST batch is used (the "any_done" rule). For a
+ *      strictly linear chain this collapses to the legacy "stage N+1 waits
+ *      for stage N" behaviour.
  *   3. Priority ordering: APIs are processed in priority order (P1 first,
  *      P5 last) within each round so high-priority APIs grab earliest slots.
  *   4. BCF cadence: same-stage consecutive batches respect
@@ -186,13 +191,26 @@ export function runScheduler(
     })
   );
 
-  // Each API's earliest stage-start anchor is its OWN window start.
-  const apiStageLastEnd = new Map<string, number[]>();
+  // Topological order of stages PER API. Falls back to stageNo order if
+  // the DAG is cyclic (validation surfaces that elsewhere; the scheduler
+  // never crashes). For a clean linear chain this is identical to the
+  // old `[...api.stages].sort((a,b) => a.stageNo - b.stageNo)`.
+  const apiTopoStages = new Map<string, StageMaster[]>();
+  apis.forEach((a) => {
+    const byId = new Map(a.stages.map((s) => [s.id, s]));
+    const ordered = topologicalStageOrder(a.stages)
+      .map((id) => byId.get(id))
+      .filter((s): s is StageMaster => !!s);
+    apiTopoStages.set(a.id, ordered);
+  });
+
+  // Per-stage list of analysisEnd times by batch index. Replaces the
+  // legacy `apiStageLastEnd[sIdx]` (one-number-per-stage) so the
+  // per-batch "any_done" rule can look up batch N's predecessor end
+  // directly. arr[k] = analysisEnd of stage's k-th booked batch.
+  const stageBatchAnalysisEnds = new Map<string, number[]>();
   apis.forEach((a) =>
-    apiStageLastEnd.set(
-      a.id,
-      a.stages.map(() => apiStartMs(a))
-    )
+    a.stages.forEach((s) => stageBatchAnalysisEnds.set(s.id, []))
   );
 
   // BCF gate (cross-reactor): for each stage, the last booked batch's start.
@@ -399,8 +417,8 @@ export function runScheduler(
     for (const api of apisInOrder) {
       const apiStart = apiStartMs(api);
       const apiEnd = apiEndMs(api);
-      for (let sIdx = 0; sIdx < api.stages.length; sIdx++) {
-        const stage = api.stages[sIdx];
+      const stagesInOrder = apiTopoStages.get(api.id) ?? api.stages;
+      for (const stage of stagesInOrder) {
         if (round >= stage.plannedBatches) continue;
         if (stage.reactorPool.length === 0) continue;
 
@@ -424,10 +442,30 @@ export function runScheduler(
             : 0
         );
 
-        const prevStageReady =
-          sIdx === 0
-            ? apiStart
-            : apiStageLastEnd.get(api.id)![sIdx - 1] + bufferMs;
+        // DAG predecessor wait — "any_done" per-batch rule:
+        //   prevStageReady = max over P in inputStageIds of P.batch[round].analysisEnd
+        // If P has fewer batches than `round + 1`, fall back to P's LAST
+        // analysisEnd so we don't gate on a batch that will never exist.
+        // First-stage (no predecessors) anchors at the API window start.
+        const preds = Array.isArray(stage.inputStageIds)
+          ? stage.inputStageIds
+          : [];
+        let prevStageReady: number;
+        if (preds.length === 0) {
+          prevStageReady = apiStart;
+        } else {
+          let maxPredAnalysisEnd = -Infinity;
+          for (const pid of preds) {
+            const arr = stageBatchAnalysisEnds.get(pid);
+            if (!arr || arr.length === 0) continue;
+            const idx = Math.min(round, arr.length - 1);
+            const ae = arr[idx];
+            if (ae > maxPredAnalysisEnd) maxPredAnalysisEnd = ae;
+          }
+          prevStageReady = Number.isFinite(maxPredAnalysisEnd)
+            ? maxPredAnalysisEnd + bufferMs
+            : apiStart;
+        }
 
         // BCF gate: the next batch of THIS stage cannot start before
         // (last booked start of this stage) + BCF, no matter which reactor.
@@ -517,10 +555,9 @@ export function runScheduler(
           (reactorBatchCount.get(bestReactor) ?? 0) + 1
         );
 
-        apiStageLastEnd.get(api.id)![sIdx] = Math.max(
-          apiStageLastEnd.get(api.id)![sIdx],
-          analysisEndMs
-        );
+        // Append this batch's analysisEnd in batch order so per-batch
+        // predecessor lookups (above) can find batch N's exact end.
+        stageBatchAnalysisEnds.get(stage.id)!.push(analysisEndMs);
         stageLastBatchStart.set(stage.id, startMs);
 
         const cleaningBeforeMs = cleaningKind === "none" ? 0 : pcoMs;

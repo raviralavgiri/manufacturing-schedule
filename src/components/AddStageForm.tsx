@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Plus, X, Sparkles, Beaker, AlertCircle } from "lucide-react";
+import { Plus, X, Sparkles, Beaker, AlertCircle, GitBranch } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
 
@@ -28,6 +28,10 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
   const [pcoHours, setPcoHours] = useState(8);
   const [plannedBatches, setPlannedBatches] = useState(10);
   const [reactorPool, setReactorPool] = useState<string[]>([]);
+  // DAG predecessors for the new stage. Defaults to the API's last existing
+  // stage (linear chain) when the user picks an API; emptied when the API
+  // has no stages yet (so the new one becomes that API's first stage).
+  const [inputStageIds, setInputStageIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   // Auto-suggest stage name based on chosen API's current stage count
@@ -62,6 +66,38 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiId]);
+
+  // Default DAG-predecessor selection. First stage of an API → []; otherwise
+  // → [last existing stage by stageNo]. Re-runs whenever the user picks a
+  // different API so the suggestion is always sensible. The user can still
+  // override before submit.
+  useEffect(() => {
+    const api = apis.find((a) => a.id === apiId);
+    if (!api) {
+      setInputStageIds([]);
+      return;
+    }
+    if (api.stages.length === 0) {
+      setInputStageIds([]);
+      return;
+    }
+    const last = [...api.stages].sort(
+      (a, b) => a.stageNo - b.stageNo
+    )[api.stages.length - 1];
+    setInputStageIds(last ? [last.id] : []);
+  }, [apiId, apis]);
+
+  const apiStagesSorted = useMemo(() => {
+    const api = apis.find((a) => a.id === apiId);
+    if (!api) return [];
+    return [...api.stages].sort((a, b) => a.stageNo - b.stageNo);
+  }, [apis, apiId]);
+  const willBeFirstStage = apiStagesSorted.length === 0;
+  const toggleInput = (id: string) => {
+    setInputStageIds((p) =>
+      p.includes(id) ? p.filter((x) => x !== id) : [...p, id]
+    );
+  };
 
   const togglePool = (rid: string) => {
     setReactorPool((p) =>
@@ -104,6 +140,27 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
       setError("PCO must be ≥ 0");
       return;
     }
+    // DAG predecessor checks. The first stage of an API is allowed an
+    // empty list; every other stage must have at least one predecessor.
+    // Self-reference is impossible here (stage doesn't exist yet) but we
+    // still guard against bogus ids and a (paranoid) cycle: a new stage
+    // can't reference one whose `inputStageIds` would ever transitively
+    // reach back — practically impossible at creation time, but we let
+    // the submit-time cascade redo the check if anything weird sneaks in.
+    if (!willBeFirstStage) {
+      if (inputStageIds.length === 0) {
+        setError(
+          "Pick at least one predecessor stage (Inputs from). The first stage of an API is the only stage allowed an empty list."
+        );
+        return;
+      }
+      const validIds = new Set(apiStagesSorted.map((s) => s.id));
+      const invalid = inputStageIds.filter((id) => !validIds.has(id));
+      if (invalid.length > 0) {
+        setError(`Unknown predecessor stage id(s): ${invalid.join(", ")}`);
+        return;
+      }
+    }
     const newId = addStage({
       apiId,
       stageName,
@@ -115,6 +172,7 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
       pcoHours,
       plannedBatches,
       reactorPool,
+      inputStageIds: willBeFirstStage ? [] : inputStageIds.slice(),
     });
     onAdded(newId);
   };
@@ -249,6 +307,59 @@ export default function AddStageForm({ onCancel, onAdded }: Props) {
         <span className="font-semibold text-ink-300">PCO</span> = cleaning
         gap on campaign change. Planned batches are auto-computed.
       </p>
+
+      {/* Row 1.5: DAG predecessors. The first stage of an API has no
+          inputs — we collapse the section to a single info bar. For every
+          other stage we render the multi-select. */}
+      <div className="mt-4">
+        <div className="mb-2 flex items-center justify-between">
+          <Label>
+            <GitBranch size={11} className="mr-1 inline opacity-70" /> Inputs
+            from{" "}
+            <span className="ml-1 font-mono text-[10px] text-ink-300">
+              {willBeFirstStage
+                ? "first stage — no predecessors"
+                : `${inputStageIds.length} selected`}
+            </span>
+          </Label>
+        </div>
+        {willBeFirstStage ? (
+          <div className="rounded-md border border-dashed border-white/10 bg-white/[0.02] px-3 py-2 text-[11px] text-ink-400">
+            This will be the first stage of{" "}
+            <span className="font-bold text-ink-200">{apiId || "—"}</span>, so
+            it has no DAG predecessors. Add more stages later to wire up a
+            chain.
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {apiStagesSorted.map((s) => {
+              const on = inputStageIds.includes(s.id);
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => toggleInput(s.id)}
+                  title={`${s.stageName} (S${s.stageNo})`}
+                  className={clsx(
+                    "rounded-md border px-2 py-1 font-mono text-[11px] font-semibold transition",
+                    on
+                      ? "border-cyan-300/60 bg-cyan-300/15 text-cyan-200 shadow-[0_0_8px_rgba(0,240,255,0.25)]"
+                      : "border-white/10 bg-white/5 text-ink-200 hover:border-white/20 hover:bg-white/10"
+                  )}
+                >
+                  S{s.stageNo} · {s.stageName}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <p className="mt-1 text-[10px] text-ink-400">
+          Default = the API's last existing stage (linear chain). Pick
+          multiple for convergence (S3+S7→S8) or a sub-stream (S2 ← {"{"}
+          S1, S2i{"}"}). The new stage cannot reference itself or form a
+          cycle.
+        </p>
+      </div>
 
       {/* Row 2: Reactor Pool */}
       <div className="mt-4">

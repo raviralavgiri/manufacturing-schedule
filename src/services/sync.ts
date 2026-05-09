@@ -1,6 +1,10 @@
 import type { Project } from "../types";
 import { isSupabaseEnabled, supabase } from "./supabase";
-import { migrateAgitator, migrateMoc } from "../utils/storage";
+import {
+  migrateAgitator,
+  migrateMoc,
+  normalizeStageDagInputs,
+} from "../utils/storage";
 
 export type SyncStatus =
   | "disabled"
@@ -71,7 +75,13 @@ function rowToProject(row: ProjectRow): Project {
           typeof a.window.endMs === "number"
             ? a.window
             : { ...projectWindow };
-        return { ...rest, window: apiWindow };
+        // Apply the same DAG-predecessor normalization as the local
+        // hydrator so cloud rows written before `inputStageIds` existed
+        // collapse to the linear-chain default and don't crash the
+        // cascade / scheduler.
+        const stages = Array.isArray(rest.stages) ? rest.stages.slice() : [];
+        normalizeStageDagInputs(stages);
+        return { ...rest, stages, window: apiWindow };
       })
     : [];
 

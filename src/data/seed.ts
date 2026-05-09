@@ -231,6 +231,9 @@ export function buildSeed(): { apis: API[]; reactors: Reactor[] } {
         analysisHours,
         pcoHours,
         plannedBatches,
+        // Linear chain default: each stage feeds from its immediate
+        // predecessor. First stage has no inputs.
+        inputStageIds: s === 0 ? [] : [`${apiId}-S${s}`],
       });
     }
     const projectionKg = stages

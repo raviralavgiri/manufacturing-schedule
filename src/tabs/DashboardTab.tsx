@@ -72,11 +72,34 @@ interface PivotRow {
   apiColor: string;
   stageNo: number;
   stageName: string;
+  /** True when this stage is NOT the immediate `prev stageNo` linear successor —
+   *  i.e. multi-predecessor or side-stream. Drives the ↳ prefix in the UI. */
+  branched: boolean;
   q1: { batches: number; kg: number };
   q2: { batches: number; kg: number };
   q3: { batches: number; kg: number };
   q4: { batches: number; kg: number };
   total: { batches: number; kg: number };
+}
+
+/**
+ * True when the stage's `inputStageIds` doesn't match the legacy linear
+ * default — i.e. multi-predecessor (convergence) OR a sole predecessor
+ * that isn't the immediate `prev stageNo` (sub-stream). Used to prefix
+ * the label with ↳ so DAG branches stand out from the main chain.
+ */
+function isStageBranched(
+  stage: { id: string; stageNo: number; inputStageIds?: string[] },
+  apiStagesSorted: { id: string; stageNo: number }[]
+): boolean {
+  const inputs = stage.inputStageIds ?? [];
+  // A first stage is never "branched" — it has no inputs by definition.
+  if (apiStagesSorted[0]?.id === stage.id) return false;
+  if (inputs.length !== 1) return inputs.length > 1; // 0 = orphan, >1 = branched
+  // Single-predecessor: is it the immediate prev-by-stageNo?
+  const idx = apiStagesSorted.findIndex((s) => s.id === stage.id);
+  const prev = idx > 0 ? apiStagesSorted[idx - 1] : null;
+  return !prev || inputs[0] !== prev.id;
 }
 
 export default function DashboardTab() {
@@ -214,7 +237,8 @@ export default function DashboardTab() {
   // ─── Per-API target-vs-achieved ───────────────────────────────────
   const perApi = useMemo(() => {
     return apis.map((a) => {
-      const finalStage = a.stages[a.stages.length - 1];
+      const sorted = [...a.stages].sort((x, y) => x.stageNo - y.stageNo);
+      const finalStage = sorted[sorted.length - 1];
       const apiBatches = schedule.batches.filter((b) => b.apiId === a.id);
       const finalBatches = finalStage
         ? apiBatches.filter((b) => b.stageId === finalStage.id)
@@ -222,9 +246,13 @@ export default function DashboardTab() {
       const achievedKg = finalBatches.reduce((s, b) => s + b.outputKg, 0);
       const targetKg = a.targetKg ?? 0;
       const pct = targetKg > 0 ? (achievedKg / targetKg) * 100 : 0;
+      const finalBranched = finalStage
+        ? isStageBranched(finalStage, sorted)
+        : false;
       return {
         api: a,
         finalStage,
+        finalBranched,
         targetKg,
         achievedKg,
         gapKg: targetKg - achievedKg,
@@ -238,22 +266,24 @@ export default function DashboardTab() {
   // ─── Detail pivot (existing logic, kept for deep-dive) ────────────
   const pivot: PivotRow[] = useMemo(() => {
     const map = new Map<string, PivotRow>();
-    apis.forEach((a) =>
-      a.stages.forEach((s) => {
+    apis.forEach((a) => {
+      const sorted = [...a.stages].sort((x, y) => x.stageNo - y.stageNo);
+      sorted.forEach((s) => {
         map.set(`${a.id}__${s.stageNo}`, {
           apiId: a.id,
           apiName: a.name,
           apiColor: a.color,
           stageNo: s.stageNo,
           stageName: s.stageName,
+          branched: isStageBranched(s, sorted),
           q1: { batches: 0, kg: 0 },
           q2: { batches: 0, kg: 0 },
           q3: { batches: 0, kg: 0 },
           q4: { batches: 0, kg: 0 },
           total: { batches: 0, kg: 0 },
         });
-      })
-    );
+      });
+    });
     schedule.batches.forEach((b) => {
       const q = quarterIn(weeks, b.startMs);
       if (!q) return;
@@ -612,9 +642,18 @@ export default function DashboardTab() {
                     <td className="px-3 py-1.5 text-right font-mono tabular-nums text-violet-200">
                       {r.totalBatches.toLocaleString()}
                     </td>
-                    <td className="px-3 py-1.5 text-ink-300">
+                    <td
+                      className="px-3 py-1.5 text-ink-300"
+                      title={
+                        r.finalBranched
+                          ? "DAG branch — multi-predecessor or sub-stream stage"
+                          : undefined
+                      }
+                    >
                       {r.finalStage
-                        ? `S${r.finalStage.stageNo} · ${r.finalStage.stageName}`
+                        ? `${r.finalBranched ? "↳ " : ""}S${
+                            r.finalStage.stageNo
+                          } · ${r.finalStage.stageName}`
                         : "—"}
                     </td>
                   </tr>
@@ -683,8 +722,15 @@ export default function DashboardTab() {
                       {r.apiName}
                     </span>
                   </td>
-                  <td className="px-3 py-1.5 text-ink-200">
-                    S{r.stageNo} · {r.stageName}
+                  <td
+                    className="px-3 py-1.5 text-ink-200"
+                    title={
+                      r.branched
+                        ? "DAG branch — multi-predecessor or sub-stream stage"
+                        : undefined
+                    }
+                  >
+                    {r.branched ? "↳ " : ""}S{r.stageNo} · {r.stageName}
                   </td>
                   <PivotCell v={r.q1} />
                   <PivotCell v={r.q2} />
