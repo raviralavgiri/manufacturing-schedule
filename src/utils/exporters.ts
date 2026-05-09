@@ -88,12 +88,11 @@ export function fileStamp(d = new Date()): string {
   );
 }
 
-// ─── Gantt grid → Excel ─────────────────────────────────────────────────────
+// ─── Gantt grid → Excel (real .xlsx via exceljs) ────────────────────────────
 //
-// Excel happily opens an HTML table saved with a .xls extension and
-// preserves cell colours, row/column spans, and basic formatting. That lets
-// us produce a Gantt-grid view (rows = reactors, columns = weeks, cells
-// coloured with API.color) without pulling in a heavy XLSX library.
+// Produces a real OOXML workbook with proper cell fills, merged headers,
+// frozen first row/column, and column widths. Opens in Excel / Numbers /
+// LibreOffice without a "wrong format" warning.
 
 export interface GanttGridRow {
   /** Row label — usually a reactor name or stage label. */
@@ -101,16 +100,16 @@ export interface GanttGridRow {
   /** Optional secondary label (e.g. MOC code) shown in lighter ink. */
   secondary?: string;
   /**
-   * One entry per week. Empty / null means the row is idle that week.
-   * `color` is the API colour (any CSS-recognisable value); `text` is what
-   * to render inside the cell (kept short — usually the API id or empty).
+   * One entry per week. null means the row is idle that week.
+   * `color` is the API colour (any CSS hex like "#dd3c3c"); `text` is what
+   * to render inside the cell (kept short — usually the API id).
    */
   weeks: Array<{ color: string; text?: string; title?: string } | null>;
 }
 
 export interface GanttGridSpec {
-  title: string;            // first H1 above the table
-  subtitle?: string;        // small line below the title
+  title: string;             // sheet title (becomes the workbook title cell)
+  subtitle?: string;         // small line below the title
   /** Quarter-band header. e.g. ["Q1 · Apr-Jun", "Q2 · Jul-Sep", ...] */
   quarterLabels: string[];
   /** Number of week columns each quarter spans, in order. */
@@ -121,124 +120,181 @@ export interface GanttGridSpec {
   rows: GanttGridRow[];
 }
 
-/**
- * Build the HTML table for the Gantt grid. Inline styles only — Excel
- * doesn't honour <style> blocks well across versions.
- */
-export function buildGanttGridHtml(spec: GanttGridSpec): string {
-  const escapeHtml = (s: string) =>
-    String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-
-  const totalWeeks = spec.weekLabels.length;
-
-  // ─ Header row 1: quarter bands
-  const quarterCells = spec.quarterLabels
-    .map((q, i) => {
-      const span = spec.quarterSpans[i] ?? 0;
-      if (span <= 0) return "";
-      return `<td colspan="${span}" style="background:#1f2937;color:#e5e7eb;font-weight:700;font-size:11px;text-align:center;padding:4px;border:1px solid #475569;">${escapeHtml(q)}</td>`;
-    })
-    .join("");
-
-  // ─ Header row 2: per-week labels (every Nth shown for readability)
-  const weekCells = spec.weekLabels
-    .map(
-      (lbl) =>
-        `<td style="background:#0f172a;color:#94a3b8;font-size:9px;text-align:center;padding:2px;border:1px solid #334155;width:32px;">${escapeHtml(
-          lbl
-        )}</td>`
-    )
-    .join("");
-
-  // ─ Body rows
-  const bodyRows = spec.rows
-    .map((r) => {
-      const cells = r.weeks
-        .map((w) => {
-          if (!w) {
-            return `<td style="background:#ffffff;border:1px solid #e2e8f0;height:22px;width:32px;">&nbsp;</td>`;
-          }
-          // Coloured busy cell. Excel honours bgcolor and inline color.
-          return `<td bgcolor="${escapeHtml(w.color)}" title="${escapeHtml(
-            w.title ?? ""
-          )}" style="background:${escapeHtml(
-            w.color
-          )};color:#0f172a;font-size:9px;font-weight:700;text-align:center;padding:1px;border:1px solid #94a3b8;height:22px;width:32px;">${escapeHtml(
-            w.text ?? ""
-          )}</td>`;
-        })
-        .join("");
-      const labelCell = `<td style="background:#f8fafc;color:#0f172a;font-weight:700;font-size:11px;padding:4px 8px;border:1px solid #cbd5e1;white-space:nowrap;">${escapeHtml(
-        r.label
-      )}${
-        r.secondary
-          ? ` <span style="color:#64748b;font-weight:400;font-size:9px;">${escapeHtml(
-              r.secondary
-            )}</span>`
-          : ""
-      }</td>`;
-      return `<tr>${labelCell}${cells}</tr>`;
-    })
-    .join("");
-
-  // Top-left corner cell of the header (label column)
-  const corner = `<td rowspan="2" style="background:#0f172a;color:#e5e7eb;font-weight:700;font-size:11px;padding:6px 8px;border:1px solid #334155;">Reactor</td>`;
-
-  return `<!DOCTYPE html>
-<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
-<head>
-  <meta charset="utf-8" />
-  <title>${escapeHtml(spec.title)}</title>
-  <!--[if gte mso 9]>
-    <xml>
-      <x:ExcelWorkbook>
-        <x:ExcelWorksheets>
-          <x:ExcelWorksheet>
-            <x:Name>Gantt</x:Name>
-            <x:WorksheetOptions>
-              <x:DisplayGridlines />
-            </x:WorksheetOptions>
-          </x:ExcelWorksheet>
-        </x:ExcelWorksheets>
-      </x:ExcelWorkbook>
-    </xml>
-  <![endif]-->
-</head>
-<body style="font-family:Arial,sans-serif;color:#0f172a;">
-  <h2 style="margin:8px 0 0 0;font-size:16px;">${escapeHtml(spec.title)}</h2>
-  ${
-    spec.subtitle
-      ? `<div style="font-size:11px;color:#475569;margin-bottom:8px;">${escapeHtml(spec.subtitle)}</div>`
-      : ""
+/** Convert any CSS hex like "#dd3c3c" or "#ddd" into the ARGB form ExcelJS
+ *  needs ("FFDD3C3C"). Falls back to mid-grey for malformed input. */
+function cssHexToArgb(input: string): string {
+  let s = (input || "").trim().replace(/^#/, "");
+  if (s.length === 3) {
+    // expand "abc" → "aabbcc"
+    s = s
+      .split("")
+      .map((c) => c + c)
+      .join("");
   }
-  <table cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-family:Arial,sans-serif;">
-    <thead>
-      <tr>${corner}${quarterCells}</tr>
-      <tr><!-- corner already rowspan=2 -->${weekCells}</tr>
-    </thead>
-    <tbody>
-      ${bodyRows}
-    </tbody>
-  </table>
-  <div style="font-size:10px;color:#64748b;margin-top:6px;">
-    Total weeks: ${totalWeeks} · Generated by Pharma Planner
-  </div>
-</body>
-</html>`;
+  if (s.length !== 6 || /[^0-9a-fA-F]/.test(s)) return "FF9CA3AF";
+  return ("FF" + s).toUpperCase();
 }
 
-/** Trigger a download of an HTML-shaped XLS file. */
-export function downloadGanttGridAsXls(filename: string, spec: GanttGridSpec): void {
-  const html = buildGanttGridHtml(spec);
-  // application/vnd.ms-excel + .xls extension makes Excel open the HTML
-  // as a worksheet directly. Other tools (Numbers, LibreOffice) handle it
-  // similarly. The `\ufeff` BOM helps with non-ASCII characters.
-  const blob = new Blob(["\ufeff", html], {
-    type: "application/vnd.ms-excel;charset=utf-8",
+/**
+ * Build the .xlsx for a Gantt grid and trigger a download.
+ *
+ *   • Row 1: top-left "Reactor" label + Q1..Q4 merged across week columns.
+ *   • Row 2: empty top-left + per-week date label header.
+ *   • Row 3..N: reactor rows. Col A = "Name (MOC)", Cols B.. = coloured
+ *     week cells. Idle weeks are blank. Busy weeks are filled with the
+ *     API color and labelled with the API id.
+ *   • First column + first two rows are frozen for easy scrolling.
+ */
+export async function downloadGanttGridAsXls(
+  filename: string,
+  spec: GanttGridSpec
+): Promise<void> {
+  // Dynamic import keeps exceljs out of the main bundle until the user
+  // actually clicks "Gantt grid (Excel)". Bundle hit ~0 until then.
+  const ExcelJS = (await import("exceljs")).default;
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "Pharma Planner";
+  wb.created = new Date();
+  const sheet = wb.addWorksheet("Gantt", {
+    views: [{ state: "frozen", xSplit: 1, ySplit: 2 }],
+  });
+
+  const totalWeeks = spec.weekLabels.length;
+  const totalCols = 1 /* label */ + totalWeeks;
+
+  // ─ Title block (rows 1–2 reserved for the header table; the actual
+  //   title goes one row above as a banner).
+  // We keep the table from row 1 onward to mimic an Excel best-practice
+  // layout, but include a workbook property hint via the cell A1 description.
+  // (Skipping a separate banner keeps the freeze pane simple.)
+
+  // ─ Row 1: "Reactor" (col A) + quarter band (merged spans)
+  const r1 = sheet.getRow(1);
+  r1.getCell(1).value = "Reactor";
+  let colCursor = 2;
+  spec.quarterLabels.forEach((label, i) => {
+    const span = spec.quarterSpans[i] ?? 0;
+    if (span <= 0) return;
+    const startCol = colCursor;
+    const endCol = colCursor + span - 1;
+    const cell = r1.getCell(startCol);
+    cell.value = label;
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+    cell.font = { bold: true, color: { argb: "FFE5E7EB" }, size: 11 };
+    cell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF1F2937" },
+    };
+    if (endCol > startCol) {
+      sheet.mergeCells(1, startCol, 1, endCol);
+    }
+    colCursor = endCol + 1;
+  });
+
+  // Style the row 1 corner cell ("Reactor")
+  const corner = sheet.getCell(1, 1);
+  corner.font = { bold: true, color: { argb: "FFE5E7EB" }, size: 11 };
+  corner.alignment = { horizontal: "left", vertical: "middle" };
+  corner.fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF0F172A" },
+  };
+  // Vertically merge the corner across rows 1+2 so it covers both header rows.
+  sheet.mergeCells(1, 1, 2, 1);
+
+  // ─ Row 2: per-week labels
+  const r2 = sheet.getRow(2);
+  spec.weekLabels.forEach((lbl, i) => {
+    const cell = r2.getCell(2 + i);
+    cell.value = lbl;
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+    cell.font = { color: { argb: "FF94A3B8" }, size: 9 };
+    cell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF0F172A" },
+    };
+  });
+
+  // ─ Body rows
+  spec.rows.forEach((r, rowIdx) => {
+    const row = sheet.getRow(3 + rowIdx);
+    const labelCell = row.getCell(1);
+    labelCell.value = r.secondary ? `${r.label}  (${r.secondary})` : r.label;
+    labelCell.font = { bold: true, color: { argb: "FF0F172A" }, size: 11 };
+    labelCell.alignment = { horizontal: "left", vertical: "middle" };
+    labelCell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFF8FAFC" },
+    };
+
+    r.weeks.forEach((w, i) => {
+      const cell = row.getCell(2 + i);
+      if (!w) {
+        // Idle — leave value empty; light fill keeps the grid visible.
+        cell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFFFFFFF" },
+        };
+        return;
+      }
+      cell.value = w.text ?? "";
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: cssHexToArgb(w.color) },
+      };
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+      cell.font = { bold: true, color: { argb: "FF0F172A" }, size: 9 };
+      if (w.title) {
+        cell.note = { texts: [{ text: w.title }] } as never;
+      }
+    });
+  });
+
+  // ─ Borders on every body cell so Excel renders a clean grid even
+  //   without grid lines toggled on. Light grey for body, slightly darker
+  //   for the header rows.
+  const lightBorder = { style: "thin" as const, color: { argb: "FFCBD5E1" } };
+  const darkBorder = { style: "thin" as const, color: { argb: "FF475569" } };
+  const lastRow = 2 + spec.rows.length;
+  for (let rIdx = 1; rIdx <= lastRow; rIdx++) {
+    for (let cIdx = 1; cIdx <= totalCols; cIdx++) {
+      const cell = sheet.getCell(rIdx, cIdx);
+      const border = rIdx <= 2 ? darkBorder : lightBorder;
+      cell.border = {
+        top: border,
+        left: border,
+        bottom: border,
+        right: border,
+      };
+    }
+  }
+
+  // ─ Column widths
+  sheet.getColumn(1).width = 22; // reactor label
+  for (let i = 2; i <= totalCols; i++) {
+    sheet.getColumn(i).width = 6; // each week column
+  }
+  // Header rows a bit taller for readability.
+  sheet.getRow(1).height = 22;
+  sheet.getRow(2).height = 18;
+
+  // ─ Workbook metadata — surface the subtitle as a sheet description so
+  //   it shows in File → Info / Properties.
+  if (spec.subtitle) {
+    wb.description = spec.subtitle;
+  }
+
+  // ─ Build & download
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   });
   triggerDownload(blob, filename);
 }

@@ -466,7 +466,7 @@ export default function GanttTab() {
                   rows
                 );
               }}
-              onGanttXls={() => {
+              onGanttXls={async () => {
                 // Build a reactor × week grid coloured by API. For each
                 // reactor row, iterate every batch booked on that reactor
                 // and mark each week the batch overlaps with the API's
@@ -535,8 +535,8 @@ export default function GanttTab() {
                     month: "short",
                   })
                 );
-                downloadGanttGridAsXls(
-                  `gantt_grid_${mode}_${fileStamp()}.xls`,
+                await downloadGanttGridAsXls(
+                  `gantt_grid_${mode}_${fileStamp()}.xlsx`,
                   {
                     title: "Gantt Grid",
                     subtitle: `${reactors.length} reactors × ${weeks.length} weeks · ${schedule.batches.length} batches · cell color = API`,
