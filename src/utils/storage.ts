@@ -322,6 +322,30 @@ export function isPersistedPresent(): boolean {
   }
 }
 
+// ─── First-time guide flag ─────────────────────────────────────────────────
+
+const GUIDE_KEY = "pharma:guideSeen:v1";
+
+/** True iff the user has dismissed the welcome guide at least once. */
+export function hasSeenGuide(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    return window.localStorage.getItem(GUIDE_KEY) === "1";
+  } catch {
+    return true;
+  }
+}
+
+/** Mark the welcome guide as seen — called when the user closes it. */
+export function markGuideSeen(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(GUIDE_KEY, "1");
+  } catch {
+    // ignore
+  }
+}
+
 // ─── Mode preference ───────────────────────────────────────────────────────
 
 export function getDataSourceMode(): DataSource {

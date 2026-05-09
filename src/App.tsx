@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -9,6 +9,7 @@ import {
   Database,
   FlaskConical,
   Gauge,
+  HelpCircle,
   LayoutGrid,
   Loader2,
   Sparkles,
@@ -19,6 +20,8 @@ import { Pill } from "./components/Primitives";
 import SyncBadge from "./components/SyncBadge";
 import ThemeToggle from "./components/ThemeToggle";
 import ProjectSwitcher from "./components/ProjectSwitcher";
+import WelcomeGuide from "./components/WelcomeGuide";
+import { hasSeenGuide, markGuideSeen } from "./utils/storage";
 import ApisTab from "./tabs/ApisTab";
 import StagesTab from "./tabs/StagesTab";
 import MasterReactorTab from "./tabs/MasterReactorTab";
@@ -111,6 +114,23 @@ export default function App() {
   const isRecomputing = useStore((s) => s.isRecomputing);
   const isHydrating = useStore((s) => s.isHydrating);
 
+  // Welcome guide — auto-opens on first visit, reopenable from the top-bar
+  // help button anytime. Defer the open until after the cloud-hydrate splash
+  // finishes so the guide doesn't fight the loading indicator.
+  const [guideOpen, setGuideOpen] = useState(false);
+  useEffect(() => {
+    if (isHydrating) return;
+    if (!hasSeenGuide()) {
+      const t = window.setTimeout(() => setGuideOpen(true), 250);
+      return () => window.clearTimeout(t);
+    }
+  }, [isHydrating]);
+
+  const closeGuide = () => {
+    markGuideSeen();
+    setGuideOpen(false);
+  };
+
   return (
     <div className="min-h-screen w-full">
       {/* Cloud-mode boot splash. Only shown for the few hundred ms while
@@ -141,6 +161,15 @@ export default function App() {
             <div className="ml-3 hidden sm:block">
               <ProjectSwitcher />
             </div>
+            <button
+              type="button"
+              onClick={() => setGuideOpen(true)}
+              title="Open the welcome guide"
+              aria-label="Open guide"
+              className="ml-1 inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-ink-300 transition hover:border-cyan-300/30 hover:bg-cyan-300/10 hover:text-cyan-300"
+            >
+              <HelpCircle size={14} />
+            </button>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
             <div className="block sm:hidden">
@@ -244,6 +273,8 @@ export default function App() {
       <footer className="mx-auto max-w-[1600px] px-6 py-8 text-center text-[11px] uppercase tracking-[0.25em] text-ink-400">
         Built for pharmaceutical campaign planning · Reactive client-side scheduler · v0.1
       </footer>
+
+      <WelcomeGuide open={guideOpen} onClose={closeGuide} />
     </div>
   );
 }
