@@ -103,7 +103,7 @@ export default function GanttTab() {
         value: a.id,
         label: a.name === a.id ? a.id : a.name,
         color: a.color,
-        secondary: a.name === a.id ? undefined : `id: ${a.id}`,
+        secondary: undefined,
       })),
     [apis]
   );
@@ -130,7 +130,7 @@ export default function GanttTab() {
         value: r.id,
         label: r.name,
         group: r.moc,
-        secondary: r.name === r.id ? undefined : `id: ${r.id}`,
+        secondary: undefined,
       })),
     [reactors]
   );
