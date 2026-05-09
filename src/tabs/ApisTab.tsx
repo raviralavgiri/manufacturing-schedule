@@ -6,11 +6,13 @@ import {
   Pencil,
   Search,
   Lock,
+  Hash,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
 import { Card, SectionHeader } from "../components/Primitives";
 import { fmtIsoDate, parseIsoDate } from "../utils/dates";
+import { useShowIds } from "../utils/uiPrefs";
 
 /**
  * APIs tab — high-level "what we want to make" view.
@@ -37,6 +39,7 @@ export default function ApisTab() {
   const [q, setQ] = useState("");
   const [confirmReset, setConfirmReset] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [showIds, setShowIds] = useShowIds();
   const [recentlyAddedApiId, setRecentlyAddedApiId] = useState<string | null>(
     null
   );
@@ -124,6 +127,20 @@ export default function ApisTab() {
                 className="w-56 rounded-lg border border-white/10 bg-white/5 py-2 pl-9 pr-3 text-sm text-white placeholder-ink-400 outline-none focus:border-cyan-300/50"
               />
             </div>
+            <button
+              type="button"
+              onClick={() => setShowIds(!showIds)}
+              title={showIds ? "Hide internal API IDs" : "Show internal API IDs"}
+              aria-pressed={showIds}
+              className={clsx(
+                "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-[11px] font-bold transition",
+                showIds
+                  ? "border-cyan-300/40 bg-cyan-300/15 text-cyan-200 shadow-glow"
+                  : "border-white/10 bg-white/5 text-ink-300 hover:bg-white/10 hover:text-white"
+              )}
+            >
+              <Hash size={12} /> ID
+            </button>
             <button
               onClick={() => {
                 const id = addAPI(true);
@@ -226,12 +243,14 @@ export default function ApisTab() {
                               onCommit={(v) => setApiName(api.id, v)}
                               placeholder={api.id}
                             />
-                            <span
-                              className="font-mono text-[9px] uppercase tracking-wider text-ink-500"
-                              title="Stable internal id (cannot be changed)"
-                            >
-                              id: {api.id}
-                            </span>
+                            {showIds && (
+                              <span
+                                className="font-mono text-[9px] uppercase tracking-wider text-ink-500"
+                                title="Stable internal id (cannot be changed)"
+                              >
+                                id: {api.id}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </td>

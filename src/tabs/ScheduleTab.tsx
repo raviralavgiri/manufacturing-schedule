@@ -1,5 +1,5 @@
 import { useMemo, useState, useRef, useLayoutEffect } from "react";
-import { Search, Filter, AlertTriangle, RefreshCw } from "lucide-react";
+import { Search, Filter, AlertTriangle, RefreshCw, Hash } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
 import { Card, SectionHeader, Tag } from "../components/Primitives";
@@ -11,8 +11,17 @@ import {
   fileStamp,
   printPage,
 } from "../utils/exporters";
+import { useShowIds } from "../utils/uiPrefs";
 
 const ROW_H = 40;
+
+// Grid template for the Schedule table. The first 110px column is the
+// (optional) Batch ID column — toggleable via the "ID" button in the section
+// header.
+const GRID_TEMPLATE = (showIds: boolean) =>
+  showIds
+    ? "110px 72px 120px 70px 140px 220px 180px 180px 180px 60px 72px"
+    : "72px 120px 70px 140px 220px 180px 180px 180px 60px 72px";
 
 export default function ScheduleTab() {
   const schedule = useStore((s) => s.schedule);
@@ -42,6 +51,7 @@ export default function ScheduleTab() {
   const [q, setQ] = useState("");
   const [apiFilter, setApiFilter] = useState<string>("ALL");
   const [reactorFilter, setReactorFilter] = useState<string>("ALL");
+  const [showIds, setShowIds] = useShowIds();
   // Stage filter: matches a batch's stageId. We provide one option per
   // distinct stageId across all APIs (e.g. "API-01-S2", "API-02-S1"…).
   const [stageFilter, setStageFilter] = useState<string>("ALL");
@@ -181,17 +191,33 @@ export default function ScheduleTab() {
         title="Schedule"
         subtitle={`${filtered.length.toLocaleString()} batches · Plan window: ${fmtDate(planWindow.startMs)} → ${fmtDate(planWindow.endMs)}`}
         right={
-          <ExportMenu
-            onCsv={exportCsv}
-            onPng={async () => {
-              await downloadElementAsPng(
-                tableCardRef.current,
-                `schedule_${filtered.length}rows_${fileStamp()}.png`,
-                { backgroundColor: "#04081a", pixelRatio: 2 }
-              );
-            }}
-            onPrint={() => printPage()}
-          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowIds(!showIds)}
+              title={showIds ? "Hide Batch ID column" : "Show Batch ID column"}
+              aria-pressed={showIds}
+              className={clsx(
+                "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-[11px] font-bold transition",
+                showIds
+                  ? "border-cyan-300/40 bg-cyan-300/15 text-cyan-200 shadow-glow"
+                  : "border-white/10 bg-white/5 text-ink-300 hover:bg-white/10 hover:text-white"
+              )}
+            >
+              <Hash size={12} /> ID
+            </button>
+            <ExportMenu
+              onCsv={exportCsv}
+              onPng={async () => {
+                await downloadElementAsPng(
+                  tableCardRef.current,
+                  `schedule_${filtered.length}rows_${fileStamp()}.png`,
+                  { backgroundColor: "#04081a", pixelRatio: 2 }
+                );
+              }}
+              onPrint={() => printPage()}
+            />
+          </div>
         }
       />
 
@@ -318,8 +344,11 @@ export default function ScheduleTab() {
 
       <div ref={tableCardRef} className="schedule-table-card">
       <Card className="overflow-hidden p-0">
-        <div className="grid grid-cols-[110px_72px_120px_70px_140px_220px_180px_180px_180px_60px_72px] gap-0 border-b border-white/10 bg-ink-900/80 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-ink-300">
-          <span>Batch ID</span>
+        <div
+          className="grid gap-0 border-b border-white/10 bg-ink-900/80 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-ink-300"
+          style={{ gridTemplateColumns: GRID_TEMPLATE(showIds) }}
+        >
+          {showIds && <span>Batch ID</span>}
           <span>API</span>
           <span>Stage</span>
           <span>#</span>
@@ -350,12 +379,17 @@ export default function ScheduleTab() {
                 return (
                 <div
                   key={b.batchId}
-                  style={{ height: ROW_H }}
-                  className="grid grid-cols-[110px_72px_120px_70px_140px_220px_180px_180px_180px_60px_72px] items-center gap-0 border-b border-white/5 px-3 text-xs hover:bg-white/[0.04]"
+                  style={{
+                    height: ROW_H,
+                    gridTemplateColumns: GRID_TEMPLATE(showIds),
+                  }}
+                  className="grid items-center gap-0 border-b border-white/5 px-3 text-xs hover:bg-white/[0.04]"
                 >
-                  <span className="font-mono text-[11px] text-ink-200 truncate">
-                    {b.batchId}
-                  </span>
+                  {showIds && (
+                    <span className="font-mono text-[11px] text-ink-200 truncate">
+                      {b.batchId}
+                    </span>
+                  )}
                   <span
                     className="flex items-center gap-1.5 font-semibold text-white truncate"
                     title={`${b.apiName} (id: ${b.apiId})`}

@@ -262,7 +262,7 @@ export default function GanttTab() {
   return (
     <div className="space-y-4">
       <SectionHeader
-        title="Gantt Chart · FY 2026 – 2027"
+        title="Gantt Chart"
         subtitle={
           anyFilterActive
             ? `Showing ${filteredBatches.length} of ${schedule.batches.length} batches (filters active)`
