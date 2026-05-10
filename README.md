@@ -2,7 +2,7 @@
 
 🔗 **Live demo:** <https://raviralavgiri.github.io/manufacturing-schedule/>
 
-A modern, glassmorphic React webapp that replaces an Excel-based pharmaceutical manufacturing scheduler. Given master data for **20 APIs**, **82 stages**, and **20 reactors** (some shared across stages), it produces an **848-batch yearly schedule** with **zero reactor clashes**, weekly Gantt, equipment heatmap, clash report, and quarterly summary.
+A modern, glassmorphic React webapp that replaces an Excel-based pharmaceutical manufacturing scheduler. Given master data for **more than 20 APIs**, **100 stages**, and **more than 20 reactors in production block** (some shared across stages), it produces an **848-batch yearly schedule** with **zero reactor clashes**, weekly Gantt, equipment heatmap, clash report, and quarterly summary.
 
 ## Table of contents
 
@@ -26,8 +26,8 @@ A modern, glassmorphic React webapp that replaces an Excel-based pharmaceutical 
 
 ## What it does
 
-1. Generates **848 batches** sequenced by an equipment-availability algorithm with priority-aware ordering and load-balanced reactor selection
-2. Tags each batch as **FY** (Apr 2026 – Mar 2027) or **Ovr** (overflow)
+1. Generates **total batches** sequenced by an equipment-availability algorithm with priority-aware ordering and load-balanced reactor selection
+2. Tags each batch as **FY** or **Ovr** (overflow)
 3. Verifies **zero reactor clashes** by construction
 4. Renders a **weekly Gantt chart**, **reactor occupancy heatmap**, **clash report**, and **quarterly summary**
 5. Lets you **edit master data** (yellow cells) and recomputes the entire schedule in ~350 ms
@@ -40,10 +40,10 @@ A modern, glassmorphic React webapp that replaces an Excel-based pharmaceutical 
 
 | Tab | What you see |
 | --- | --- |
-| Master Data | 82-row editable template (yellow = input, lock = derived) |
-| Schedule | All 848 batches with start / end / analysis dates, FY & clash flags, Excel & CSV export |
-| Gantt Chart | Weekly Apr 26 – Mar 27, color per API, faded tail = analysis window. Three modes: by Stage / by API / by Reactor |
-| Equipment | 20-reactor × 52-week occupancy heatmap, util bars, weekly fleet trend |
+| Master Data |100-row editable template (yellow = input, lock = derived) |
+| Schedule | All 1000 batches with start / end / analysis dates, FY & clash flags, Excel & CSV export |
+| Gantt Chart | Weekly , color per API, faded tail = analysis window. Three modes: by Stage / by API / by Reactor |
+| Equipment | >20-reactor × 52-week occupancy heatmap, util bars, weekly fleet trend |
 | Clash Report | Zero-clash hero + sequencer explanation + shared-reactor proof |
 | Quarterly Summary | Pivot (API × Stage × Q1–Q4 + FY total) + bar chart + treemap |
 
@@ -216,20 +216,7 @@ API-03 has 4 stages with **small reactor trains** (1–3 reactors each, determin
 | **S3** Intermediate-3 | 84 h | 48 h | `[R204]` (single-reactor) | 11 |
 | **S4** Final API | 120 h | 60 h | `[R302, R303]` (2-reactor) | 11 |
 
-The horizon is **Apr 1 2026 08:00**. Below is API-03's first batch through all 4 stages (assume all reactors are initially idle):
-
-| Step | Stage | earliestStart | Train ready at | Books cycle | Notes |
-| --- | --- | --- | --- | --- | --- |
-| 1 | S1·b1 | Apr 1 08:00 | R104=Apr 1, R105=Apr 1 → max=**Apr 1 08:00** | Apr 1 08:00 → Apr 3 20:00 (60 h) on R104+R105 | Both reactors locked together |
-| 2 | S2·b1 | S1 analysis end + 4 h = Apr 5 02:00 + 4 = **Apr 5 06:00** | R107=Apr 1, R108=Apr 1, R201=Apr 1 → max=**Apr 5 06:00** | Apr 5 06:00 → Apr 8 06:00 (72 h) on R107+R108+R201 | Stage 2 waited for stage 1's analysis tail |
-| 3 | S3·b1 | S2 analysis end + 4 h = Apr 9 18:00 + 4 = **Apr 9 22:00** | R204=Apr 1 → max=**Apr 9 22:00** | Apr 9 22:00 → Apr 13 10:00 (84 h) on R204 | Single-reactor train |
-| 4 | S4·b1 | S3 analysis end + 4 h = Apr 15 10:00 + 4 = **Apr 15 14:00** | R302=Apr 1, R303=Apr 1 → max=**Apr 15 14:00** | Apr 15 14:00 → Apr 20 14:00 (120 h) on R302+R303 | Final API train |
-
-#### Why batches are STRICTLY SERIAL within a stage
-
-Even though S1's train has 2 reactors, you cannot run S1 batch 1 and S1 batch 2 in parallel — they need **the same** R104 AND R105 simultaneously. So all 11 batches of S1 happen back-to-back on the train, total ~28 days of S1 train time.
-
----
+--
 
 ### 4. Reactor selection — train availability with gap-packing
 
@@ -285,7 +272,7 @@ The gap-finder more than **doubled** the in-FY throughput — same total work, s
 
 ---
 
-### 5. FY vs Overflow classification
+### 5.  Overflow classification
 
 After every booking we tag `inFY`:
 
