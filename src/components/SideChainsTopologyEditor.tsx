@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Plus, Trash2, Sparkles, Workflow, Info } from "lucide-react";
 import type {
   SideChainSpec,
@@ -112,15 +112,12 @@ export default function SideChainsTopologyEditor({
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-12">
         <div className="sm:col-span-4">
           <Label>Main backbone length</Label>
-          <input
-            type="number"
-            min={2}
+          <NumericInput
             value={mainBackboneLength}
-            onChange={(e) =>
-              setMainBackboneLength(
-                Math.max(2, Number(e.target.value) || 2)
-              )
-            }
+            min={2}
+            step={1}
+            fallback={2}
+            onChange={(v) => setMainBackboneLength(Math.max(2, Math.floor(v)))}
             className="cell-yellow w-full rounded-md px-2.5 py-1.5 text-right font-mono text-sm tabular-nums"
           />
         </div>
@@ -177,31 +174,24 @@ export default function SideChainsTopologyEditor({
                 </div>
                 <div className="sm:col-span-2">
                   <Label>Length</Label>
-                  <input
-                    type="number"
-                    min={1}
+                  <NumericInput
                     value={sc.length}
-                    onChange={(e) =>
-                      updateSideChain(idx, {
-                        length: Math.max(1, Number(e.target.value) || 1),
-                      })
-                    }
+                    min={1}
+                    step={1}
+                    fallback={1}
+                    onChange={(v) => updateSideChain(idx, { length: Math.max(1, Math.floor(v)) })}
                     className="cell-yellow w-full rounded-md px-2 py-1.5 text-right font-mono text-sm tabular-nums"
                   />
                 </div>
                 <div className="sm:col-span-2">
                   <Label>Factor</Label>
-                  <input
-                    type="number"
+                  <NumericInput
+                    value={sc.factor}
                     min={0.0001}
                     max={100}
                     step={0.05}
-                    value={sc.factor}
-                    onChange={(e) =>
-                      updateSideChain(idx, {
-                        factor: Number(e.target.value) || 0.3,
-                      })
-                    }
+                    fallback={0.3}
+                    onChange={(v) => updateSideChain(idx, { factor: Math.min(100, Math.max(0.0001, v)) })}
                     className="cell-yellow w-full rounded-md px-2 py-1.5 text-right font-mono text-sm tabular-nums"
                   />
                 </div>
@@ -262,6 +252,60 @@ export default function SideChainsTopologyEditor({
         </button>
       </div>
     </div>
+  );
+}
+
+function NumericInput({
+  value,
+  min,
+  max,
+  step,
+  fallback,
+  onChange,
+  className,
+}: {
+  value: number;
+  min?: number;
+  max?: number;
+  step?: number;
+  fallback: number;
+  onChange: (val: number) => void;
+  className?: string;
+}) {
+  const [draft, setDraft] = useState(String(value));
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  const commit = () => {
+    const n = parseFloat(draft);
+    if (!isNaN(n) && isFinite(n)) {
+      const clamped =
+        min !== undefined
+          ? Math.max(min, max !== undefined ? Math.min(max, n) : n)
+          : max !== undefined
+          ? Math.min(max, n)
+          : n;
+      onChange(clamped);
+      setDraft(String(clamped));
+    } else {
+      setDraft(String(value));
+    }
+  };
+
+  return (
+    <input
+      type="number"
+      min={min}
+      max={max}
+      step={step}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => e.key === "Enter" && commit()}
+      className={className}
+    />
   );
 }
 

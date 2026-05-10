@@ -153,9 +153,6 @@ export default function App() {
               <h1 className="text-base font-extrabold tracking-tight text-white sm:text-lg">
                 API Manufacturing Schedule
               </h1>
-              <p className="-mt-0.5 text-[11px] uppercase tracking-[0.2em] text-ink-300">
-                Pharma Production Planner
-              </p>
             </div>
             <div className="ml-3 hidden sm:block">
               <ProjectSwitcher />
