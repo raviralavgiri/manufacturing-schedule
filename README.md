@@ -2,7 +2,7 @@
 
 🔗 **Live demo:** <https://raviralavgiri.github.io/manufacturing-schedule/>
 
-A modern, glassmorphic React webapp that replaces an Excel-based pharmaceutical manufacturing scheduler. Given master data for **more than 20 APIs**, **100 stages**, and **more than 20 reactors in production block** (some shared across stages), it produces an **848-batch yearly schedule** with **zero reactor clashes**, weekly Gantt, equipment heatmap, clash report, and quarterly summary.
+A modern, glassmorphic React webapp that replaces an Excel-based pharmaceutical manufacturing scheduler. Given master data for **more than 20 APIs**, **100+ stages**, and **more than 20 reactors in a production block** (some shared across stages), it produces a **clash-free yearly schedule** with weekly Gantt, equipment heatmap, clash report, and a multi-granularity dashboard.
 
 ## Table of contents
 
@@ -10,12 +10,15 @@ A modern, glassmorphic React webapp that replaces an Excel-based pharmaceutical 
 - [Tabs](#tabs)
 - [How it works](#how-it-works) ← **the algorithm, with examples**
   - [Domain model](#1-domain-model)
-  - [The scheduling algorithm](#2-the-scheduling-algorithm)
-  - [Worked example: scheduling API-01](#3-worked-example-scheduling-api-03-train-model)
-  - [Reactor selection — load-balanced earliest-free](#4-reactor-selection--train-availability-with-gap-packing)
-  - [FY vs Overflow classification](#5-fy-vs-overflow-classification)
-  - [What happens when you edit a value](#6-what-happens-when-you-edit-a-value)
-  - [Persistence layers](#7-persistence-layers)
+  - [DAG stage dependencies](#2-dag-stage-dependencies)
+  - [Cascade planning](#3-cascade-planning)
+  - [Topology presets](#4-topology-presets)
+  - [The scheduling algorithm](#5-the-scheduling-algorithm)
+  - [Reactor selection — gap-packing](#6-reactor-selection--gap-packing)
+  - [PCO and campaign cleaning](#7-pco-and-campaign-cleaning)
+  - [FY vs Overflow classification](#8-fy-vs-overflow-classification)
+  - [What happens when you edit a value](#9-what-happens-when-you-edit-a-value)
+  - [Persistence layers](#10-persistence-layers)
 - [Run](#run)
 - [Cloud persistence with Supabase](#cloud-persistence-with-supabase-optional-free-tier)
 - [Build](#build)
@@ -26,13 +29,15 @@ A modern, glassmorphic React webapp that replaces an Excel-based pharmaceutical 
 
 ## What it does
 
-1. Generates **total batches** sequenced by an equipment-availability algorithm with priority-aware ordering and load-balanced reactor selection
-2. Tags each batch as **FY** or **Ovr** (overflow)
-3. Verifies **zero reactor clashes** by construction
-4. Renders a **weekly Gantt chart**, **reactor occupancy heatmap**, **clash report**, and **quarterly summary**
-5. Lets you **edit master data** (yellow cells) and recomputes the entire schedule in ~350 ms
-6. Persists user edits to **localStorage** (always) + **Supabase** (optional, free tier)
-7. Exports schedule data to **Excel (.xlsx)** and allows **image/PNG snapshots** of charts
+1. Generates a **clash-free schedule** using a DAG-aware equipment-availability algorithm with priority ordering, load-balanced reactor selection, and gap-packing
+2. Tags each batch as **FY** or **Ovr** (overflow) relative to each API's own plan window
+3. **Cascades `plannedBatches`** backwards from a per-API `targetKg` through any DAG topology — linear chains, parallel convergence, and side-chains with a multiplier factor
+4. Verifies **zero reactor clashes** by construction
+5. Renders a **weekly Gantt**, **reactor occupancy heatmap**, **clash report**, and **multi-granularity dashboard**
+6. Lets you **edit master data** (yellow cells) and recomputes the entire schedule in ~350 ms
+7. Persists user edits to **localStorage** (always) + **Supabase** (optional, free tier)
+8. Exports schedule data to **Excel (.xlsx)** and allows **image/PNG snapshots** of charts
+9. Supports **multiple projects** with independent APIs, reactors, and plan windows via a project switcher
 
 ---
 
@@ -40,55 +45,42 @@ A modern, glassmorphic React webapp that replaces an Excel-based pharmaceutical 
 
 | Tab | What you see |
 | --- | --- |
-| Master Data |100-row editable template (yellow = input, lock = derived) |
-| Schedule | All 1000 batches with start / end / analysis dates, FY & clash flags, Excel & CSV export |
-| Gantt Chart | Weekly , color per API, faded tail = analysis window. Three modes: by Stage / by API / by Reactor |
+| APIs | One row per API: name, plan window (per-API start/end), stage count, target output (kg), topology badge (linear / parallel / side-chains), reset button |
+| Stages | Full editable stage template — BCF, BCT, process hours, analysis hours, PCO, batch size, input kg/batch, reactor pool, DAG predecessors |
+| Master Reactors | Reactor records: name, MOC (SS / GL / Hastelloy / Halar lined), agitator type, capacity |
+| Schedule | All batches with start / end / analysis dates, FY & clash flags, reactor column, Excel & CSV export |
+| Gantt Chart | Weekly Gantt, color per API, faded tail = PCO/wait period. Three modes: by Stage / by API / by Reactor |
 | Equipment | >20-reactor × 52-week occupancy heatmap, util bars, weekly fleet trend |
 | Clash Report | Zero-clash hero + sequencer explanation + shared-reactor proof |
-| Quarterly Summary | Pivot (API × Stage × Q1–Q4 + FY total) + bar chart + treemap |
+| Dashboard | KPI strip + time-series chart (monthly / quarterly / yearly, kg or batches) + per-API performance table + API × Stage × Q1–Q4 pivot |
 
 ---
 
 ## How it works
 
-This section is the deepest documentation in the repo. It explains every concept, the algorithm, and walks through one full real schedule trace.
+### Mental model: pool = fungible reactor set, not a fixed train
 
-### Mental model: pool = reactor TRAIN, not fungible set
+> **Key change from earlier architecture:** when a stage's `reactorPool` lists multiple reactors, the scheduler picks the **single earliest-free** reactor from that pool for each batch. The pool is a set of equivalent interchangeable reactors, not a production train that locks all reactors simultaneously.
 
-> **The most important thing to understand:** when a stage's `reactorPool` lists multiple reactors, **every batch of that stage locks ALL of them simultaneously** for the cycle window. The pool is a *production train* (e.g. synthesis reactor + crystallizer + dryer), not a set of equivalent reactors.
-
-#### Concrete example
-
-> Pool `[R101, R102, R103]` for a stage with **10 batches**, cycle 96 h, analysis 24 h.
->
-> - Batch 1: locks R101+R102+R103 from week 1 → end of week 1 (96 h)
-> - Batch 2 cannot start until **all three** are free → starts immediately after batch 1 ends. Total 10 batches × ~96 h ≈ **40 days serial**.
-> - Even though there are 3 reactors, **only one batch runs at a time** for this stage.
-> - But: a *different* stage's batch with pool `[R104, R105]` can run in parallel during this whole time.
-
-#### Why this matters
-
-- Total throughput is bounded by `cycleHours × plannedBatches` per stage train, not by `reactor count ÷ pool size`.
-- Shared reactors (one reactor in multiple stages' pools) become heavy serialization points — when API-A's S2 needs R107 and API-B's S1 also needs R107, one waits.
-- Smaller train sizes (1–2 reactors) → higher throughput. Larger trains (3+) → fewer parallel batches but more equipment per batch.
+This means two batches of the same stage can run on different reactors in parallel (if the reactors are free), dramatically increasing throughput compared to the old train model.
 
 ---
 
 ### 1. Domain model
 
-There are exactly four kinds of objects in the system:
+There are five kinds of objects in the system:
 
 ```
-┌────────┐ 1..*  ┌──────────────┐ 1  *  ┌──────────────────┐ uses 1..*  ┌──────────┐
-│  API   │──────▶│ StageMaster   │──────▶│ BatchScheduleEntry │───────────▶│ Reactor  │
-│        │       │  (template)   │       │  (computed by      │           │          │
-│        │       │               │       │   scheduler)       │           │          │
-└────────┘       └──────────────┘       └──────────────────┘           └──────────┘
-priority         batchSizeKg            startMs / endMs                  id, class
-color            cycleHours              analysisEndMs                    shared flag
-                 analysisHours           inFY, clash, outputKg
-                 plannedBatches          reactorId
-                 reactorPool[]
+┌─────────┐         ┌──────────┐ 1..*  ┌─────────────┐ 1  *  ┌────────────────────┐
+│ Project │────────▶│   API    │──────▶│ StageMaster │──────▶│ BatchScheduleEntry │
+│         │         │          │       │  (template)  │       │  (computed)        │
+└─────────┘         └──────────┘       └─────────────┘       └────────────────────┘
+  id, name           targetKg           bcfHours                startMs / endMs
+  window             window             bctHours                analysisEndMs
+  apis[]             topology           processHours            inFY, clash
+  reactors[]         stages[]           pcoHours                reactorId
+                                        inputStageIds[]         cleaningBeforeMs
+                                        cascadePolicy?          cleaningType
 ```
 
 **Concrete TypeScript** (`src/types.ts`):
@@ -98,247 +90,238 @@ export interface API {
   id: string;
   name: string;
   color: string;
-  priority: 1 | 2 | 3 | 4 | 5;   // 1 = critical, 5 = lowest
-  projectionKg: number;
+  targetKg: number;        // drives cascade — final stage demand
+  window: PlanWindow;      // per-API plan window (start/end Ms)
+  topology?: ApiTopology;  // "linear" | "parallel" | "side_chains"
   stages: StageMaster[];
 }
 
 export interface StageMaster {
-  id: string;             // e.g. "API-03-S2"
+  id: string;
   apiId: string;
-  stageNo: number;        // 1, 2, 3, ...
-  stageName: string;      // "Intermediate-2", "Final API"
-  batchSizeKg: number;
-  reactorPool: string[];  // ["R103", "R104", "R105", "R201"]
-  cycleHours: number;     // physical reactor occupancy time
-  analysisHours: number;  // QC release time AFTER cycle (reactor is free during this)
-  plannedBatches: number; // ceil(targetOutputKg / batchSizeKg)  -- derived in UI
+  stageNo: number;
+  stageName: string;
+  batchSizeKg: number;      // output produced per batch (kg)
+  inputKgPerBatch: number;  // input consumed per batch (kg) — may differ (yield ≠ 100%)
+  reactorPool: string[];    // equivalent reactor ids; scheduler picks earliest-free
+  bcfHours: number;         // Batch Charging Frequency — interval between same-campaign starts
+  bctHours: number;         // Batch Cycle Time — slot duration (reactor locked for this long)
+  processHours: number;     // active processing within slot (bctHours − processHours = leading wait)
+  analysisHours: number;    // QC release time after cycle (reactor free during analysis)
+  pcoHours: number;         // Product Change Over cleaning before a new campaign on this reactor
+  plannedBatches: number;   // derived by cascade from targetKg
+  inputStageIds: string[];  // DAG predecessors — empty = source, list = convergence or chain
+  cascadePolicy?: SideChainCascadePolicy; // side-chain anchor policy
 }
 
-export interface BatchScheduleEntry {
-  batchId: string; apiId: string; stageId: string; batchNo: number;
-  reactorId: string;       // primary / lead reactor (= reactorIds[0])
-  reactorIds: string[];    // FULL reactor train: every reactor locked together
-  startMs: number;         // train cycle start
-  endMs: number;           // train cycle end (all reactors free after this)
-  analysisEndMs: number;   // analysis window end
-  inFY: boolean;           // Apr 1 2026 – Mar 31 2027
-  clash: boolean;          // always false (sequencer guarantees this)
-  outputKg: number;
+export interface Reactor {
+  id: string;
+  name: string;
+  moc: MOC;                    // "SS" | "GL" | "Hastelloy" | "Halar lined"
+  agitatorType: AgitatorType;  // "Anchor" | "RCI" | "PBT" | "MIG" | "Hydrofoil"
+  capacityKg: number;
 }
 ```
 
-**Why `cycle` and `analysis` are separate:** during the cycle window the reactor is physically occupied. Analysis happens off-reactor (lab). **The reactor is free as soon as cycle ends** — analysis only delays the *next stage* of the same API, not the next batch on the same reactor.
+**Why `bcfHours`, `bctHours`, and `processHours` are separate:**
+
+- `bctHours` is the full reactor slot — from when the reactor is claimed to when it's released.
+- `processHours` is the active production time within that slot. The leading `bctHours − processHours` is a wait period (e.g. waiting for a temperature ramp on a shared utility).
+- `bcfHours` is the minimum gap between consecutive batch *starts* at the same stage. For a bottleneck reactor `bcfHours ≈ bctHours`; for downstream equipment that can start before the previous batch fully exits, `bcfHours < bctHours`.
+
+**Why `batchSizeKg` and `inputKgPerBatch` are separate:** reactions aren't 100% yield. A crystallisation step may consume 120 kg input to produce 100 kg output (`batchSizeKg = 100, inputKgPerBatch = 120`). The cascade uses `inputKgPerBatch` to propagate demand backwards through the DAG.
 
 ---
 
-### 2. The scheduling algorithm
+### 2. DAG stage dependencies
 
-The full algorithm runs in `src/scheduler/scheduler.ts → runScheduler(apis, reactors)`. It's an **equipment-availability sequencer (train model)** with three nested loops:
+Each stage declares its **predecessors** via `inputStageIds`:
+
+```
+Linear chain (legacy default):
+  S1 → S2 → S3 → S4
+
+Parallel convergence:
+  A1 → A2 ─┐
+             ├─▶ Merge → Final
+  B1 → B2 ─┘
+
+Side-chain (reagent sub-stream):
+  S1 → S2 → S3 → S4 (main backbone)
+        ↑
+       S2i        (side chain feeds S2)
+```
+
+The scheduler enforces: **batch N of stage S cannot start until batch N's analysis-end on every predecessor of S has passed** (plus a 4-hour transfer buffer). This replaces the old "previous stageNo" linear assumption.
+
+---
+
+### 3. Cascade planning
+
+`src/scheduler/cascade.ts → cascadePlannedBatches(api)` derives `plannedBatches` for every stage from the API's `targetKg` using a two-pass DAG traversal:
+
+**Pass 1 — main-stage reverse-topo cascade (sinks → roots):**
+```
+sink(s) demand   = api.targetKg  (split equally if multiple sinks)
+for each stage in reverse-topo order:
+  plannedBatches = ⌈ outputDemand ÷ batchSizeKg ⌉
+  actualOutput   = plannedBatches × batchSizeKg
+  for each predecessor p:
+    p.outputDemand += plannedBatches × inputKgPerBatch
+```
+
+**Pass 2 — side-chain forward cascade (anchors → continuations):**
+```
+for each side-chain anchor a (has cascadePolicy.kind === "side-chain"):
+  a.outputDemand = baseStage.actualOutput × factor
+  a.plannedBatches = ⌈ a.outputDemand ÷ a.batchSizeKg ⌉
+  forward-propagate actual output to any continuation stages
+```
+
+Side-chain stages are identified by a fixed-point closure: a stage is in the side-chain set if it has `cascadePolicy` (anchor), or if every one of its predecessors is already in the side-chain set (continuation). Their demand is driven by the factor, not by the merge stage's input demand.
+
+A cycle in `inputStageIds` triggers a graceful fallback to the legacy linear cascade (sorted by `stageNo`) with a console warning.
+
+---
+
+### 4. Topology presets
+
+Three named topology shapes can be scaffolded onto any API via the topology editor in the APIs tab:
+
+| Preset | Shape | Use case |
+| --- | --- | --- |
+| **linear** | S1 → S2 → … → SN | Standard sequential synthesis |
+| **parallel** | A-chain + B-chain → Merge → post-merge tail | Convergent synthesis with two or more routes |
+| **side_chains** | Main backbone + reagent sub-streams | Side-stream reagents sized by a factor of the backbone's output |
+
+`src/utils/topologyPresets.ts → applyTopologyPresetToApi()` runs in **PRESERVE_THEN_ADD** mode: existing stage rows are kept with their custom batch sizes, reactor pools, and hour fields; only missing scaffold positions are added and all `inputStageIds` + `cascadePolicy` links are re-derived from the spec.
+
+---
+
+### 5. The scheduling algorithm
+
+`src/scheduler/scheduler.ts → runScheduler(apis, reactors)` — **equipment-availability sequencer** with three nested loops:
 
 ```
 flowchart TD
     Start([runScheduler])
-    Sort[Sort APIs by priority P1 → P2 → P3 → P4 → P5]
+    Sort[Sort APIs by priority P1 → P5]
     Outer[for round = 0 .. maxBatches]
     Mid[for each API in priorityOrder]
-    Inner[for each Stage 1..N]
+    Inner[for each Stage in topo order of DAG]
     Skip{round < stage.plannedBatches?}
-    EarlyStart[earliestStart = max prev-stage-analysis-end + 4h, scheduleHorizon]
-    PickReactor[trainStart = max earliestStart, max-of-pool-last-cycle-end]
-    Book[Book ALL reactors in pool: start, start+cycleHours, analysis tail follows]
-    UpdateLast[apiStageLastEnd[stage] = max prev, analysisEnd]
-    Done([848 BatchScheduleEntry rows])
+    EarlyStart[earliestStart = max(all-pred-analysis-ends + 4h, API.window.startMs)]
+    PCO[add pcoHours if new campaign on this reactor]
+    PickReactor[pick earliest-free reactor in pool via gap-finder]
+    Book[Book reactor: startMs, endMs, analysisEndMs]
+    Done([Clash-free BatchScheduleEntry rows])
 ```
 
-#### 2.1 The three loops in plain English
+#### The three loops
 
 | Loop | What it iterates | Why |
 | --- | --- | --- |
 | Outer: **round** | 0 .. (max planned batches across any stage) | Campaign style — batch #1 of every (API, stage) before any batch #2. Spreads load over the year. |
-| Middle: **API in priority order** | P1 → ... → P5 | High-priority APIs grab the earliest free reactor slots in each round. |
-| Inner: **stage 1..N** | within each API | Stage N+1's batches require Stage N's batch to have finished analysis (waits with a 4-hour transfer buffer). |
+| Middle: **API in priority order** | P1 → … → P5 | High-priority APIs grab the earliest free reactor slots in each round. |
+| Inner: **stage in DAG topo order** | topological order respects `inputStageIds` | Ensures predecessors are booked before successors within each round. |
 
-#### 2.2 The two hard constraints
+#### The two hard constraints
 
-The algorithm never violates these two rules:
-
-1. **No reactor clash** — a reactor's `[start, cycleEnd]` windows are non-overlapping. Each new booking is forced to start `≥ max(reactor.lastCycleEnd, …)`.
-2. **Stage ordering inside an API** — Stage N+1's batch B can only start after Stage N's batch B has finished its analysis window plus a 4-hour transfer buffer.
-
-These are encoded in this single line:
-
-```typescript
-const prevStageReady =
-  sIdx === 0 ? HORIZON_MS                                   // Stage 1: just wait for horizon
-             : apiStageLastEnd.get(api.id)![sIdx - 1] + bufferMs;  // Stage 2+: wait for prev
-const earliestStart = Math.max(prevStageReady, HORIZON_MS);
-```
-
-`apiStageLastEnd` is a per-API array tracking the max analysis-end so far at each stage index. After every batch is booked, `apiStageLastEnd[stageIdx] = max(apiStageLastEnd[stageIdx], analysisEnd)` so the next stage knows when it can start.
-
-#### 2.3 Helper functions used inside the loop
-
-The algorithm calls a handful of pure helpers from `src/utils/dates.ts`:
-
-```typescript
-// Convert hours to milliseconds (scheduler works in epoch ms throughout).
-export function hoursToMs(h: number): number {
-  return Math.round(h * 3600 * 1000);
-}
-
-// Returns true if the timestamp falls within FY 2026-27 (Apr 1 2026 – Mar 31 2027).
-export function isInFY(ms: number): boolean {
-  return ms >= FY_START.getTime() && ms <= FY_END.getTime();
-}
-
-// Maps a timestamp to a 0..51 week index aligned to FY start.
-export function weekIndexOf(ms: number): number {
-  const diffMs = new Date(ms).getTime() - FY_WEEKS[0].start.getTime();
-  if (diffMs < 0) return -1;
-  const idx = Math.floor(diffMs / (7 * 24 * 3600 * 1000));
-  return idx >= WEEKS_IN_FY ? -1 : idx;
-}
-```
-
-`FY_WEEKS` is a pre-built array of 52 entries (one per ISO week between Apr 1 2026 and Mar 31 2027) used by the UI for Gantt headers, heatmap columns, and quarterly grouping.
+1. **No reactor clash** — each reactor's `[start, cycleEnd]` windows are non-overlapping. Each new booking is forced to start `≥ reactor.lastCycleEnd`.
+2. **DAG stage ordering** — stage S's batch B can only start after batch B's analysis-end on every predecessor of S (+ 4-hour transfer buffer).
 
 ---
 
-### 3. Worked example: scheduling API-03 (train model)
+### 6. Reactor selection — gap-packing
 
-API-03 has 4 stages with **small reactor trains** (1–3 reactors each, deterministic seed):
-
-| Stage | Cycle | Analysis | Reactor Train | Planned Batches |
-| --- | --- | --- | --- | --- |
-| **S1** Intermediate-1 | 60 h | 30 h | `[R104, R105]` (2-reactor) | 11 |
-| **S2** Intermediate-2 | 72 h | 36 h | `[R107, R108, R201]` (3-reactor) | 11 |
-| **S3** Intermediate-3 | 84 h | 48 h | `[R204]` (single-reactor) | 11 |
-| **S4** Final API | 120 h | 60 h | `[R302, R303]` (2-reactor) | 11 |
-
---
-
-### 4. Reactor selection — train availability with gap-packing
-
-In the train model the reactor selection is straightforward: the pool **is** the train, so there's no "selection" — we compute when the entire train is free **and** find the *earliest free gap* across all reactors in the pool.
+The pool model picks the **single earliest-free** reactor from a stage's pool, using a gap-finder that scans existing bookings to pack batches into idle windows:
 
 ```typescript
-function findTrainSlot(pool: string[], earliest: number, cycleMs: number): number {
-  let t = earliest;
-  const lookups = pool.map((rid) => reactorBookings.get(rid)!);
-
-  for (let safety = 0; safety < 5000; safety++) {
-    let conflictEnd = t;
-    let foundConflict = false;
-    for (const slots of lookups) {
-      for (const slot of slots) {
-        if (slot.cycleEndMs <= t) continue;       // entirely before our start
-        if (slot.startMs >= t + cycleMs) break;   // entirely after; rest are too (sorted)
-        // Genuine overlap — must wait until this slot frees
-        if (slot.cycleEndMs > conflictEnd) conflictEnd = slot.cycleEndMs;
-        foundConflict = true;
-        break;
-      }
-      if (foundConflict) break;
-    }
-    if (!foundConflict) return t;
-    t = conflictEnd;
+function findEarliestFreeSlot(pool: string[], earliest: number, cycleMs: number): { reactorId: string; startMs: number } {
+  let best = { reactorId: pool[0], startMs: Infinity };
+  for (const rid of pool) {
+    const t = findGapStart(reactorBookings.get(rid)!, earliest, cycleMs);
+    if (t < best.startMs) best = { reactorId: rid, startMs: t };
   }
-  return t;
+  return best;
 }
 ```
 
-Then book the cycle on EVERY reactor in the train, **at the sorted position** so future scans walk slots in chronological order:
+`findGapStart` walks the reactor's sorted booking list, skipping past any overlapping slots to find the earliest opening of length `≥ cycleMs`. This fills idle gaps between future bookings rather than always appending at the tail.
 
-```typescript
-for (const rid of stage.reactorPool) {
-  insertSorted(reactorBookings.get(rid)!, { startMs, endMs: analysisEndMs, cycleEndMs });
-}
-```
-
-#### Why gap-finding is critical (real bug story)
-
-Earlier the algorithm only looked at each reactor's **last booking end**. That broke whenever a high-priority API's late stage forced a booking into the future — the naive approach wasted all idle time before that future booking. The gap-finder walks existing bookings to find the earliest free slot, packing batches into idle windows.
-
-Real measured impact on the spec data:
-
-| Metric | Before fix (last-end only) | After fix (gap-finder) |
-| --- | --- | --- |
-| Batches in FY | 304 | **641** |
-| Overflow | 544 | **207** |
-| Reactor clashes | 0 | 0 |
-
-The gap-finder more than **doubled** the in-FY throughput — same total work, same equipment, just better packing.
+**Why gap-finding matters (real bug story):** without it, a high-priority API's late stage forced all subsequent bookings into the far future, wasting all idle time before that booking. The gap-finder more than **doubled** in-FY throughput on the same equipment.
 
 ---
 
-### 5.  Overflow classification
+### 7. PCO and campaign cleaning
 
-After every booking we tag `inFY`:
+When a reactor switches from one `(apiId, stageId)` campaign to a different one, a **Product Change Over (PCO)** cleaning period is inserted before the next batch starts:
 
 ```typescript
-inFY: isInFY(startMs) && isInFY(cycleEndMs),
+const needsPco = lastCampaign.apiId !== batch.apiId || lastCampaign.stageId !== batch.stageId;
+if (needsPco) startMs += stage.pcoHours * MS_PER_HOUR;
 ```
 
-So a batch is in-FY only if **both** its cycle start and cycle end fall inside Apr 1 2026 – Mar 31 2027. If a batch starts March 28 2027 with a 14-day cycle, it **straddles** the FY boundary → flagged `Ovr`. The Schedule tab shows these in amber and the global KPIs report `In FY: 645 / Overflow: 203`.
+Each batch records `cleaningBeforeMs` (the enforced gap) and `cleaningType` (`"none"` / `"pco"` / `"campaign"`). The Gantt chart renders this as a faded bar segment at the start of the batch's slot.
 
 ---
 
-### 6. What happens when you edit a value
+### 8. FY vs Overflow classification
+
+Each API has its own `window: PlanWindow` (per-API start and end dates). A batch is `inFY` when **both** its cycle start and cycle end fall within that window:
+
+```typescript
+inFY: startMs >= api.window.startMs && endMs <= api.window.endMs,
+```
+
+The Dashboard KPI strip reports in-FY and overflow counts; the Schedule tab highlights overflow batches in amber.
+
+---
+
+### 9. What happens when you edit a value
 
 When you change any yellow cell, this happens (debounced 350 ms):
 
 ```
 sequenceDiagram
-    User->>Master Data UI: edit Output Target = 1500
-    UI->>Store: setStageOutput(stageId, 1500)
-    Store->>Store: plannedBatches = ceil(1500 / batchSize)
+    User->>Stages UI: edit BCT = 96 h
+    UI->>Store: setStageField(stageId, "bctHours", 96)
+    Store->>Cascade: cascadePlannedBatches(api)  ← recomputes all plannedBatches
     Store->>localStorage: persist apis array
-    Store->>Supabase: queueCloudSave (debounced 800ms)
-    Store->>Scheduler: scheduleRecompute (debounced 350ms)
+    Store->>Supabase: queueCloudSave (debounced 800 ms)
+    Store->>Scheduler: scheduleRecompute (debounced 350 ms)
     Scheduler->>Scheduler: runScheduler(apis, reactors)
-    Scheduler-->>Store: ScheduleResult (848 batches)
+    Scheduler-->>Store: ScheduleResult (batches)
     Store-->>All Tabs: re-render with new schedule
 ```
 
 Two debounce timers:
 
-- **350 ms** for re-running the scheduler — coalesces rapid keystrokes during a number edit
+- **350 ms** for re-running the scheduler — coalesces rapid keystrokes
 - **800 ms** for the Supabase upsert — batches multiple edits into one network call
 
-The complete scheduler runs in **~50 ms** end-to-end on a modern laptop, so 350 ms is plenty.
+The complete scheduler runs in **~50 ms** end-to-end on a modern laptop.
 
 ---
 
-### 7. Persistence layers
+### 10. Persistence layers
 
 The app has three data sources, in priority order on startup:
 
 ```
 ┌───────────────────────────────┐
-│  1. Supabase (cloud)          │  ← if VITE_SUPABASE_URL is set, AND user has not started
+│  1. Supabase (cloud)          │  ← if VITE_SUPABASE_URL is set AND user hasn't started
 │     workspaces.apis JSONB     │     editing in this browser session
 ├───────────────────────────────┤
 │  2. localStorage (browser)    │  ← always read on init; written on every edit
 │     "pharma:apis:v1"          │
 ├───────────────────────────────┤
 │  3. Seed (in-source code)     │  ← deterministic mulberry32 PRNG, src/data/seed.ts
-│     20 APIs, 82 stages        │
+│     20 APIs, 100+ stages      │
 └───────────────────────────────┘
 ```
 
-**Hydration order** (`src/store.ts`):
-
-1. Read `localStorage["pharma:apis:v1"]` — if found, hydrate immediately so first paint is fast.
-2. If Supabase is configured, async-fetch the cloud row. If it differs and the user hasn't started editing yet, swap state.
-3. If both are empty, fall back to the deterministic seed.
-
-**Write order on every mutation:**
-
-1. Update React state (sub-millisecond)
-2. Write `localStorage` (synchronous, instant)
-3. Queue debounced Supabase upsert (~800 ms)
-4. Schedule recompute (~350 ms debounce, then re-run scheduler)
+**Multi-project support:** each `Project` bundles APIs, reactors, and a plan window. The project switcher in the app header lets you create, rename, duplicate, and delete projects. Each project is independently persisted.
 
 ---
 
@@ -399,13 +382,6 @@ Resolution order in `getSupabaseConfig()`:
 2. Obfuscated `ENCODED_URL` / `ENCODED_KEY` from `src/config/supabaseConfig.ts` (deployed builds)
 3. `null` → cloud sync disabled, app falls back to localStorage only
 
-### Rotating credentials
-
-1. Reset key in **Supabase dashboard → Settings → API**
-2. Re-run `npm run obfuscate-credentials -- "<URL>" "<NEW_KEY>"`
-3. Paste the new values into `src/config/supabaseConfig.ts`
-4. Commit + push → next deploy picks up the new key
-
 ### Sharing a workspace across devices
 
 Each browser generates a UUID stored in `localStorage["pharma:workspaceId:v1"]`. To use the same workspace on another device:
@@ -433,15 +409,6 @@ To run the scheduler standalone (no UI) for sanity-checking after changes:
 
 ```bash
 npx tsx scripts/verify.mjs
-# Output (train model + gap-packing):
-#   APIs        : 20
-#   Total stages: 82
-#   Reactors    : 20
-#   Planned bts : 848
-#   Scheduled   : 848
-#   In FY       : 641
-#   Overflow    : 207
-#   Clashes     : 0
 ```
 
 ---
@@ -472,40 +439,54 @@ npx tsx scripts/verify.mjs
 ```
 src/
 ├── config/
-│   └── supabaseConfig.ts       XOR-obfuscated Supabase credentials
+│   └── supabaseConfig.ts         XOR-obfuscated Supabase credentials
 ├── data/
-│   └── seed.ts                 Deterministic seed (20 APIs, 82 stages, 20 reactors)
+│   └── seed.ts                   Deterministic seed (20 APIs, 100+ stages, 20 reactors)
 ├── scheduler/
-│   └── scheduler.ts            Equipment-availability sequencer (Section 2 above)
+│   ├── scheduler.ts              Equipment-availability sequencer (Section 5 above)
+│   └── cascade.ts                DAG cascade — derives plannedBatches from targetKg (Section 3)
 ├── services/
-│   ├── supabase.ts             Client init + per-browser workspace UUID
-│   └── sync.ts                 Debounced cloud upsert + initial cloud load
+│   ├── supabase.ts               Client init + per-browser workspace UUID
+│   └── sync.ts                   Debounced cloud upsert + initial cloud load
 ├── utils/
-│   ├── dates.ts                FY week buckets, hour-to-ms helpers
-│   └── storage.ts              Versioned localStorage helpers
+│   ├── dates.ts                  FY week buckets, hour-to-ms helpers
+│   ├── storage.ts                Versioned localStorage helpers
+│   ├── topologyPresets.ts        Topology spec types + applyTopologyPresetToApi()
+│   ├── validation.ts             DAG cycle detection + topological sort helpers
+│   ├── exporters.ts              Excel / CSV export helpers
+│   ├── chartTheme.ts             Shared Recharts theme tokens
+│   └── theme.ts                  Dark / light theme utilities
 ├── components/
-│   ├── Primitives.tsx          Card, Pill, Tag, SectionHeader
-│   ├── PriorityPill.tsx        P1..P5 dropdown badge
-│   ├── ReactorPoolEditor.tsx   Popover chip-toggle editor
-│   ├── AddStageForm.tsx        Inline form for new stages / new APIs
-│   └── SyncBadge.tsx           Cloud-sync status (idle / syncing / synced / error)
+│   ├── Primitives.tsx            Card, Pill, Tag, SectionHeader
+│   ├── ReactorPoolEditor.tsx     Popover chip-toggle editor for reactor pools
+│   ├── StageInputsEditor.tsx     DAG predecessor editor (inputStageIds)
+│   ├── ParallelTopologyEditor.tsx  Spec panel for parallel convergence topologies
+│   ├── SideChainsTopologyEditor.tsx  Spec panel for side-chain topologies
+│   ├── ExportMenu.tsx            Dropdown for Excel / CSV / PNG export actions
+│   ├── MultiSelectPopover.tsx    Reusable multi-select popover
+│   ├── ProjectSwitcher.tsx       Project create / rename / duplicate / delete picker
+│   ├── AddStageForm.tsx          Inline form for new stages / new APIs
+│   ├── SyncBadge.tsx             Cloud-sync status (idle / syncing / synced / error)
+│   ├── ThemeToggle.tsx           Dark / light theme toggle button
+│   └── WelcomeGuide.tsx          First-time onboarding guide (reopenable via help button)
 ├── tabs/
-│   ├── MasterDataTab.tsx       Editable template
-│   ├── ScheduleTab.tsx         Virtualized 848-row table + Excel & CSV export
-│   ├── GanttTab.tsx            Weekly Gantt (3 modes) + PNG image export
-│   ├── EquipmentTab.tsx        Heatmap + util bars + trend line
-│   ├── ClashTab.tsx            Zero-clash hero + sequencer proof
-│   └── QuarterlyTab.tsx        Pivot + bar chart + treemap
-├── store.ts                    Zustand store (state + actions + sync orchestration)
-├── types.ts                    Domain types (API, StageMaster, Reactor, ...)
-├── App.tsx                     Top-level shell, header, tab routing
-└── main.tsx                    Entry
+│   ├── ApisTab.tsx               Per-API editor: name, plan window, target kg, topology
+│   ├── StagesTab.tsx             Full stage template editor (BCF, BCT, process, PCO, DAG links)
+│   ├── MasterReactorTab.tsx      Reactor records: MOC, agitator type, capacity
+│   ├── ScheduleTab.tsx           Virtualized batch table + Excel & CSV export
+│   ├── GanttTab.tsx              Weekly Gantt (3 modes) + PNG image export
+│   ├── EquipmentTab.tsx          Heatmap + util bars + trend line
+│   ├── ClashTab.tsx              Zero-clash hero + sequencer proof
+│   └── DashboardTab.tsx          KPI strip + time-series chart + per-API table + pivot
+├── store.ts                      Zustand store (state + actions + sync orchestration)
+├── types.ts                      Domain types (API, StageMaster, Reactor, Project, …)
+├── App.tsx                       Top-level shell, header, tab routing
+└── main.tsx                      Entry point
 
-supabase/schema.sql             One-shot DB migration
-.github/workflows/deploy.yml    Build + deploy to GitHub Pages
-.env.example                    Documented Supabase env vars
+supabase/schema.sql               One-shot DB migration
+.github/workflows/deploy.yml      Build + deploy to GitHub Pages
+.env.example                      Documented Supabase env vars
 scripts/
-├── verify.mjs                  Standalone scheduler sanity check
-└── obfuscate-credentials.mjs   XOR-encode Supabase URL + key into hex blobs
+├── verify.mjs                    Standalone scheduler sanity check
+└── obfuscate-credentials.mjs     XOR-encode Supabase URL + key into hex blobs
 ```
-
