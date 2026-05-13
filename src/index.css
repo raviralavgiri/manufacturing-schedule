@@ -250,6 +250,12 @@ input[type="number"] {
   color: var(--text-faint);
 }
 
+/* Solid bg-ink-900 (no alpha) — used in native selects / dropdowns */
+[data-theme="light"] .bg-ink-900 {
+  background-color: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
 /* Header / nav surfaces that use bg-ink-9xx */
 [data-theme="light"] .bg-ink-900\/40,
 [data-theme="light"] .bg-ink-900\/80,
@@ -327,6 +333,29 @@ input[type="number"] {
 [data-theme="light"] .text-rose-200,
 [data-theme="light"] .text-rose-300 {
   color: #be123c;
+}
+
+/* WelcomeGuide modal — adaptive backdrop + card surface */
+.welcome-backdrop {
+  background: rgba(4, 8, 26, 0.72);
+}
+[data-theme="light"] .welcome-backdrop {
+  background: rgba(200, 215, 235, 0.80);
+}
+
+.welcome-modal-bg {
+  background: linear-gradient(180deg, #080d28 0%, #04081a 100%);
+}
+[data-theme="light"] .welcome-modal-bg {
+  background: linear-gradient(180deg, #ffffff 0%, #f1f5fa 100%);
+}
+
+/* bg-white/20 — inactive progress dots, need contrast in light mode */
+[data-theme="light"] .bg-white\/20 {
+  background-color: rgba(15, 23, 42, 0.18);
+}
+[data-theme="light"] .hover\:bg-white\/40:hover {
+  background-color: rgba(15, 23, 42, 0.30);
 }
 
 /* Print styles (apply to either theme) */

@@ -47,15 +47,15 @@ const CAMPAIGN_MAX_MS = 30 * 24 * 3600 * 1000;
  * Equipment-availability sequencer — POOL model + PCO + 30-day campaign cap.
  *
  * Each batch uses ONE reactor at a time. `stage.reactorPool` is the list of
- * eligible reactors; the scheduler picks whichever one becomes free earliest
- * at the candidate start time. So pool size determines achievable concurrency.
+ * primary (booked) reactors; the scheduler picks whichever one becomes free
+ * earliest at the candidate start time.
  *
- * SUBSTITUTION RULE: when a stage's explicit pool reactor is busy, the
- * scheduler may auto-substitute any like-for-like reactor — same capacity,
- * MOC (material of construction), and agitator type. The "effective pool"
- * for each stage = explicit reactorPool ∪ every spec-equivalent reactor
- * across the whole reactor list. Explicit picks are tried first; substitutes
- * only win when they're earlier-free.
+ * SUBSTITUTION RULE (BMR-defined): against each primary reactor the user may
+ * list optional substitute reactors in `stage.reactorSubstitutes` (entered in
+ * the Stages tab). When the primary is busy, substitutes are tried in the
+ * order listed. Substitution requires the optional reactor to be available at
+ * scheduling time. No automatic spec-matching (capacity / MOC / agitator) is
+ * applied — the user takes responsibility for suitability.
  *
  *   pool = [R101, R102, R103], BCF = 24h, BCT = 72h
  *      → B1 on R1 [0, 72]
@@ -124,37 +124,31 @@ export function runScheduler(
   // Used by the weekly occupancy heatmap (not authoritative for inFY).
   const windowStart = projectStart;
   const windowEnd = projectEnd;
-  // ─ Reactor substitution rule ─────────────────────────────────────────────
-  // Two reactors are "interchangeable" iff they have the same capacity, MOC,
-  // and agitator type. When a stage's explicit reactorPool reactor is busy,
-  // the scheduler may substitute any like-for-like reactor as long as it's
-  // free and ready. We pre-compute groups keyed by spec, then expose an
-  // expanded pool per stage that includes every interchangeable substitute.
-  const specKey = (r: Reactor): string =>
-    `${r.moc}|${r.agitatorType}|${r.capacityKg}`;
-  const groupBySpec = new Map<string, string[]>();
-  reactors.forEach((r) => {
-    const k = specKey(r);
-    const list = groupBySpec.get(k);
-    if (list) list.push(r.id);
-    else groupBySpec.set(k, [r.id]);
-  });
+  // ─ BMR substitute expansion ──────────────────────────────────────────────
+  // Build the effective candidate pool for a stage:
+  //   primary_1, sub_1a, sub_1b, …, primary_2, sub_2a, …
+  // Substitutes are the user-defined ordered list from stage.reactorSubstitutes.
+  // No automatic spec-matching. Reactors absent from the master list are
+  // skipped silently (guards against stale IDs after reactor deletions).
   const reactorById = new Map(reactors.map((r) => [r.id, r]));
-  function expandPool(explicit: string[]): string[] {
+  function expandPool(
+    explicit: string[],
+    substitutes: Record<string, string[]> | undefined
+  ): string[] {
     const seen = new Set<string>();
     const out: string[] = [];
     for (const rid of explicit) {
-      const r = reactorById.get(rid);
-      if (!r) continue;
+      if (!reactorById.has(rid)) continue;
       if (!seen.has(rid)) {
         seen.add(rid);
-        out.push(rid); // explicit picks always come first (priority)
+        out.push(rid); // primary always comes first
       }
-      const group = groupBySpec.get(specKey(r)) ?? [];
-      for (const sub of group) {
+      const subs = substitutes?.[rid] ?? [];
+      for (const sub of subs) {
+        if (!reactorById.has(sub)) continue; // unknown reactor — skip
         if (!seen.has(sub)) {
           seen.add(sub);
-          out.push(sub); // substitutes follow as fallbacks
+          out.push(sub); // substitute in declared priority order
         }
       }
     }
@@ -481,14 +475,16 @@ export function runScheduler(
           bcfGate
         );
 
-        // POOL pick with substitution: the EFFECTIVE pool is the explicit
-        // reactorPool plus every like-for-like substitute (same capacity +
-        // MOC + agitator). For each candidate reactor in the effective pool,
-        // probe its earliest-free slot and pick the overall best. Explicit
-        // picks come first in the iteration order so a tie is broken in
-        // favour of the user's original choice — substitutes only "win" if
-        // they're materially earlier.
-        const effectivePool = expandPool(stage.reactorPool);
+        // POOL pick with substitution: the effective pool is the primary
+        // reactorPool followed by each primary's user-defined optional
+        // substitutes (from stage.reactorSubstitutes), in declared order.
+        // Each candidate is probed for its earliest-free slot; the overall
+        // earliest wins. Primary reactors come first in iteration order so
+        // ties break in favour of the booked reactor.
+        const effectivePool = expandPool(
+          stage.reactorPool,
+          stage.reactorSubstitutes
+        );
         let bestStart = Infinity;
         let bestReactor = effectivePool[0] ?? stage.reactorPool[0];
         let bestKind: "none" | "pco" | "campaign" = "none";

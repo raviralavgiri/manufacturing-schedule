@@ -12,6 +12,7 @@ import {
   LayoutGrid,
   Loader2,
   Sparkles,
+  Upload,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "./store";
@@ -20,6 +21,7 @@ import SyncBadge from "./components/SyncBadge";
 import ThemeToggle from "./components/ThemeToggle";
 import ProjectSwitcher from "./components/ProjectSwitcher";
 import WelcomeGuide from "./components/WelcomeGuide";
+import ExcelImportModal from "./components/ExcelImportModal";
 import { hasSeenGuide, markGuideSeen } from "./utils/storage";
 import ApisTab from "./tabs/ApisTab";
 import StagesTab from "./tabs/StagesTab";
@@ -112,11 +114,13 @@ export default function App() {
   const apis = useStore((s) => s.apis);
   const isRecomputing = useStore((s) => s.isRecomputing);
   const isHydrating = useStore((s) => s.isHydrating);
+  const replaceProjectData = useStore((s) => s.replaceProjectData);
 
   // Welcome guide — auto-opens on first visit, reopenable from the top-bar
   // help button anytime. Defer the open until after the cloud-hydrate splash
   // finishes so the guide doesn't fight the loading indicator.
   const [guideOpen, setGuideOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   useEffect(() => {
     if (isHydrating) return;
     if (!hasSeenGuide()) {
@@ -165,6 +169,16 @@ export default function App() {
               className="ml-1 inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-ink-300 transition hover:border-cyan-300/30 hover:bg-cyan-300/10 hover:text-cyan-300"
             >
               <HelpCircle size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setImportOpen(true)}
+              title="Import from Excel (.xlsx)"
+              aria-label="Import Excel"
+              className="ml-1 inline-flex items-center gap-1.5 rounded-lg border border-emerald-300/30 bg-emerald-300/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 transition hover:border-emerald-300/60 hover:bg-emerald-300/20"
+            >
+              <Upload size={12} />
+              Import
             </button>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
@@ -271,6 +285,14 @@ export default function App() {
       </footer>
 
       <WelcomeGuide open={guideOpen} onClose={closeGuide} />
+      <ExcelImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImport={(apis, reactors) => {
+          replaceProjectData(apis, reactors);
+          setImportOpen(false);
+        }}
+      />
     </div>
   );
 }

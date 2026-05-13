@@ -232,12 +232,11 @@ export default function WelcomeGuide({ open, onClose }: Props) {
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4 backdrop-blur-sm"
-      style={{ background: "rgba(4,8,26,0.7)" }}
+      className="welcome-backdrop fixed inset-0 z-[100] flex items-center justify-center p-4 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-2xl overflow-hidden rounded-2xl border border-cyan-300/20 bg-gradient-to-b from-ink-950 to-ink-900 shadow-2xl shadow-black/70"
+        className="welcome-modal-bg relative w-full max-w-2xl overflow-hidden rounded-2xl border border-cyan-300/20 shadow-2xl shadow-black/70"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Close button */}

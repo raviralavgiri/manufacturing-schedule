@@ -127,6 +127,11 @@ interface AppState {
   setStageOutput: (stageId: string, outputKg: number) => void;
   setStageName: (stageId: string, name: string) => void;
   setStageReactorPool: (stageId: string, pool: string[]) => void;
+  /** Update the BMR-defined optional substitute list for a stage. */
+  setStageReactorSubstitutes: (
+    stageId: string,
+    substitutes: Record<string, string[]>
+  ) => void;
   /**
    * Replace a stage's DAG predecessor list. Re-runs the cascade for the
    * owning API (because dependency topology changes upstream demand) and
@@ -209,6 +214,11 @@ interface AppState {
   clearRecentlyAdded: () => void;
   resetToSeed: () => void;
   forceRecompute: () => void;
+  /**
+   * Replace the active project's APIs and reactors wholesale (e.g. after an
+   * Excel import). Runs cascade + schedule recompute and persists.
+   */
+  replaceProjectData: (apis: API[], reactors: Reactor[]) => void;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
@@ -475,6 +485,19 @@ export const useStore = create<AppState>((set, get) => ({
         ...a,
         stages: a.stages.map((s) =>
           s.id === stageId ? { ...s, reactorPool: pool.slice() } : s
+        ),
+      }));
+      return { ...p, apis };
+    });
+    scheduleRecompute(set, get, true);
+  },
+
+  setStageReactorSubstitutes: (stageId, substitutes) => {
+    mutateActive(set, get, (p) => {
+      const apis = p.apis.map((a) => ({
+        ...a,
+        stages: a.stages.map((s) =>
+          s.id === stageId ? { ...s, reactorSubstitutes: { ...substitutes } } : s
         ),
       }));
       return { ...p, apis };
@@ -1224,6 +1247,26 @@ export const useStore = create<AppState>((set, get) => ({
       apis: fresh.apis,
       reactors: fresh.reactors,
       window: fresh.window,
+    }));
+    set({ recentlyAddedStageId: null });
+    scheduleRecompute(set, get, true);
+  },
+
+  replaceProjectData: (apis, reactors) => {
+    const cascaded = apis.map(cascadePlannedBatches);
+    // Derive project-level window from union of API windows.
+    const window: import("./types").PlanWindow =
+      cascaded.length > 0
+        ? {
+            startMs: Math.min(...cascaded.map((a) => a.window.startMs)),
+            endMs: Math.max(...cascaded.map((a) => a.window.endMs)),
+          }
+        : get().window;
+    mutateActive(set, get, (p) => ({
+      ...p,
+      apis: cascaded,
+      reactors,
+      window,
     }));
     set({ recentlyAddedStageId: null });
     scheduleRecompute(set, get, true);

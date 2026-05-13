@@ -15,6 +15,7 @@ import { useStore } from "../store";
 import { Card, SectionHeader } from "../components/Primitives";
 import AddStageForm from "../components/AddStageForm";
 import ReactorPoolEditor from "../components/ReactorPoolEditor";
+import ReactorSubstitutesEditor from "../components/ReactorSubstitutesEditor";
 import StageInputsEditor from "../components/StageInputsEditor";
 import type { ApiTopology, StageMaster } from "../types";
 
@@ -31,6 +32,7 @@ export default function StagesTab() {
   const updateStageField = useStore((s) => s.updateStageField);
   const setStageName = useStore((s) => s.setStageName);
   const setStageReactorPool = useStore((s) => s.setStageReactorPool);
+  const setStageReactorSubstitutes = useStore((s) => s.setStageReactorSubstitutes);
   const setStageInputs = useStore((s) => s.setStageInputs);
   const removeStage = useStore((s) => s.removeStage);
   const recentlyAddedStageId = useStore((s) => s.recentlyAddedStageId);
@@ -228,6 +230,12 @@ export default function StagesTab() {
                 <Th yellow>Reactor Pool</Th>
                 <Th
                   yellow
+                  title="Optional substitute reactors per primary reactor (BMR-defined, user-authorised, tried in listed order)."
+                >
+                  Optional Substitutes
+                </Th>
+                <Th
+                  yellow
                   title="DAG predecessors — stages whose output feeds this stage's input. Default = the immediate previous stage. Multi-select to model convergence (S3+S7→S8) or sub-streams (S2 ← {S1, S2i})."
                 >
                   Inputs from
@@ -342,6 +350,14 @@ export default function StagesTab() {
                         value={r.reactorPool}
                         reactors={reactors}
                         onChange={(pool) => setStageReactorPool(r.id, pool)}
+                      />
+                    </td>
+                    <td className="px-3 py-2 text-left">
+                      <ReactorSubstitutesEditor
+                        pool={r.reactorPool}
+                        value={r.reactorSubstitutes ?? {}}
+                        reactors={reactors}
+                        onChange={(subs) => setStageReactorSubstitutes(r.id, subs)}
                       />
                     </td>
                     <td className="px-3 py-2 text-left">
@@ -478,7 +494,7 @@ export default function StagesTab() {
               {rows.length === 0 && (
                 <tr>
                   <td
-                    colSpan={17}
+                    colSpan={18}
                     className="py-12 text-center text-sm text-ink-300"
                   >
                     No stages match. Click{" "}
