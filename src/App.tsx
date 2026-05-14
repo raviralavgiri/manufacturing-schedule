@@ -11,6 +11,7 @@ import {
   HelpCircle,
   LayoutGrid,
   Loader2,
+  PieChart,
   Sparkles,
   Upload,
 } from "lucide-react";
@@ -31,6 +32,7 @@ import GanttTab from "./tabs/GanttTab";
 import EquipmentTab from "./tabs/EquipmentTab";
 import ClashTab from "./tabs/ClashTab";
 import DashboardTab from "./tabs/DashboardTab";
+import QuarterlyPlanTab from "./tabs/QuarterlyPlanTab";
 
 type TabId =
   | "apis"
@@ -40,7 +42,8 @@ type TabId =
   | "gantt"
   | "equipment"
   | "clash"
-  | "dashboard";
+  | "dashboard"
+  | "quarterly";
 
 const TABS: {
   id: TabId;
@@ -104,6 +107,13 @@ const TABS: {
     icon: <Gauge size={18} />,
     accent: "lime",
     desc: "Monthly · Quarterly · Yearly",
+  },
+  {
+    id: "quarterly",
+    label: "Q-Plan",
+    icon: <PieChart size={18} />,
+    accent: "violet",
+    desc: "Quarterly batch distribution & optimisation",
   },
 ];
 
@@ -277,6 +287,7 @@ export default function App() {
           {active === "equipment" && <EquipmentTab />}
           {active === "clash" && <ClashTab />}
           {active === "dashboard" && <DashboardTab />}
+          {active === "quarterly" && <QuarterlyPlanTab />}
         </div>
       </main>
 
