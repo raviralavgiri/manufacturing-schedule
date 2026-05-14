@@ -59,6 +59,15 @@ export interface StageMaster {
   inputKgPerBatch: number;
   reactorPool: string[];
   /**
+   * BMR-defined optional substitute reactors per primary (booked) reactor.
+   * Key = primary reactor ID (from `reactorPool`).
+   * Value = ordered list of substitute reactor IDs — first listed is tried
+   * first, then second, and so on. Substitution is user-authorised; no
+   * automatic spec-matching (capacity / MOC / agitator) is applied.
+   * A substitute is only used when it is available at scheduling time.
+   */
+  reactorSubstitutes?: Record<string, string[]>;
+  /**
    * Batch Charging Frequency (BCF) — the time interval in hours between the
    * START of two consecutive same-campaign batches at the same stage.
    *

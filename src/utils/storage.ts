@@ -209,6 +209,7 @@ function normalizeProject(p: any): Project | null {
                 ? s.pcoHours
                 : 8,
             inputStageIds: rawInputs ?? [],
+            reactorSubstitutes: normalizeReactorSubstitutes(s.reactorSubstitutes),
             cascadePolicy: normalizeCascadePolicy(s.cascadePolicy),
             // Sentinel: stash whether the source had a stored array. If not,
             // we'll fill it with the linear-chain default in the next pass
@@ -508,6 +509,30 @@ export function normalizeStageDagInputs(stages: any[]): void {
     }
     if ("__inputsWereStored" in s) delete s.__inputsWereStored;
   });
+}
+
+/**
+ * Normalize `stage.reactorSubstitutes`. Strips non-string entries and
+ * empty substitute lists so the stored shape is always clean.
+ * Returns `undefined` when no valid substitutes are present (old data).
+ */
+function normalizeReactorSubstitutes(
+  value: unknown
+): Record<string, string[]> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const result: Record<string, string[]> = {};
+  let hasAny = false;
+  for (const [key, arr] of Object.entries(value as Record<string, unknown>)) {
+    if (!Array.isArray(arr)) continue;
+    const filtered = arr.filter((x): x is string => typeof x === "string" && x.length > 0);
+    if (filtered.length > 0) {
+      result[key] = filtered;
+      hasAny = true;
+    }
+  }
+  return hasAny ? result : undefined;
 }
 
 /**
