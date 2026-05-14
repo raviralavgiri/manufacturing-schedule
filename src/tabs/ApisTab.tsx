@@ -615,25 +615,20 @@ function TopologyCell({
       <select
         value={value}
         onChange={(e) => onSelect(e.target.value as ApiTopology)}
-        className={clsx(
-          "rounded-md border bg-ink-900 px-2 py-1 font-mono text-[11px] text-white outline-none",
-          isDraft
-            ? "border-amber-300/50 focus:border-amber-300/80"
-            : "border-white/10 focus:border-cyan-300/50"
-        )}
+        className="cell-yellow rounded-md px-2 py-1 font-mono text-[11px] outline-none"
         title={
           isDraft
             ? `Draft: "${value}". Click the chevron to open the spec panel and Apply.`
             : `Topology preset for this API. Linear is the default; Parallel converges sub-chains; Side chains add factor-driven sub-streams.`
         }
       >
-        <option value="linear" className="bg-ink-900">
+        <option value="linear" className="bg-ink-900 text-white">
           Linear
         </option>
-        <option value="parallel" className="bg-ink-900">
+        <option value="parallel" className="bg-ink-900 text-white">
           Parallel
         </option>
-        <option value="side_chains" className="bg-ink-900">
+        <option value="side_chains" className="bg-ink-900 text-white">
           Side chains
         </option>
       </select>
@@ -642,7 +637,7 @@ function TopologyCell({
           type="button"
           onClick={onToggleExpand}
           title={isExpanded ? "Collapse spec panel" : "Open spec panel"}
-          className="rounded-md border border-white/10 bg-white/5 p-1 text-ink-200 hover:bg-white/10"
+          className="cell-yellow rounded-md p-1 hover:brightness-125"
         >
           {isExpanded ? (
             <ChevronDown size={12} />
