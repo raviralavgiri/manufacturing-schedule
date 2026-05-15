@@ -2,10 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Beaker,
+  Building2,
   Check,
+  ChevronDown,
+  ChevronRight,
   Lock,
   Plus,
   Trash2,
+  Wrench,
   X,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -14,8 +18,10 @@ import { Card, SectionHeader } from "../components/Primitives";
 import {
   AGITATOR_VALUES,
   MOC_VALUES,
+  REACTOR_CLASS_VALUES,
   type AgitatorType,
   type MOC,
+  type ReactorClass,
 } from "../types";
 
 const MOC_FULL: Record<MOC, string> = {
@@ -25,15 +31,31 @@ const MOC_FULL: Record<MOC, string> = {
   "Halar lined": "Halar lined",
 };
 
+// ─── Date helpers ────────────────────────────────────────────────────────────
+
+function msToDateInput(ms: number | undefined): string {
+  if (ms == null || !Number.isFinite(ms)) return "";
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+function dateInputToMs(s: string): number | undefined {
+  if (!s) return undefined;
+  const d = new Date(s);
+  const t = d.getTime();
+  return Number.isFinite(t) ? t : undefined;
+}
+
 /**
  * Master Reactor tab — single source of truth for the reactor fleet.
  *
- * Each reactor row has:
+ * Each reactor row now has:
  *   • id (immutable)
- *   • name (editable display label)
- *   • MOC (Material of Construction): SS / GL / Hastelloy / Halar lined
- *   • Agitator: Anchor / RCI / PBT / MIG / Hydrofoil
- *   • Capacity (L)
+ *   • name / MOC / Agitator / Capacity (existing)
+ *   • Class: Intermediate | Cleanroom
+ *   • Production Block
+ *   • Expandable maintenance panel:
+ *       – PM First Date + PM Duration (days)   → prevents scheduling every 90 days
+ *       – Building Maint. First Date (Cleanroom only) → 2-day block every 90 days
  */
 export default function MasterReactorTab() {
   const reactors = useStore((s) => s.reactors);
@@ -42,12 +64,18 @@ export default function MasterReactorTab() {
   const setReactorMoc = useStore((s) => s.setReactorMoc);
   const setReactorAgitator = useStore((s) => s.setReactorAgitator);
   const setReactorCapacity = useStore((s) => s.setReactorCapacity);
+  const setReactorClass = useStore((s) => s.setReactorClass);
+  const setReactorProductionBlock = useStore((s) => s.setReactorProductionBlock);
+  const setReactorPmFirstDate = useStore((s) => s.setReactorPmFirstDate);
+  const setReactorPmDuration = useStore((s) => s.setReactorPmDuration);
+  const setReactorBuildingMaintenanceFirstDate = useStore(
+    (s) => s.setReactorBuildingMaintenanceFirstDate
+  );
   const addReactor = useStore((s) => s.addReactor);
   const removeReactor = useStore((s) => s.removeReactor);
 
   const [showAdd, setShowAdd] = useState(false);
 
-  // Live "used by N stages" count for each reactor.
   const usageByReactor = useMemo(() => {
     const map: Record<string, number> = {};
     reactors.forEach((r) => (map[r.id] = 0));
@@ -77,6 +105,9 @@ export default function MasterReactorTab() {
     sorted.forEach((r) => buckets[r.moc].push(r));
     return buckets;
   }, [reactors]);
+
+  // Total column count (used for colSpan throughout)
+  const COLS = 11;
 
   return (
     <div className="space-y-4">
@@ -119,23 +150,19 @@ export default function MasterReactorTab() {
             <thead className="sticky top-0 z-10 bg-ink-900/90 backdrop-blur-md">
               <tr className="text-left text-[11px] uppercase tracking-wider text-ink-300">
                 <Th className="w-8">&nbsp;</Th>
-                <Th className="w-24">ID</Th>
+                <Th className="w-20">ID</Th>
                 <Th yellow>Name</Th>
-                <Th yellow className="w-36">
-                  MOC
+                <Th yellow className="w-32">MOC</Th>
+                <Th yellow className="w-28">Agitator</Th>
+                <Th yellow className="w-28">Class</Th>
+                <Th yellow className="w-28">Block</Th>
+                <Th yellow align="right" className="w-24">Cap. (L)</Th>
+                <Th align="right" className="w-28">Used By</Th>
+                {/* Maintenance toggle header */}
+                <Th className="w-10" title="Maintenance settings">
+                  <Wrench size={11} />
                 </Th>
-                <Th yellow className="w-32">
-                  Agitator
-                </Th>
-                <Th yellow align="right" className="w-28">
-                  Capacity (L)
-                </Th>
-                <Th align="right" className="w-32">
-                  Used By
-                </Th>
-                <Th align="right" className="w-12">
-                  &nbsp;
-                </Th>
+                <Th align="right" className="w-10">&nbsp;</Th>
               </tr>
             </thead>
             <tbody>
@@ -147,17 +174,23 @@ export default function MasterReactorTab() {
                     moc={moc}
                     list={list}
                     usageByReactor={usageByReactor}
+                    cols={COLS}
                     onName={setReactorName}
                     onMoc={setReactorMoc}
                     onAgitator={setReactorAgitator}
                     onCapacity={setReactorCapacity}
+                    onClass={setReactorClass}
+                    onBlock={setReactorProductionBlock}
+                    onPmFirstDate={setReactorPmFirstDate}
+                    onPmDuration={setReactorPmDuration}
+                    onBuildingMaintenanceFirstDate={setReactorBuildingMaintenanceFirstDate}
                     onDelete={removeReactor}
                   />
                 );
               })}
               {reactors.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-sm text-ink-300">
+                  <td colSpan={COLS} className="py-12 text-center text-sm text-ink-300">
                     No reactors yet. Click{" "}
                     <span className="font-bold text-cyan-300">+ Add Reactor</span>{" "}
                     above to create one.
@@ -181,27 +214,34 @@ export default function MasterReactorTab() {
         </div>
         <div className="rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-xs text-amber-200">
           <span className="mr-1 font-bold">
-            <AlertCircle size={12} className="inline" /> Delete safety:
+            <Wrench size={12} className="inline" /> Maintenance scheduling:
           </span>
-          A reactor cannot be deleted while it is the only entry in some
-          stage's pool. Add another reactor to that stage in the Stages tab
-          first.
+          PM windows repeat every 90 days from the first PM date. Building
+          maintenance (Cleanroom reactors) repeats every 90 days and blocks
+          the reactor for 2 days. The scheduler automatically skips these
+          periods when assigning batches.
         </div>
       </div>
     </div>
   );
 }
 
-// ─── MOC group (subheader row + body rows) ───────────────────────────────────
+// ─── MOC group ───────────────────────────────────────────────────────────────
 
 function ReactorMocGroup({
   moc,
   list,
   usageByReactor,
+  cols,
   onName,
   onMoc,
   onAgitator,
   onCapacity,
+  onClass,
+  onBlock,
+  onPmFirstDate,
+  onPmDuration,
+  onBuildingMaintenanceFirstDate,
   onDelete,
 }: {
   moc: MOC;
@@ -211,12 +251,23 @@ function ReactorMocGroup({
     moc: MOC;
     agitatorType: AgitatorType;
     capacityKg: number;
+    reactorClass?: ReactorClass;
+    productionBlock?: string;
+    pmFirstDateMs?: number;
+    pmDurationDays?: number;
+    buildingMaintenanceFirstDateMs?: number;
   }[];
   usageByReactor: Record<string, number>;
+  cols: number;
   onName: (rid: string, v: string) => void;
   onMoc: (rid: string, v: MOC) => void;
   onAgitator: (rid: string, v: AgitatorType) => void;
   onCapacity: (rid: string, v: number) => void;
+  onClass: (rid: string, v: ReactorClass | undefined) => void;
+  onBlock: (rid: string, v: string) => void;
+  onPmFirstDate: (rid: string, ms: number | undefined) => void;
+  onPmDuration: (rid: string, days: number) => void;
+  onBuildingMaintenanceFirstDate: (rid: string, ms: number | undefined) => void;
   onDelete: (rid: string, opts?: { cascade?: boolean }) =>
     | { ok: true }
     | { ok: false; error: string; blockingStages?: string[] };
@@ -224,7 +275,7 @@ function ReactorMocGroup({
   return (
     <>
       <tr className="bg-white/[0.04]">
-        <td colSpan={8} className="px-3 py-1.5">
+        <td colSpan={cols} className="px-3 py-1.5">
           <div className="flex items-center gap-2">
             <span
               className="inline-block h-2 w-2 rounded-sm"
@@ -243,7 +294,7 @@ function ReactorMocGroup({
       {list.length === 0 ? (
         <tr>
           <td
-            colSpan={8}
+            colSpan={cols}
             className="border-t border-white/5 px-3 py-3 text-xs text-ink-400"
           >
             No {MOC_FULL[moc].toLowerCase()} reactors. Add one above to make
@@ -255,16 +306,29 @@ function ReactorMocGroup({
           <ReactorRow
             key={r.id}
             zebra={i % 2 === 0}
+            cols={cols}
             id={r.id}
             name={r.name}
             moc={r.moc}
             agitatorType={r.agitatorType}
             capacityKg={r.capacityKg}
+            reactorClass={r.reactorClass}
+            productionBlock={r.productionBlock}
+            pmFirstDateMs={r.pmFirstDateMs}
+            pmDurationDays={r.pmDurationDays}
+            buildingMaintenanceFirstDateMs={r.buildingMaintenanceFirstDateMs}
             stagesUsing={usageByReactor[r.id] ?? 0}
             onName={(v) => onName(r.id, v)}
             onMoc={(v) => onMoc(r.id, v)}
             onAgitator={(v) => onAgitator(r.id, v)}
             onCapacity={(v) => onCapacity(r.id, v)}
+            onClass={(v) => onClass(r.id, v)}
+            onBlock={(v) => onBlock(r.id, v)}
+            onPmFirstDate={(ms) => onPmFirstDate(r.id, ms)}
+            onPmDuration={(d) => onPmDuration(r.id, d)}
+            onBuildingMaintenanceFirstDate={(ms) =>
+              onBuildingMaintenanceFirstDate(r.id, ms)
+            }
             onDelete={(cascade) => onDelete(r.id, { cascade })}
           />
         ))
@@ -277,35 +341,58 @@ function ReactorMocGroup({
 
 function ReactorRow({
   zebra,
+  cols,
   id,
   name,
   moc,
   agitatorType,
   capacityKg,
+  reactorClass,
+  productionBlock,
+  pmFirstDateMs,
+  pmDurationDays,
+  buildingMaintenanceFirstDateMs,
   stagesUsing,
   onName,
   onMoc,
   onAgitator,
   onCapacity,
+  onClass,
+  onBlock,
+  onPmFirstDate,
+  onPmDuration,
+  onBuildingMaintenanceFirstDate,
   onDelete,
 }: {
   zebra: boolean;
+  cols: number;
   id: string;
   name: string;
   moc: MOC;
   agitatorType: AgitatorType;
   capacityKg: number;
+  reactorClass?: ReactorClass;
+  productionBlock?: string;
+  pmFirstDateMs?: number;
+  pmDurationDays?: number;
+  buildingMaintenanceFirstDateMs?: number;
   stagesUsing: number;
   onName: (v: string) => void;
   onMoc: (v: MOC) => void;
   onAgitator: (v: AgitatorType) => void;
   onCapacity: (v: number) => void;
+  onClass: (v: ReactorClass | undefined) => void;
+  onBlock: (v: string) => void;
+  onPmFirstDate: (ms: number | undefined) => void;
+  onPmDuration: (days: number) => void;
+  onBuildingMaintenanceFirstDate: (ms: number | undefined) => void;
   onDelete: (cascade: boolean) =>
     | { ok: true }
     | { ok: false; error: string; blockingStages?: string[] };
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showMaint, setShowMaint] = useState(false);
 
   const tryDelete = () => {
     setError(null);
@@ -324,6 +411,16 @@ function ReactorRow({
     setConfirmDelete(false);
   };
 
+  const isCleanroom = reactorClass === "Cleanroom";
+  const hasPm = pmFirstDateMs != null && Number.isFinite(pmFirstDateMs);
+  const hasBm =
+    isCleanroom &&
+    buildingMaintenanceFirstDateMs != null &&
+    Number.isFinite(buildingMaintenanceFirstDateMs);
+
+  // Badge indicator dots for quick maintenance-at-a-glance
+  const maintDots = (hasPm ? 1 : 0) + (hasBm ? 1 : 0);
+
   return (
     <>
       <tr
@@ -332,6 +429,7 @@ function ReactorRow({
           zebra && "bg-white/[0.01]"
         )}
       >
+        {/* MOC dot */}
         <td className="px-3 py-2.5">
           <span
             className="inline-block h-2 w-2 rounded-sm"
@@ -341,6 +439,8 @@ function ReactorRow({
             }}
           />
         </td>
+
+        {/* ID */}
         <td className="px-3 py-2.5 font-mono text-xs tabular-nums text-ink-200">
           <span
             className="inline-flex items-center gap-1.5"
@@ -350,35 +450,64 @@ function ReactorRow({
             {id}
           </span>
         </td>
+
+        {/* Name */}
         <td className="px-3 py-2">
-          <EditableTextCell
-            value={name}
-            onCommit={onName}
-            placeholder={id}
-            ariaLabel={`Reactor ${id} display name`}
-          />
+          <EditableTextCell value={name} onCommit={onName} placeholder={id} />
         </td>
+
+        {/* MOC */}
         <td className="px-3 py-2">
           <SelectCell
             value={moc}
             options={MOC_VALUES as readonly string[] as readonly MOC[]}
             onChange={(v) => onMoc(v as MOC)}
-            ariaLabel={`Reactor ${id} MOC`}
           />
         </td>
+
+        {/* Agitator */}
         <td className="px-3 py-2">
           <SelectCell
             value={agitatorType}
-            options={
-              AGITATOR_VALUES as readonly string[] as readonly AgitatorType[]
-            }
+            options={AGITATOR_VALUES as readonly string[] as readonly AgitatorType[]}
             onChange={(v) => onAgitator(v as AgitatorType)}
-            ariaLabel={`Reactor ${id} Agitator`}
           />
         </td>
+
+        {/* Class */}
+        <td className="px-3 py-2">
+          <SelectCell
+            value={reactorClass ?? ""}
+            options={["", ...REACTOR_CLASS_VALUES] as readonly string[]}
+            onChange={(v) =>
+              onClass(v ? (v as ReactorClass) : undefined)
+            }
+            emptyLabel="— not set —"
+            colorize={(v) =>
+              v === "Cleanroom"
+                ? "text-sky-300"
+                : v === "Intermediate"
+                ? "text-violet-300"
+                : "text-ink-400"
+            }
+          />
+        </td>
+
+        {/* Production Block */}
+        <td className="px-3 py-2">
+          <EditableTextCell
+            value={productionBlock ?? ""}
+            onCommit={onBlock}
+            placeholder="e.g. Block A"
+          />
+        </td>
+
+        {/* Capacity */}
         <td className="px-3 py-2 text-right">
           <EditableNumCell value={capacityKg} onChange={onCapacity} />
         </td>
+
+        {/* Used By */}
         <td className="px-3 py-2.5 text-right text-xs">
           {stagesUsing === 0 ? (
             <span className="text-ink-500">unused</span>
@@ -388,20 +517,61 @@ function ReactorRow({
             </span>
           )}
         </td>
+
+        {/* Maintenance toggle */}
+        <td className="px-2 py-2">
+          <button
+            onClick={() => setShowMaint((v) => !v)}
+            title="Maintenance settings (PM + Building)"
+            className={clsx(
+              "relative rounded-md p-1.5 text-[10px] transition",
+              showMaint
+                ? "bg-amber-400/20 text-amber-200"
+                : "text-ink-400 hover:bg-amber-400/10 hover:text-amber-300"
+            )}
+          >
+            <Wrench size={13} />
+            {maintDots > 0 && !showMaint && (
+              <span className="absolute -right-0.5 -top-0.5 flex h-2 w-2 items-center justify-center rounded-full bg-amber-400 text-[7px] font-bold text-ink-900">
+                {maintDots}
+              </span>
+            )}
+          </button>
+        </td>
+
+        {/* Delete */}
         <td className="px-2 py-2 text-right">
           <button
             onClick={tryDelete}
             className="rounded-md p-1.5 text-ink-400 transition hover:bg-rose-400/15 hover:text-rose-300"
             title={`Delete ${id}`}
-            aria-label={`Delete reactor ${id}`}
           >
             <Trash2 size={13} />
           </button>
         </td>
       </tr>
+
+      {/* ── Maintenance panel ──────────────────────────────────────────── */}
+      {showMaint && (
+        <tr className={clsx("border-t border-white/5", zebra && "bg-white/[0.01]")}>
+          <td colSpan={cols} className="px-4 pb-4 pt-2">
+            <MaintenancePanel
+              reactorClass={reactorClass}
+              pmFirstDateMs={pmFirstDateMs}
+              pmDurationDays={pmDurationDays}
+              buildingMaintenanceFirstDateMs={buildingMaintenanceFirstDateMs}
+              onPmFirstDate={onPmFirstDate}
+              onPmDuration={onPmDuration}
+              onBuildingMaintenanceFirstDate={onBuildingMaintenanceFirstDate}
+            />
+          </td>
+        </tr>
+      )}
+
+      {/* ── Delete confirm / error rows ───────────────────────────────── */}
       {(confirmDelete || error) && (
         <tr className={clsx("border-t border-white/5", zebra && "bg-white/[0.01]")}>
-          <td colSpan={8} className="px-3 pb-3">
+          <td colSpan={cols} className="px-3 pb-3">
             {confirmDelete && (
               <div className="rounded-md border border-rose-300/30 bg-rose-400/10 p-2 text-[11px] text-rose-200">
                 <div className="mb-1.5 font-semibold">
@@ -433,7 +603,6 @@ function ReactorRow({
                 <button
                   onClick={() => setError(null)}
                   className="shrink-0 text-rose-200/70 hover:text-rose-200"
-                  aria-label="Dismiss error"
                 >
                   <X size={10} />
                 </button>
@@ -446,7 +615,142 @@ function ReactorRow({
   );
 }
 
-// ─── Add Reactor form ────────────────────────────────────────────────────────
+// ─── Maintenance panel ────────────────────────────────────────────────────────
+
+function MaintenancePanel({
+  reactorClass,
+  pmFirstDateMs,
+  pmDurationDays,
+  buildingMaintenanceFirstDateMs,
+  onPmFirstDate,
+  onPmDuration,
+  onBuildingMaintenanceFirstDate,
+}: {
+  reactorClass?: ReactorClass;
+  pmFirstDateMs?: number;
+  pmDurationDays?: number;
+  buildingMaintenanceFirstDateMs?: number;
+  onPmFirstDate: (ms: number | undefined) => void;
+  onPmDuration: (days: number) => void;
+  onBuildingMaintenanceFirstDate: (ms: number | undefined) => void;
+}) {
+  const isCleanroom = reactorClass === "Cleanroom";
+
+  return (
+    <div className="space-y-3 rounded-lg border border-amber-300/20 bg-amber-300/5 p-3">
+      <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-amber-300">
+        <Wrench size={12} /> Maintenance Schedule
+      </div>
+
+      {/* PM Section */}
+      <div>
+        <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-ink-300">
+          <ChevronRight size={10} />
+          Preventive Maintenance — every 90 days ± 7 days from first date
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <div>
+            <Label>PM First Start Date</Label>
+            <input
+              type="date"
+              value={msToDateInput(pmFirstDateMs)}
+              onChange={(e) => onPmFirstDate(dateInputToMs(e.target.value))}
+              className="cell-yellow rounded-md px-2 py-1 font-mono text-xs tabular-nums"
+            />
+          </div>
+          <div>
+            <Label>PM Duration (days)</Label>
+            <input
+              type="number"
+              min={1}
+              max={90}
+              value={pmDurationDays ?? 7}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (Number.isFinite(v) && v >= 1) onPmDuration(Math.round(v));
+              }}
+              className="cell-yellow w-20 rounded-md px-2 py-1 text-right font-mono text-xs tabular-nums"
+            />
+          </div>
+          {pmFirstDateMs != null && (
+            <div className="self-end">
+              <button
+                onClick={() => onPmFirstDate(undefined)}
+                className="rounded-md border border-rose-300/30 bg-rose-400/10 px-2 py-1 text-[10px] text-rose-300 hover:bg-rose-400/20"
+              >
+                Clear PM
+              </button>
+            </div>
+          )}
+        </div>
+        {pmFirstDateMs != null && (
+          <p className="mt-1.5 text-[10px] text-ink-400">
+            Next occurrences: every 90 days from{" "}
+            <span className="font-mono text-amber-300">
+              {new Date(pmFirstDateMs).toLocaleDateString()}
+            </span>
+            , each blocking the reactor for{" "}
+            <span className="font-mono text-amber-300">
+              {pmDurationDays ?? 7} day{(pmDurationDays ?? 7) === 1 ? "" : "s"}
+            </span>
+            .
+          </p>
+        )}
+      </div>
+
+      {/* Building Maintenance (Cleanroom only) */}
+      {isCleanroom ? (
+        <div>
+          <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-ink-300">
+            <Building2 size={10} />
+            Building Maintenance — every 90 days, blocks reactor for 2 days
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <div>
+              <Label>Building Maint. First Date</Label>
+              <input
+                type="date"
+                value={msToDateInput(buildingMaintenanceFirstDateMs)}
+                onChange={(e) =>
+                  onBuildingMaintenanceFirstDate(dateInputToMs(e.target.value))
+                }
+                className="cell-yellow rounded-md px-2 py-1 font-mono text-xs tabular-nums"
+              />
+            </div>
+            {buildingMaintenanceFirstDateMs != null && (
+              <div className="self-end">
+                <button
+                  onClick={() => onBuildingMaintenanceFirstDate(undefined)}
+                  className="rounded-md border border-rose-300/30 bg-rose-400/10 px-2 py-1 text-[10px] text-rose-300 hover:bg-rose-400/20"
+                >
+                  Clear BM
+                </button>
+              </div>
+            )}
+          </div>
+          {buildingMaintenanceFirstDateMs != null && (
+            <p className="mt-1.5 text-[10px] text-ink-400">
+              Building maintenance from{" "}
+              <span className="font-mono text-sky-300">
+                {new Date(buildingMaintenanceFirstDateMs).toLocaleDateString()}
+              </span>{" "}
+              repeats every 90 days · all Cleanroom reactors in the same
+              production block are blocked for 2 days each cycle.
+            </p>
+          )}
+        </div>
+      ) : (
+        <p className="text-[10px] text-ink-500">
+          Set this reactor's <span className="text-amber-300">Class</span> to{" "}
+          <span className="text-sky-300">Cleanroom</span> to enable building
+          maintenance scheduling.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ─── Add Reactor form ─────────────────────────────────────────────────────────
 
 const MOC_PREFIX: Record<MOC, string> = {
   SS: "R1",
@@ -465,9 +769,7 @@ function suggestNextId(moc: MOC, existingIds: string[]): string {
     if (Number.isFinite(n)) usedNums.add(n);
   });
   for (let n = 1; n < 1000; n++) {
-    if (!usedNums.has(n)) {
-      return `${prefix}${String(n).padStart(2, "0")}`;
-    }
+    if (!usedNums.has(n)) return `${prefix}${String(n).padStart(2, "0")}`;
   }
   return `${prefix}${Date.now()}`;
 }
@@ -515,13 +817,7 @@ function AddReactorForm({
       setError("Capacity must be a positive number.");
       return;
     }
-    const result = onAdd({
-      id: id.trim(),
-      name: name.trim(),
-      moc,
-      agitatorType: agitator,
-      capacityKg: capNum,
-    });
+    const result = onAdd({ id: id.trim(), name: name.trim(), moc, agitatorType: agitator, capacityKg: capNum });
     if (!result.ok) setError(result.error);
   };
 
@@ -540,18 +836,14 @@ function AddReactorForm({
             value={moc}
             options={MOC_VALUES as readonly string[] as readonly MOC[]}
             onChange={(v) => setMoc(v as MOC)}
-            ariaLabel="New reactor MOC"
           />
         </div>
         <div>
           <Label>Agitator</Label>
           <SelectCell
             value={agitator}
-            options={
-              AGITATOR_VALUES as readonly string[] as readonly AgitatorType[]
-            }
+            options={AGITATOR_VALUES as readonly string[] as readonly AgitatorType[]}
             onChange={(v) => setAgitator(v as AgitatorType)}
-            ariaLabel="New reactor agitator"
           />
         </div>
         <div>
@@ -559,10 +851,7 @@ function AddReactorForm({
           <input
             type="text"
             value={id}
-            onChange={(e) => {
-              setId(e.target.value);
-              setIdTouched(true);
-            }}
+            onChange={(e) => { setId(e.target.value); setIdTouched(true); }}
             placeholder="R101"
             className="cell-yellow w-full rounded-md px-2 py-1.5 font-mono text-sm tabular-nums"
           />
@@ -588,6 +877,10 @@ function AddReactorForm({
           />
         </div>
       </div>
+      <p className="mt-2 text-[10px] text-ink-400">
+        Class, Production Block, and maintenance dates can be set after creation by clicking the{" "}
+        <Wrench size={10} className="inline" /> icon in the reactor row.
+      </p>
 
       <div className="mt-3 flex items-center justify-between gap-3">
         <div className="min-h-[20px] text-xs">
@@ -616,30 +909,33 @@ function AddReactorForm({
   );
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Compact <select>-style dropdown styled to match the yellow editable cells. */
 function SelectCell<T extends string>({
   value,
   options,
   onChange,
-  ariaLabel,
+  emptyLabel,
+  colorize,
 }: {
-  value: T;
-  options: readonly T[];
-  onChange: (v: T) => void;
-  ariaLabel?: string;
+  value: T | "";
+  options: readonly (T | "")[];
+  onChange: (v: T | "") => void;
+  emptyLabel?: string;
+  colorize?: (v: string) => string;
 }) {
   return (
     <select
       value={value}
-      aria-label={ariaLabel}
-      onChange={(e) => onChange(e.target.value as T)}
-      className="cell-yellow w-full rounded-md border border-amber-300/30 bg-amber-300/10 px-2 py-1 text-left font-mono text-[11px] tabular-nums text-amber-100 transition focus:border-cyan-300/50 focus:outline-none"
+      onChange={(e) => onChange(e.target.value as T | "")}
+      className={clsx(
+        "cell-yellow w-full rounded-md border border-amber-300/30 bg-amber-300/10 px-2 py-1 text-left font-mono text-[11px] tabular-nums text-amber-100 transition focus:border-cyan-300/50 focus:outline-none",
+        colorize && colorize(value)
+      )}
     >
       {options.map((opt) => (
         <option key={opt} value={opt} className="bg-ink-900 text-white">
-          {opt}
+          {opt === "" ? (emptyLabel ?? "—") : opt}
         </option>
       ))}
     </select>
@@ -659,14 +955,17 @@ function Th({
   align = "left",
   yellow,
   className,
+  title,
 }: {
   children: React.ReactNode;
   align?: "left" | "right";
   yellow?: boolean;
   className?: string;
+  title?: string;
 }) {
   return (
     <th
+      title={title}
       className={clsx(
         "border-b border-white/10 px-3 py-2 font-semibold",
         align === "right" ? "text-right" : "text-left",
@@ -688,12 +987,10 @@ function EditableTextCell({
   value,
   onCommit,
   placeholder,
-  ariaLabel,
 }: {
   value: string;
   onCommit: (v: string) => void;
   placeholder?: string;
-  ariaLabel?: string;
 }) {
   const [local, setLocal] = useState(value);
   const ref = useRef<HTMLInputElement>(null);
@@ -704,20 +1001,16 @@ function EditableTextCell({
       type="text"
       value={local}
       placeholder={placeholder}
-      aria-label={ariaLabel}
       onChange={(e) => setLocal(e.target.value)}
       onBlur={() => {
-        if (local.trim() && local !== value) onCommit(local);
+        if (local !== value) onCommit(local);
         else setLocal(value);
       }}
       onKeyDown={(e) => {
         if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-        if (e.key === "Escape") {
-          setLocal(value);
-          (e.target as HTMLInputElement).blur();
-        }
+        if (e.key === "Escape") { setLocal(value); (e.target as HTMLInputElement).blur(); }
       }}
-      className="cell-yellow w-full max-w-[220px] rounded-md px-2 py-1 text-left font-mono text-xs transition"
+      className="cell-yellow w-full max-w-[180px] rounded-md px-2 py-1 text-left font-mono text-xs transition"
     />
   );
 }
@@ -733,10 +1026,7 @@ function EditableNumCell({
   useEffect(() => setLocal(String(value)), [value]);
   const commit = () => {
     const parsed = Number(local);
-    if (!Number.isFinite(parsed)) {
-      setLocal(String(value));
-      return;
-    }
+    if (!Number.isFinite(parsed)) { setLocal(String(value)); return; }
     const v = Math.max(1, Math.round(parsed));
     if (v !== value) onChange(v);
     setLocal(String(v));
@@ -750,10 +1040,7 @@ function EditableNumCell({
       onBlur={commit}
       onKeyDown={(e) => {
         if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-        if (e.key === "Escape") {
-          setLocal(String(value));
-          (e.target as HTMLInputElement).blur();
-        }
+        if (e.key === "Escape") { setLocal(String(value)); (e.target as HTMLInputElement).blur(); }
       }}
       className="cell-yellow w-full rounded-md px-2 py-1 text-right font-mono text-sm tabular-nums transition"
     />
@@ -762,14 +1049,13 @@ function EditableNumCell({
 
 function mocColor(moc: MOC): string {
   switch (moc) {
-    case "GL":
-      return "#f472b6"; // pink-400
-    case "Hastelloy":
-      return "#a78bfa"; // violet-400
-    case "Halar lined":
-      return "#fbbf24"; // amber-400
+    case "GL": return "#f472b6";
+    case "Hastelloy": return "#a78bfa";
+    case "Halar lined": return "#fbbf24";
     case "SS":
-    default:
-      return "#00f0ff"; // cyan
+    default: return "#00f0ff";
   }
 }
+
+// Suppress unused import warning — ChevronDown used for future expansion
+void ChevronDown;

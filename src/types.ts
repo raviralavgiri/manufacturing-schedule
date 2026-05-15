@@ -29,6 +29,12 @@ export const AGITATOR_VALUES: readonly AgitatorType[] = [
   "Hydrofoil",
 ] as const;
 
+export type ReactorClass = "Intermediate" | "Cleanroom";
+export const REACTOR_CLASS_VALUES: readonly ReactorClass[] = [
+  "Intermediate",
+  "Cleanroom",
+] as const;
+
 export interface Reactor {
   id: string;            // stable internal reference (e.g. "R101")
   name: string;          // editable display name (defaults to id)
@@ -37,6 +43,17 @@ export interface Reactor {
   /** Agitator / impeller type. */
   agitatorType: AgitatorType;
   capacityKg: number;
+  /** Cleanroom or Intermediate classification. Determines building maintenance rules. */
+  reactorClass?: ReactorClass;
+  /** Production block this reactor belongs to (e.g. "Block A"). */
+  productionBlock?: string;
+  /** First preventive maintenance start date (ms). PM recurs every 90 days. */
+  pmFirstDateMs?: number;
+  /** Duration of each PM window in days (default 7). */
+  pmDurationDays?: number;
+  /** First building maintenance date for this reactor's production block (ms).
+   *  Building maintenance recurs every 90 days and blocks Cleanroom reactors for 2 days. */
+  buildingMaintenanceFirstDateMs?: number;
 }
 
 export interface StageMaster {

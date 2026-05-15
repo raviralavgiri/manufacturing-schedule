@@ -164,6 +164,74 @@ export function runScheduler(
     reactorBatchCount.set(r.id, 0);
   });
 
+  // ─ Maintenance windows ───────────────────────────────────────────────────
+  // Pre-compute unavailability windows per reactor:
+  //   1. PM windows: every 90 days from pmFirstDateMs, lasting pmDurationDays.
+  //   2. Building maintenance (Cleanroom reactors only): every 90 days from
+  //      buildingMaintenanceFirstDateMs, lasting 2 days (the reactor is in a
+  //      cleanroom whose building maintenance blocks it).
+  // Windows are sorted by startMs for efficient scan.
+  interface MaintWindow { startMs: number; endMs: number; }
+  const PM_INTERVAL_MS = 90 * 24 * 3600 * 1000;
+  const BM_DURATION_MS = 2 * 24 * 3600 * 1000;
+
+  function buildPeriodicWindows(
+    firstMs: number,
+    durationMs: number,
+    rangeStart: number,
+    rangeEnd: number
+  ): MaintWindow[] {
+    const out: MaintWindow[] = [];
+    // Find first occurrence that could intersect [rangeStart, rangeEnd]
+    let t = firstMs;
+    if (t + durationMs <= rangeStart) {
+      const skip = Math.floor((rangeStart - (t + durationMs)) / PM_INTERVAL_MS);
+      t += (skip + 1) * PM_INTERVAL_MS;
+    }
+    while (t < rangeEnd) {
+      out.push({ startMs: t, endMs: t + durationMs });
+      t += PM_INTERVAL_MS;
+    }
+    return out;
+  }
+
+  const reactorMaintWindows = new Map<string, MaintWindow[]>();
+  // First pass: PM windows per reactor
+  reactors.forEach((r) => {
+    const windows: MaintWindow[] = [];
+    if (r.pmFirstDateMs != null && Number.isFinite(r.pmFirstDateMs)) {
+      const durMs = (r.pmDurationDays ?? 7) * 24 * 3600 * 1000;
+      windows.push(...buildPeriodicWindows(r.pmFirstDateMs, durMs, windowStart, windowEnd + durMs));
+    }
+    reactorMaintWindows.set(r.id, windows);
+  });
+
+  // Second pass: building maintenance for Cleanroom reactors.
+  // The building maintenance date is stored per-reactor but represents the
+  // block-level schedule — only the FIRST Cleanroom reactor in a block that
+  // has a date set is used to generate the windows for all reactors in that block.
+  const blockBmWindows = new Map<string, MaintWindow[]>();
+  reactors.forEach((r) => {
+    if (r.reactorClass !== "Cleanroom") return;
+    if (!r.productionBlock || !r.buildingMaintenanceFirstDateMs) return;
+    if (blockBmWindows.has(r.productionBlock)) return; // already computed
+    blockBmWindows.set(
+      r.productionBlock,
+      buildPeriodicWindows(r.buildingMaintenanceFirstDateMs, BM_DURATION_MS, windowStart, windowEnd + BM_DURATION_MS)
+    );
+  });
+
+  // Merge building maintenance windows into Cleanroom reactors
+  reactors.forEach((r) => {
+    if (r.reactorClass !== "Cleanroom" || !r.productionBlock) return;
+    const bmWins = blockBmWindows.get(r.productionBlock);
+    if (!bmWins || bmWins.length === 0) return;
+    const existing = reactorMaintWindows.get(r.id) ?? [];
+    // Merge and sort by startMs
+    const merged = [...existing, ...bmWins].sort((a, b) => a.startMs - b.startMs);
+    reactorMaintWindows.set(r.id, merged);
+  });
+
   // Inter-stage transfer buffer between consecutive stages of the SAME
   // batch. Set to 0 for the user's pipeline spec where stage N+1's slot
   // starts exactly at stage N's slot end. (Was 4h previously to model
@@ -297,12 +365,16 @@ export function runScheduler(
   ): { startMs: number; cleaningKind: "none" | "pco" | "campaign" } {
     let t = earliest;
     const lookups = pool.map((rid) => reactorBookings.get(rid)!);
+    const maintLookups = pool.map((rid) => reactorMaintWindows.get(rid) ?? []);
 
     for (let safety = 0; safety < 5000; safety++) {
       let advance = t;
       let needAdvance = false;
 
-      for (const slots of lookups) {
+      for (let ri = 0; ri < lookups.length; ri++) {
+        const slots = lookups[ri];
+        const maintWins = maintLookups[ri];
+
         // Successor + overlap pass. We also separately compute the
         // predecessor requirement via checkPredecessor below.
         let conflictThisReactor = false;
@@ -327,6 +399,17 @@ export function runScheduler(
           break;
         }
         if (conflictThisReactor) continue;
+
+        // Maintenance window check: skip any window that overlaps [t, t+cycleMs)
+        for (const mw of maintWins) {
+          if (mw.endMs <= t) continue;
+          if (mw.startMs >= t + cycleMs) break;
+          // Overlaps — push past this window
+          if (mw.endMs > advance) advance = mw.endMs;
+          needAdvance = true;
+          break;
+        }
+        if (advance > t) continue; // already flagged a conflict above
 
         const pred = checkPredecessor(
           slots,

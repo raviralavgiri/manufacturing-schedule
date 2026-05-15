@@ -9,6 +9,7 @@ import type {
   PlanWindow,
   Project,
   Reactor,
+  ReactorClass,
   ScheduleResult,
   StageMaster,
 } from "./types";
@@ -168,6 +169,11 @@ interface AppState {
   setReactorMoc: (reactorId: string, moc: MOC) => void;
   setReactorAgitator: (reactorId: string, agitator: AgitatorType) => void;
   setReactorCapacity: (reactorId: string, capacityKg: number) => void;
+  setReactorClass: (reactorId: string, cls: ReactorClass | undefined) => void;
+  setReactorProductionBlock: (reactorId: string, block: string) => void;
+  setReactorPmFirstDate: (reactorId: string, ms: number | undefined) => void;
+  setReactorPmDuration: (reactorId: string, days: number) => void;
+  setReactorBuildingMaintenanceFirstDate: (reactorId: string, ms: number | undefined) => void;
   addReactor: (input: {
     id: string;
     name?: string;
@@ -906,6 +912,58 @@ export const useStore = create<AppState>((set, get) => ({
         r.id === reactorId ? { ...r, capacityKg: v } : r
       ),
     }));
+  },
+
+  setReactorClass: (reactorId, cls) => {
+    mutateActive(set, get, (p) => ({
+      ...p,
+      reactors: p.reactors.map((r) =>
+        r.id === reactorId ? { ...r, reactorClass: cls } : r
+      ),
+    }));
+    scheduleRecompute(set, get);
+  },
+
+  setReactorProductionBlock: (reactorId, block) => {
+    mutateActive(set, get, (p) => ({
+      ...p,
+      reactors: p.reactors.map((r) =>
+        r.id === reactorId ? { ...r, productionBlock: block.trim() || undefined } : r
+      ),
+    }));
+    scheduleRecompute(set, get);
+  },
+
+  setReactorPmFirstDate: (reactorId, ms) => {
+    mutateActive(set, get, (p) => ({
+      ...p,
+      reactors: p.reactors.map((r) =>
+        r.id === reactorId ? { ...r, pmFirstDateMs: ms } : r
+      ),
+    }));
+    scheduleRecompute(set, get);
+  },
+
+  setReactorPmDuration: (reactorId, days) => {
+    const v = Math.max(1, Math.round(days));
+    if (!Number.isFinite(v)) return;
+    mutateActive(set, get, (p) => ({
+      ...p,
+      reactors: p.reactors.map((r) =>
+        r.id === reactorId ? { ...r, pmDurationDays: v } : r
+      ),
+    }));
+    scheduleRecompute(set, get);
+  },
+
+  setReactorBuildingMaintenanceFirstDate: (reactorId, ms) => {
+    mutateActive(set, get, (p) => ({
+      ...p,
+      reactors: p.reactors.map((r) =>
+        r.id === reactorId ? { ...r, buildingMaintenanceFirstDateMs: ms } : r
+      ),
+    }));
+    scheduleRecompute(set, get);
   },
 
   addReactor: (input) => {

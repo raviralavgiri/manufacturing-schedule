@@ -432,9 +432,8 @@ export default function DashboardTab() {
                       key={a.id}
                       dataKey={a.id}
                       name={a.name}
-                      stackId="api"
                       fill={a.color}
-                      radius={[0, 0, 0, 0]}
+                      radius={[2, 2, 0, 0]}
                     />
                   ))}
                 </BarChart>
