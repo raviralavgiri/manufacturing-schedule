@@ -103,7 +103,7 @@ export default function SideChainsTopologyEditor({
     <div className="rounded-xl border border-cyan-300/30 bg-gradient-to-br from-cyan-300/8 via-violet-300/5 to-pink-300/5 p-4 shadow-glow">
       <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-white">
         <Workflow size={14} className="text-cyan-300" />
-        Side-chains topology
+        Side-chains stage flow
         <span className="ml-auto inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[10px] text-ink-200">
           {totalStages} stages total
         </span>

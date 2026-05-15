@@ -29,10 +29,10 @@ export const AGITATOR_VALUES: readonly AgitatorType[] = [
   "Hydrofoil",
 ] as const;
 
-export type ReactorClass = "Intermediate" | "Cleanroom";
+export type ReactorClass = "INT" | "CL";
 export const REACTOR_CLASS_VALUES: readonly ReactorClass[] = [
-  "Intermediate",
-  "Cleanroom",
+  "INT",
+  "CL",
 ] as const;
 
 export interface Reactor {
@@ -43,7 +43,7 @@ export interface Reactor {
   /** Agitator / impeller type. */
   agitatorType: AgitatorType;
   capacityKg: number;
-  /** Cleanroom or Intermediate classification. Determines building maintenance rules. */
+  /** CL (Cleanroom) or INT (Intermediate) classification. Determines building maintenance rules. */
   reactorClass?: ReactorClass;
   /** Production block this reactor belongs to (e.g. "Block A"). */
   productionBlock?: string;

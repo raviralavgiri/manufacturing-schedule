@@ -200,8 +200,8 @@ export default function ApisTab() {
                 <Th align="right" yellow>
                   Target (kg)
                 </Th>
-                <Th yellow title="Topology preset that scaffolds this API's stages. Linear chains stages 1→N. Parallel converges multiple sub-chains into a merge stage. Side chains add factor-driven sub-streams to a main backbone.">
-                  Topology
+                <Th yellow title="Stage Flow preset that scaffolds this API's stages. Linear chains stages 1→N. Parallel converges multiple sub-chains into a merge stage. Side chains add factor-driven sub-streams to a main backbone.">
+                  Stage Flow
                 </Th>
                 <Th align="right" locked>
                   Actual (kg)
@@ -619,7 +619,7 @@ function TopologyCell({
         title={
           isDraft
             ? `Draft: "${value}". Click the chevron to open the spec panel and Apply.`
-            : `Topology preset for this API. Linear is the default; Parallel converges sub-chains; Side chains add factor-driven sub-streams.`
+            : `Stage Flow preset for this API. Linear is the default; Parallel converges sub-chains; Side chains add factor-driven sub-streams.`
         }
       >
         <option value="linear" className="bg-ink-900 text-white">

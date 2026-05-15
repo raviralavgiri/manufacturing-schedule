@@ -67,8 +67,8 @@ const STEPS: Step[] = [
         />
         <ConceptRow
           icon={<Beaker size={16} className="text-cyan-300" />}
-          name="Master Reactor"
-          desc="Your physical reactor fleet. Each row has an immutable ID + editable name, MOC (SS / GL / Hastelloy / Halar lined), Agitator type, and Capacity. Add / delete reactors here."
+          name="Master Equipment"
+          desc="Your physical equipment fleet. Each row has an immutable ID + editable name, MOC (SS / GL / Hastelloy / Halar lined), Agitator type, and Capacity. Add / delete equipment here."
         />
         <ConceptRow
           icon={<CalendarDays size={16} className="text-cyan-300" />}
@@ -99,7 +99,7 @@ const STEPS: Step[] = [
           <span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-cyan-300/20 font-mono text-[11px] font-bold text-cyan-300">
             2
           </span>
-          <span className="font-semibold text-white">Master Reactor</span> —
+          <span className="font-semibold text-white">Master Equipment</span> —
           confirm your fleet (capacity / MOC / agitator) is right.
         </li>
         <li>

@@ -79,7 +79,7 @@ export default function ParallelTopologyEditor({
     <div className="rounded-xl border border-violet-300/30 bg-gradient-to-br from-violet-300/8 via-cyan-300/5 to-pink-300/5 p-4 shadow-glowViolet">
       <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-white">
         <GitMerge size={14} className="text-violet-300" />
-        Parallel topology
+        Parallel stage flow
         <span className="ml-auto inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[10px] text-ink-200">
           {totalStages} stages total
         </span>

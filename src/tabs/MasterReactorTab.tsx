@@ -106,7 +106,7 @@ export default function MasterReactorTab() {
   return (
     <div className="space-y-4">
       <SectionHeader
-        title="Master Reactor"
+        title="Master Equipment"
         subtitle={`${reactors.length} reactors · ${MOC_VALUES
           .map((m) => `${groupedReactors[m].length} ${m}`)
           .join(", ")} · Click any field to edit; ID is immutable.`}
@@ -447,8 +447,8 @@ function FleetRow({
             onChange={(v) => onClass(v ? (v as ReactorClass) : undefined)}
             emptyLabel="— not set —"
             colorize={(v) =>
-              v === "Cleanroom" ? "text-sky-300"
-              : v === "Intermediate" ? "text-violet-300"
+              v === "CL" ? "text-sky-300"
+              : v === "INT" ? "text-violet-300"
               : "text-ink-400"
             }
           />
@@ -578,7 +578,7 @@ function MaintenanceTab({
         <span className="mr-1 font-bold">
           <Building2 size={12} className="inline" /> Building Maint.:
         </span>
-        Applies only to <span className="text-sky-300 font-semibold">Cleanroom</span> reactors.
+        Applies only to <span className="text-sky-300 font-semibold">CL (Cleanroom)</span> reactors.
         Recurs every <strong>90 days</strong>, blocking the reactor for <strong>2 days</strong> per cycle.
         The scheduler skips both window types automatically.
       </div>
@@ -738,7 +738,7 @@ function MaintRow({
   onPmDuration: (days: number) => void;
   onBuildingMaintenanceFirstDate: (ms: number | undefined) => void;
 }) {
-  const isCleanroom = reactorClass === "Cleanroom";
+  const isCleanroom = reactorClass === "CL";
   const hasPm = pmFirstDateMs != null && Number.isFinite(pmFirstDateMs);
   const hasBm = buildingMaintenanceFirstDateMs != null && Number.isFinite(buildingMaintenanceFirstDateMs);
 
@@ -774,7 +774,7 @@ function MaintRow({
                 : "bg-violet-400/15 text-violet-300"
             )}
           >
-            {reactorClass}
+            {reactorClass === "CL" ? "CL" : "INT"}
           </span>
         ) : (
           <span className="text-[10px] text-ink-500">—</span>
@@ -828,8 +828,8 @@ function MaintRow({
             className="cell-yellow rounded-md px-2 py-1 font-mono text-xs tabular-nums w-36"
           />
         ) : (
-          <span className="text-[10px] text-ink-600" title="Set Class = Cleanroom to enable">
-            — Cleanroom only —
+          <span className="text-[10px] text-ink-600" title="Set Class = CL (Cleanroom) to enable">
+            — CL only —
           </span>
         )}
       </td>

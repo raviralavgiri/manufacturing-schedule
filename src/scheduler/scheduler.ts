@@ -212,7 +212,7 @@ export function runScheduler(
   // has a date set is used to generate the windows for all reactors in that block.
   const blockBmWindows = new Map<string, MaintWindow[]>();
   reactors.forEach((r) => {
-    if (r.reactorClass !== "Cleanroom") return;
+    if (r.reactorClass !== "CL") return;
     if (!r.productionBlock || !r.buildingMaintenanceFirstDateMs) return;
     if (blockBmWindows.has(r.productionBlock)) return; // already computed
     blockBmWindows.set(
@@ -223,7 +223,7 @@ export function runScheduler(
 
   // Merge building maintenance windows into Cleanroom reactors
   reactors.forEach((r) => {
-    if (r.reactorClass !== "Cleanroom" || !r.productionBlock) return;
+    if (r.reactorClass !== "CL" || !r.productionBlock) return;
     const bmWins = blockBmWindows.get(r.productionBlock);
     if (!bmWins || bmWins.length === 0) return;
     const existing = reactorMaintWindows.get(r.id) ?? [];

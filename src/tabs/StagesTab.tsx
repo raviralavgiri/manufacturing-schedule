@@ -210,8 +210,8 @@ export default function StagesTab() {
       <div className="flex items-center justify-between rounded-xl border border-cyan-300/20 bg-cyan-300/5 px-4 py-2.5 text-xs text-ink-200">
         <span className="inline-flex items-center gap-2">
           <Beaker size={12} className="text-cyan-300" />
-          To rename, reclassify, add, or delete reactors, head to the{" "}
-          <span className="font-bold text-cyan-300">Master Reactor</span> tab.
+          To rename, reclassify, add, or delete equipment, head to the{" "}
+          <span className="font-bold text-cyan-300">Master Equipment</span> tab.
         </span>
         <span className="text-[10px] uppercase tracking-wider text-ink-400">
           {reactors.length} reactors available
@@ -514,8 +514,8 @@ export default function StagesTab() {
             <Pencil size={12} className="inline" /> Editable here:
           </span>
           Stage Name, Reactor Pool, Inputs from, Input/Batch (kg), Output/Batch
-          (kg), BCF, BCT, Analysis, PCO. Reactors on the{" "}
-          <span className="font-bold">Master Reactor</span> tab; API target on
+          (kg), BCF, BCT, Analysis, PCO. Equipment on the{" "}
+          <span className="font-bold">Master Equipment</span> tab; API target on
           the <span className="font-bold">APIs</span> tab.
           <span className="mt-1 block text-amber-300/80">
             <GitBranch size={11} className="mr-0.5 inline" />{" "}
@@ -645,7 +645,7 @@ function TopologyIndicator({ topology }: { topology: ApiTopology }) {
     return (
       <span
         className="inline-flex items-center gap-0.5 rounded border border-violet-300/30 bg-violet-300/10 px-1 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-violet-300"
-        title="Topology: parallel (convergence)"
+        title="Stage Flow: parallel (convergence)"
       >
         <GitMerge size={9} /> parallel
       </span>
@@ -655,7 +655,7 @@ function TopologyIndicator({ topology }: { topology: ApiTopology }) {
     return (
       <span
         className="inline-flex items-center gap-0.5 rounded border border-cyan-300/30 bg-cyan-300/10 px-1 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-cyan-300"
-        title="Topology: side chains (sub-streams)"
+        title="Stage Flow: side chains (sub-streams)"
       >
         <Workflow size={9} /> side
       </span>
@@ -664,7 +664,7 @@ function TopologyIndicator({ topology }: { topology: ApiTopology }) {
   return (
     <span
       className="inline-flex items-center gap-0.5 rounded border border-white/10 bg-white/5 px-1 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-wider text-ink-300"
-      title="Topology: linear (default)"
+      title="Stage Flow: linear (default)"
     >
       <GitBranch size={9} /> linear
     </span>
@@ -697,7 +697,7 @@ function topologyBreakdown(apis: { topology?: ApiTopology }[]): string {
   if (linear > 0) parts.push(`${linear} linear`);
   if (parallel > 0) parts.push(`${parallel} parallel`);
   if (side > 0) parts.push(`${side} side-chains`);
-  return parts.length === 0 ? "no topology data" : parts.join(" · ");
+  return parts.length === 0 ? "no stage flow data" : parts.join(" · ");
 }
 
 function EditableTextCell({

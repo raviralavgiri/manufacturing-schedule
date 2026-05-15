@@ -68,10 +68,10 @@ const TABS: {
   },
   {
     id: "reactors",
-    label: "Master Reactor",
+    label: "Master Equipment",
     icon: <Beaker size={18} />,
     accent: "cyan",
-    desc: "Manage the reactor fleet",
+    desc: "Manage the equipment fleet",
   },
   {
     id: "schedule",
