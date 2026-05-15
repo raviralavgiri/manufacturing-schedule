@@ -19,13 +19,8 @@ import ReactorSubstitutesEditor from "../components/ReactorSubstitutesEditor";
 import StageInputsEditor from "../components/StageInputsEditor";
 import type { ApiTopology, StageMaster } from "../types";
 
-/**
- * Stages tab — operational details for each stage.
- *
- * Reactor master data (add/rename/delete/reclassify) lives on the dedicated
- * "Master Reactor" tab. This tab focuses on per-stage operational fields
- * (Stage name, Reactor pool, Batch size, BCF/BCT hrs, Analysis hrs, PCO hrs).
- */
+type SubTab = "parameters" | "equipment";
+
 export default function StagesTab() {
   const apis = useStore((s) => s.apis);
   const reactors = useStore((s) => s.reactors);
@@ -38,6 +33,7 @@ export default function StagesTab() {
   const recentlyAddedStageId = useStore((s) => s.recentlyAddedStageId);
   const clearRecentlyAdded = useStore((s) => s.clearRecentlyAdded);
 
+  const [subTab, setSubTab] = useState<SubTab>("parameters");
   const [q, setQ] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -53,25 +49,15 @@ export default function StagesTab() {
       color: string;
       apiDisplayName: string;
       apiTopology: ApiTopology;
-      /** Output demand on this stage = sum of successors' input consumed (or api.targetKg share for sinks). */
       demandKg: number;
-      /** Other stages on the same API — fed to the InputsEditor as candidates. */
       siblings: StageMaster[];
-      /** True for the first stage of the API (lowest stageNo) — locks the inputs cell. */
       isFirstStage: boolean;
-      /** True iff this stage is part of a side chain (anchor or continuation). */
       isSideChainStage: boolean;
-      /** True iff this stage is the side-chain anchor (carries cascadePolicy). */
       isSideChainAnchor: boolean;
-      /** Anchor's factor — only present on anchors, used for the badge. */
       sideChainFactor: number | null;
     })[] = [];
     sortedApis.forEach((a) => {
       const sortedStages = [...a.stages].sort((x, y) => x.stageNo - y.stageNo);
-      // DAG-aware demand calc: each stage's output demand = sum over
-      // successors of (successor.inputPerBatch × successor.plannedBatches).
-      // Sinks (no successors) get their share of api.targetKg (split equally
-      // when there is more than one sink — same rule as cascade.ts).
       const successors = new Map<string, StageMaster[]>();
       sortedStages.forEach((s) => successors.set(s.id, []));
       sortedStages.forEach((s) =>
@@ -101,8 +87,6 @@ export default function StagesTab() {
           demandByStageId.set(s.id, demand);
         }
       });
-      // Side-chain stage set — same fixed-point rule as cascade.ts /
-      // validation.ts, computed locally so the table can flag them.
       const sideChainIds = new Set<string>();
       sortedStages.forEach((s) => {
         if (s.cascadePolicy && s.cascadePolicy.kind === "side-chain") {
@@ -206,19 +190,111 @@ export default function StagesTab() {
         />
       )}
 
-      {/* Pointer to Master Reactor tab — reactor CRUD lives there now */}
-      <div className="flex items-center justify-between rounded-xl border border-cyan-300/20 bg-cyan-300/5 px-4 py-2.5 text-xs text-ink-200">
-        <span className="inline-flex items-center gap-2">
-          <Beaker size={12} className="text-cyan-300" />
-          To rename, reclassify, add, or delete equipment, head to the{" "}
-          <span className="font-bold text-cyan-300">Master Equipment</span> tab.
-        </span>
-        <span className="text-[10px] uppercase tracking-wider text-ink-400">
-          {reactors.length} reactors available
-        </span>
+      {/* Pill sub-tab nav */}
+      <div className="flex items-center gap-1 rounded-xl border border-white/10 bg-white/[0.03] p-1 w-fit">
+        <SubTabBtn active={subTab === "parameters"} onClick={() => setSubTab("parameters")}>
+          Stage Parameters
+        </SubTabBtn>
+        <SubTabBtn active={subTab === "equipment"} onClick={() => setSubTab("equipment")}>
+          Equipment &amp; Flow
+        </SubTabBtn>
       </div>
 
-      {/* Stages table */}
+      {subTab === "parameters" && (
+        <ParametersTab
+          rows={rows}
+          reactors={reactors}
+          recentlyAddedStageId={recentlyAddedStageId}
+          confirmDeleteId={confirmDeleteId}
+          setConfirmDeleteId={setConfirmDeleteId}
+          newRowRef={newRowRef}
+          updateStageField={updateStageField}
+          setStageName={setStageName}
+          removeStage={removeStage}
+        />
+      )}
+
+      {subTab === "equipment" && (
+        <EquipmentFlowTab
+          rows={rows}
+          reactors={reactors}
+          recentlyAddedStageId={recentlyAddedStageId}
+          newRowRef={newRowRef}
+          setStageReactorPool={setStageReactorPool}
+          setStageReactorSubstitutes={setStageReactorSubstitutes}
+          setStageInputs={setStageInputs}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Sub-tab button ──────────────────────────────────────────────────────────
+
+function SubTabBtn({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={clsx(
+        "rounded-lg px-3 py-1.5 text-xs font-bold transition",
+        active
+          ? "bg-cyan-300/20 text-cyan-200 shadow-sm"
+          : "text-ink-400 hover:bg-white/5 hover:text-ink-200"
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+// ─── Tab 1: Stage Parameters ─────────────────────────────────────────────────
+
+type RowType = ReturnType<typeof useStore> extends never
+  ? never
+  : StageMaster & {
+      color: string;
+      apiDisplayName: string;
+      apiTopology: ApiTopology;
+      demandKg: number;
+      siblings: StageMaster[];
+      isFirstStage: boolean;
+      isSideChainStage: boolean;
+      isSideChainAnchor: boolean;
+      sideChainFactor: number | null;
+    };
+
+function ParametersTab({
+  rows,
+  recentlyAddedStageId,
+  confirmDeleteId,
+  setConfirmDeleteId,
+  newRowRef,
+  updateStageField,
+  setStageName,
+  removeStage,
+}: {
+  rows: RowType[];
+  reactors: ReturnType<typeof useStore<any>>;
+  recentlyAddedStageId: string | null;
+  confirmDeleteId: string | null;
+  setConfirmDeleteId: (id: string | null) => void;
+  newRowRef: React.RefObject<HTMLTableRowElement>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  updateStageField: (id: string, field: any, value: number) => void;
+  setStageName: (id: string, name: string) => void;
+  removeStage: (id: string) => void;
+}) {
+  return (
+    <>
       <Card className="overflow-hidden p-0">
         <div className="max-h-[68vh] overflow-auto">
           <table className="min-w-full text-sm">
@@ -227,49 +303,20 @@ export default function StagesTab() {
                 <Th>API</Th>
                 <Th>Stage</Th>
                 <Th yellow>Stage Name</Th>
-                <Th yellow>Reactor Pool</Th>
-                <Th
-                  yellow
-                  title="Optional substitute reactors per primary reactor (BMR-defined, user-authorised, tried in listed order)."
-                >
-                  Optional Substitutes
-                </Th>
-                <Th
-                  yellow
-                  title="DAG predecessors — stages whose output feeds this stage's input. Default = the immediate previous stage. Multi-select to model convergence (S3+S7→S8) or sub-streams (S2 ← {S1, S2i})."
-                >
-                  Inputs from
-                </Th>
-                <Th align="right" yellow>
-                  Input/Batch (kg)
-                </Th>
-                <Th align="right" yellow>
-                  Output/Batch (kg)
-                </Th>
+                <Th align="right" yellow>Input/Batch (kg)</Th>
+                <Th align="right" yellow>Output/Batch (kg)</Th>
                 <Th align="right" yellow title="Batch Charging Frequency — interval between consecutive same-stage batch STARTS. start_n − start_(n−1) = BCF.">
                   BCF (h)
                 </Th>
                 <Th align="right" yellow title="Batch Cycle Time — slot duration on the reactor. The reactor is occupied for BCT hours per batch.">
                   BCT (h)
                 </Th>
-                <Th align="right" yellow>
-                  Analysis (h)
-                </Th>
-                <Th align="right" yellow>
-                  PCO (h)
-                </Th>
-                <Th align="right" locked>
-                  Required (kg)
-                </Th>
-                <Th align="right" locked>
-                  Planned
-                </Th>
-                <Th align="right" locked>
-                  Actual Output (kg)
-                </Th>
-                <Th align="right" locked>
-                  Input Consumed (kg)
-                </Th>
+                <Th align="right" yellow>Analysis (h)</Th>
+                <Th align="right" yellow>PCO (h)</Th>
+                <Th align="right" locked>Required (kg)</Th>
+                <Th align="right" locked>Planned</Th>
+                <Th align="right" locked>Actual Output (kg)</Th>
+                <Th align="right" locked>Input Consumed (kg)</Th>
                 <Th align="right">&nbsp;</Th>
               </tr>
             </thead>
@@ -297,15 +344,9 @@ export default function StagesTab() {
                       <div className="flex items-center gap-2">
                         <span
                           className="h-2.5 w-2.5 shrink-0 rounded-full"
-                          style={{
-                            background: r.color,
-                            boxShadow: `0 0 8px 0 ${r.color}80`,
-                          }}
+                          style={{ background: r.color, boxShadow: `0 0 8px 0 ${r.color}80` }}
                         />
-                        <span
-                          className="truncate"
-                          title={`${r.apiDisplayName} (id: ${r.apiId})`}
-                        >
+                        <span className="truncate" title={`${r.apiDisplayName} (id: ${r.apiId})`}>
                           {r.apiDisplayName}
                         </span>
                         <TopologyIndicator topology={r.apiTopology} />
@@ -315,30 +356,268 @@ export default function StagesTab() {
                     <td className="px-3 py-2 text-left">
                       <div
                         className="flex items-center gap-2"
-                        // Side-chain rows are indented 16px to visually nest
-                        // them under the main backbone they branch from.
-                        style={
-                          r.isSideChainStage ? { paddingLeft: 16 } : undefined
-                        }
+                        style={r.isSideChainStage ? { paddingLeft: 16 } : undefined}
                       >
                         <EditableTextCell
                           value={r.stageName}
                           onCommit={(v) => setStageName(r.id, v)}
                         />
-                        {r.isSideChainAnchor &&
-                          r.sideChainFactor !== null && (
-                            <span
-                              className="inline-flex items-center gap-1 rounded-md border border-cyan-300/40 bg-cyan-300/10 px-1.5 py-0.5 font-mono text-[9px] font-bold text-cyan-300"
-                              title={`Side-chain anchor — factor × baseStage.actualOutput sizes the demand. factor = ${r.sideChainFactor}`}
-                            >
-                              <Workflow size={9} /> side ×{" "}
-                              {formatFactor(r.sideChainFactor)}
-                            </span>
-                          )}
+                        {r.isSideChainAnchor && r.sideChainFactor !== null && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-md border border-cyan-300/40 bg-cyan-300/10 px-1.5 py-0.5 font-mono text-[9px] font-bold text-cyan-300"
+                            title={`Side-chain anchor — factor × baseStage.actualOutput sizes the demand. factor = ${r.sideChainFactor}`}
+                          >
+                            <Workflow size={9} /> side × {formatFactor(r.sideChainFactor)}
+                          </span>
+                        )}
                         {r.isSideChainStage && !r.isSideChainAnchor && (
                           <span
                             className="inline-flex items-center gap-1 rounded-md border border-cyan-300/20 bg-cyan-300/5 px-1.5 py-0.5 font-mono text-[9px] font-bold text-cyan-300/80"
                             title="Side-chain continuation — forward-cascaded from the anchor's actualOutput."
+                          >
+                            <Workflow size={9} /> side
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <EditableNumCell
+                        value={inputPerBatch}
+                        onChange={(v) => updateStageField(r.id, "inputKgPerBatch", v)}
+                      />
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <EditableNumCell
+                        value={r.batchSizeKg}
+                        onChange={(v) => updateStageField(r.id, "batchSizeKg", v)}
+                      />
+                    </td>
+                    <td className="px-3 py-2 text-right" title="BCF (Batch Charging Frequency) — interval between consecutive same-stage batch STARTS.">
+                      <EditableNumCell
+                        value={r.bcfHours}
+                        onChange={(v) => updateStageField(r.id, "bcfHours", v)}
+                      />
+                    </td>
+                    <td className="px-3 py-2 text-right" title="Batch Cycle Time — slot duration on the reactor. start + BCT = reactor free.">
+                      <EditableNumCell
+                        value={r.bctHours}
+                        onChange={(v) => updateStageField(r.id, "bctHours", v)}
+                      />
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <EditableNumCell
+                        value={r.analysisHours}
+                        onChange={(v) => updateStageField(r.id, "analysisHours", v)}
+                      />
+                    </td>
+                    <td className="px-3 py-2 text-right" title="PCO (Product Change Over) cleaning time — applied between consecutive different-campaign batches on the same reactor.">
+                      <EditableNumCell
+                        value={r.pcoHours}
+                        onChange={(v) => updateStageField(r.id, "pcoHours", v)}
+                        allowZero
+                      />
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono tabular-nums text-ink-200">
+                      <span className="inline-flex items-center gap-1" title={`Required: ${r.demandKg.toFixed(2)} kg`}>
+                        <Lock size={10} className="text-ink-500" />
+                        {Math.round(r.demandKg).toLocaleString()}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-ink-200">
+                      <span className="inline-flex items-center gap-1">
+                        <Lock size={10} className="text-ink-500" />
+                        {r.plannedBatches}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-cyan-300" title={`Actual output = planned batches × output/batch. Exact: ${actualOutput.toFixed(2)} kg`}>
+                      {Math.round(actualOutput).toLocaleString()}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono tabular-nums text-ink-200" title={`Total input consumed. Exact: ${inputConsumed.toFixed(2)} kg`}>
+                      <span className="inline-flex items-center gap-1">
+                        <Lock size={10} className="text-ink-500" />
+                        {Math.round(inputConsumed).toLocaleString()}
+                      </span>
+                    </td>
+                    <td className="px-2 py-2 text-right">
+                      {isConfirming ? (
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            onClick={() => { removeStage(r.id); setConfirmDeleteId(null); }}
+                            className="rounded-md border border-rose-300/40 bg-rose-400/15 px-2 py-1 text-[10px] font-bold text-rose-300 hover:bg-rose-400/30"
+                          >
+                            Confirm
+                          </button>
+                          <button
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[10px] font-semibold text-ink-200 hover:bg-white/10"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmDeleteId(r.id)}
+                          className="rounded-md p-1.5 text-ink-400 opacity-0 transition group-hover:opacity-100 hover:bg-rose-400/15 hover:text-rose-300"
+                          title="Delete stage"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={14} className="py-12 text-center text-sm text-ink-300">
+                    No stages match. Click{" "}
+                    <span className="font-bold text-cyan-300">+ Add Stage</span>{" "}
+                    above to create one.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+        <div className="rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-xs text-amber-200">
+          <span className="mr-1 font-bold">
+            <Pencil size={12} className="inline" /> Editable here:
+          </span>
+          Stage Name, Input/Batch (kg), Output/Batch (kg), BCF, BCT, Analysis, PCO.
+          Reactor Pool &amp; Inputs on the <span className="font-bold">Equipment &amp; Flow</span> tab.
+          Equipment on the <span className="font-bold">Master Equipment</span> tab; API target on the{" "}
+          <span className="font-bold">APIs</span> tab.
+          <span className="mt-1 block text-amber-300/80">
+            <span className="font-mono">BCF</span> = interval between same-stage batch STARTs:{" "}
+            <span className="font-mono">start_n − start_(n−1) = BCF</span>.{" "}
+            <span className="font-mono">BCT</span> = slot duration on the reactor.{" "}
+            <span className="font-mono">PCO</span> = cleaning on campaign switch; campaigns auto-clean every{" "}
+            <span className="font-mono">30 days</span>.
+          </span>
+        </div>
+        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs text-ink-300">
+          <span className="mr-1 font-bold text-ink-100">
+            <Lock size={11} className="inline" /> Cascade with yields:
+          </span>
+          <span className="font-mono text-cyan-300">
+            Planned = ⌈ Required ÷ Output/Batch ⌉
+          </span>
+          ; Input Consumed = Planned × Input/Batch ⇒ becomes upstream Required.
+          Set Input/Batch &lt; Output/Batch for yield gain (rare); &gt; for yield loss (common).
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─── Tab 2: Equipment & Flow ─────────────────────────────────────────────────
+
+function EquipmentFlowTab({
+  rows,
+  reactors,
+  recentlyAddedStageId,
+  newRowRef,
+  setStageReactorPool,
+  setStageReactorSubstitutes,
+  setStageInputs,
+}: {
+  rows: RowType[];
+  reactors: ReturnType<typeof useStore<any>>;
+  recentlyAddedStageId: string | null;
+  newRowRef: React.RefObject<HTMLTableRowElement>;
+  setStageReactorPool: (id: string, pool: string[]) => void;
+  setStageReactorSubstitutes: (id: string, subs: Record<string, string[]>) => void;
+  setStageInputs: (id: string, ids: string[]) => void;
+}) {
+  return (
+    <>
+      {/* Pointer to Master Equipment tab */}
+      <div className="flex items-center justify-between rounded-xl border border-cyan-300/20 bg-cyan-300/5 px-4 py-2.5 text-xs text-ink-200">
+        <span className="inline-flex items-center gap-2">
+          <Beaker size={12} className="text-cyan-300" />
+          To rename, reclassify, add, or delete equipment, head to the{" "}
+          <span className="font-bold text-cyan-300">Master Equipment</span> tab.
+        </span>
+        <span className="text-[10px] uppercase tracking-wider text-ink-400">
+          {reactors.length} reactors available
+        </span>
+      </div>
+
+      <Card className="overflow-hidden p-0">
+        <div className="max-h-[68vh] overflow-auto">
+          <table className="min-w-full text-sm">
+            <thead className="sticky top-0 z-10 bg-ink-900/90 backdrop-blur-md">
+              <tr className="text-left text-[11px] uppercase tracking-wider text-ink-300">
+                <Th>API</Th>
+                <Th>Stage</Th>
+                <Th yellow>Stage Name</Th>
+                <Th
+                  yellow
+                  title="Reactors in the pool for this stage. The scheduler picks any free reactor from this list."
+                >
+                  Reactor Pool
+                </Th>
+                <Th
+                  yellow
+                  title="Optional substitute reactors per primary reactor (BMR-defined, user-authorised, tried in listed order)."
+                >
+                  Optional Substitutes
+                </Th>
+                <Th
+                  yellow
+                  title="DAG predecessors — stages whose output feeds this stage's input. Default = the immediate previous stage. Multi-select to model convergence (S3+S7→S8) or sub-streams."
+                >
+                  Inputs From
+                </Th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => {
+                const isNew = r.id === recentlyAddedStageId;
+                return (
+                  <tr
+                    key={r.id}
+                    ref={isNew ? newRowRef : undefined}
+                    className={clsx(
+                      "group border-t border-white/5 transition hover:bg-white/[0.04]",
+                      i % 2 === 0 ? "bg-white/[0.01]" : "",
+                      isNew && "row-flash"
+                    )}
+                  >
+                    <td className="px-3 py-2 font-semibold text-white">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ background: r.color, boxShadow: `0 0 8px 0 ${r.color}80` }}
+                        />
+                        <span className="truncate" title={`${r.apiDisplayName} (id: ${r.apiId})`}>
+                          {r.apiDisplayName}
+                        </span>
+                        <TopologyIndicator topology={r.apiTopology} />
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5 text-ink-100">S{r.stageNo}</td>
+                    <td className="px-3 py-2 text-left">
+                      <div
+                        className="flex items-center gap-2"
+                        style={r.isSideChainStage ? { paddingLeft: 16 } : undefined}
+                      >
+                        <span className="font-mono text-xs text-ink-100">{r.stageName}</span>
+                        {r.isSideChainAnchor && r.sideChainFactor !== null && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-md border border-cyan-300/40 bg-cyan-300/10 px-1.5 py-0.5 font-mono text-[9px] font-bold text-cyan-300"
+                            title={`Side-chain anchor — factor = ${r.sideChainFactor}`}
+                          >
+                            <Workflow size={9} /> side × {formatFactor(r.sideChainFactor)}
+                          </span>
+                        )}
+                        {r.isSideChainStage && !r.isSideChainAnchor && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-md border border-cyan-300/20 bg-cyan-300/5 px-1.5 py-0.5 font-mono text-[9px] font-bold text-cyan-300/80"
+                            title="Side-chain continuation."
                           >
                             <Workflow size={9} /> side
                           </span>
@@ -377,126 +656,12 @@ export default function StagesTab() {
                         />
                       )}
                     </td>
-                    <td className="px-3 py-2 text-right">
-                      <EditableNumCell
-                        value={inputPerBatch}
-                        onChange={(v) =>
-                          updateStageField(r.id, "inputKgPerBatch", v)
-                        }
-                      />
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <EditableNumCell
-                        value={r.batchSizeKg}
-                        onChange={(v) =>
-                          updateStageField(r.id, "batchSizeKg", v)
-                        }
-                      />
-                    </td>
-                    <td
-                      className="px-3 py-2 text-right"
-                      title="BCF (Batch Charging Frequency) — interval between consecutive same-stage batch STARTS. start_n − start_(n−1) = BCF. The scheduler picks any free reactor in the pool to honour this cadence."
-                    >
-                      <EditableNumCell
-                        value={r.bcfHours}
-                        onChange={(v) => updateStageField(r.id, "bcfHours", v)}
-                      />
-                    </td>
-                    <td
-                      className="px-3 py-2 text-right"
-                      title="Batch Cycle Time — slot duration on the reactor. start + BCT = reactor free."
-                    >
-                      <EditableNumCell
-                        value={r.bctHours}
-                        onChange={(v) => updateStageField(r.id, "bctHours", v)}
-                      />
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <EditableNumCell
-                        value={r.analysisHours}
-                        onChange={(v) =>
-                          updateStageField(r.id, "analysisHours", v)
-                        }
-                      />
-                    </td>
-                    <td
-                      className="px-3 py-2 text-right"
-                      title="PCO (Product Change Over) cleaning time — applied between consecutive different-campaign batches on the same reactor. Same-campaign batches incur 0h."
-                    >
-                      <EditableNumCell
-                        value={r.pcoHours}
-                        onChange={(v) => updateStageField(r.id, "pcoHours", v)}
-                        allowZero
-                      />
-                    </td>
-                    <td className="px-3 py-2.5 text-right font-mono tabular-nums text-ink-200">
-                      <span
-                        className="inline-flex items-center gap-1"
-                        title={`Required input from this stage = next stage's actual output (or API target for the final stage). Exact: ${r.demandKg.toFixed(2)} kg`}
-                      >
-                        <Lock size={10} className="text-ink-500" />
-                        {Math.round(r.demandKg).toLocaleString()}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-ink-200">
-                      <span className="inline-flex items-center gap-1">
-                        <Lock size={10} className="text-ink-500" />
-                        {r.plannedBatches}
-                      </span>
-                    </td>
-                    <td
-                      className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-cyan-300"
-                      title={`Actual output = planned batches \u00d7 output/batch. Exact: ${actualOutput.toFixed(2)} kg`}
-                    >
-                      {Math.round(actualOutput).toLocaleString()}
-                    </td>
-                    <td
-                      className="px-3 py-2.5 text-right font-mono tabular-nums text-ink-200"
-                      title={`Total input consumed by this stage = planned batches \u00d7 input/batch. This is the demand placed on the previous stage's output. Exact: ${inputConsumed.toFixed(2)} kg`}
-                    >
-                      <span className="inline-flex items-center gap-1">
-                        <Lock size={10} className="text-ink-500" />
-                        {Math.round(inputConsumed).toLocaleString()}
-                      </span>
-                    </td>
-                    <td className="px-2 py-2 text-right">
-                      {isConfirming ? (
-                        <div className="inline-flex items-center gap-1">
-                          <button
-                            onClick={() => {
-                              removeStage(r.id);
-                              setConfirmDeleteId(null);
-                            }}
-                            className="rounded-md border border-rose-300/40 bg-rose-400/15 px-2 py-1 text-[10px] font-bold text-rose-300 hover:bg-rose-400/30"
-                          >
-                            Confirm
-                          </button>
-                          <button
-                            onClick={() => setConfirmDeleteId(null)}
-                            className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[10px] font-semibold text-ink-200 hover:bg-white/10"
-                          >
-                            ×
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => setConfirmDeleteId(r.id)}
-                          className="rounded-md p-1.5 text-ink-400 opacity-0 transition group-hover:opacity-100 hover:bg-rose-400/15 hover:text-rose-300"
-                          title="Delete stage"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      )}
-                    </td>
                   </tr>
                 );
               })}
               {rows.length === 0 && (
                 <tr>
-                  <td
-                    colSpan={18}
-                    className="py-12 text-center text-sm text-ink-300"
-                  >
+                  <td colSpan={6} className="py-12 text-center text-sm text-ink-300">
                     No stages match. Click{" "}
                     <span className="font-bold text-cyan-300">+ Add Stage</span>{" "}
                     above to create one.
@@ -508,49 +673,23 @@ export default function StagesTab() {
         </div>
       </Card>
 
-      <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
-        <div className="rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-xs text-amber-200">
-          <span className="mr-1 font-bold">
-            <Pencil size={12} className="inline" /> Editable here:
-          </span>
-          Stage Name, Reactor Pool, Inputs from, Input/Batch (kg), Output/Batch
-          (kg), BCF, BCT, Analysis, PCO. Equipment on the{" "}
-          <span className="font-bold">Master Equipment</span> tab; API target on
-          the <span className="font-bold">APIs</span> tab.
-          <span className="mt-1 block text-amber-300/80">
-            <GitBranch size={11} className="mr-0.5 inline" />{" "}
-            <span className="font-mono">Inputs from</span> = DAG predecessor
-            stages whose output feeds this stage. Default is the immediate
-            previous stage. Pick multiple for convergence (S3+S7→S8) or a
-            sub-stream (S2 ← {"{"}S1, S2i{"}"}).
-          </span>
-          <span className="mt-1 block text-amber-300/80">
-            <span className="font-mono">BCF</span> = interval between
-            same-stage batch STARTs:{" "}
-            <span className="font-mono">start_n − start_(n−1) = BCF</span>.{" "}
-            <span className="font-mono">BCT</span> = slot duration on the
-            reactor (reactor occupancy per batch — also the active
-            processing time).{" "}
-            <span className="font-mono">PCO</span> = cleaning on campaign
-            switch; campaigns auto-clean every{" "}
-            <span className="font-mono">30 days</span>.
-          </span>
-        </div>
-        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs text-ink-300">
-          <span className="mr-1 font-bold text-ink-100">
-            <Lock size={11} className="inline" /> Cascade with yields:
-          </span>
-          <span className="font-mono text-cyan-300">
-            Planned = ⌈ Required ÷ Output/Batch ⌉
-          </span>
-          ; Input Consumed = Planned × Input/Batch ⇒ becomes upstream Required.
-          Set Input/Batch &lt; Output/Batch for yield gain (rare); &gt; for yield
-          loss (common).
-        </div>
+      <div className="rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-xs text-amber-200">
+        <span className="mr-1 font-bold">
+          <Pencil size={12} className="inline" /> Editable here:
+        </span>
+        Reactor Pool, Optional Substitutes, Inputs From.{" "}
+        <span className="mt-1 block text-amber-300/80">
+          <GitBranch size={11} className="mr-0.5 inline" />{" "}
+          <span className="font-mono">Inputs from</span> = DAG predecessor stages whose output feeds this stage.
+          Default is the immediate previous stage. Pick multiple for convergence (S3+S7→S8)
+          or a sub-stream (S2 ← {"{"}S1, S2i{"}"}).
+        </span>
       </div>
-    </div>
+    </>
   );
 }
+
+// ─── Shared helpers ──────────────────────────────────────────────────────────
 
 function Th({
   children,
@@ -576,9 +715,7 @@ function Th({
       )}
     >
       <span className="inline-flex items-center gap-1">
-        {yellow && (
-          <span className="inline-block h-2 w-2 rounded-sm bg-amber-300/80" />
-        )}
+        {yellow && <span className="inline-block h-2 w-2 rounded-sm bg-amber-300/80" />}
         {locked && <Lock size={10} className="opacity-60" />}
         {children}
       </span>
@@ -593,24 +730,15 @@ function EditableNumCell({
 }: {
   value: number;
   onChange: (v: number) => void;
-  /**
-   * If true, 0 is a valid input (e.g. PCO = 0 means "no cleaning required").
-   * Defaults to false, in which case the minimum is 1.
-   */
   allowZero?: boolean;
 }) {
-  // Local string state so transient empty/partial input isn't clamped on
-  // every keystroke. Commit only on blur or Enter.
   const [local, setLocal] = useState(String(value));
   useEffect(() => setLocal(String(value)), [value]);
 
   const min = allowZero ? 0 : 1;
   const commit = () => {
     const parsed = Number(local);
-    if (!Number.isFinite(parsed)) {
-      setLocal(String(value));
-      return;
-    }
+    if (!Number.isFinite(parsed)) { setLocal(String(value)); return; }
     const v = Math.max(min, parsed);
     if (v !== value) onChange(v);
     setLocal(String(v));
@@ -625,21 +753,13 @@ function EditableNumCell({
       onBlur={commit}
       onKeyDown={(e) => {
         if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-        if (e.key === "Escape") {
-          setLocal(String(value));
-          (e.target as HTMLInputElement).blur();
-        }
+        if (e.key === "Escape") { setLocal(String(value)); (e.target as HTMLInputElement).blur(); }
       }}
       className="cell-yellow w-24 rounded-md px-2 py-1 text-right font-mono text-sm tabular-nums transition"
     />
   );
 }
 
-/**
- * Tiny inline icon next to the API name showing which topology preset is
- * active. Linear stays muted; parallel and side-chains light up so the
- * stage list visually mirrors the APIs tab badges.
- */
 function TopologyIndicator({ topology }: { topology: ApiTopology }) {
   if (topology === "parallel") {
     return (
@@ -671,22 +791,13 @@ function TopologyIndicator({ topology }: { topology: ApiTopology }) {
   );
 }
 
-/** Pretty-print a side-chain factor like 0.3 / 1.25 with at most 2 decimals. */
 function formatFactor(f: number): string {
   if (!Number.isFinite(f)) return "?";
   return Number.isInteger(f) ? `${f}` : f.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 }
 
-/**
- * One-line summary of how many APIs are on each topology preset, e.g.
- *   "18 linear · 1 parallel · 1 side-chains"
- * Used as a subtitle hint in the section header so the user sees the
- * shape of their workspace at a glance.
- */
 function topologyBreakdown(apis: { topology?: ApiTopology }[]): string {
-  let linear = 0;
-  let parallel = 0;
-  let side = 0;
+  let linear = 0, parallel = 0, side = 0;
   for (const a of apis) {
     const t = a.topology ?? "linear";
     if (t === "parallel") parallel++;
@@ -723,13 +834,9 @@ function EditableTextCell({
       }}
       onKeyDown={(e) => {
         if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-        if (e.key === "Escape") {
-          setLocal(value);
-          (e.target as HTMLInputElement).blur();
-        }
+        if (e.key === "Escape") { setLocal(value); (e.target as HTMLInputElement).blur(); }
       }}
       className="cell-yellow w-full max-w-[180px] rounded-md px-2 py-1 text-left font-mono text-xs transition"
     />
   );
 }
-
