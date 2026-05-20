@@ -159,7 +159,7 @@ export default function ReactorSubstitutesEditor({
                       {primary ? (primary.name === primaryId ? primaryId : `${primary.name}`) : primaryId}
                     </span>
                     <span className="text-[10px] text-ink-500">
-                      ({primary?.moc ?? "?"} · {primary?.capacityKg ?? "?"}kg)
+                      ({primary?.moc ?? "?"} · {primary?.capacityKg ?? "?"}L)
                     </span>
                   </div>
 
@@ -184,7 +184,7 @@ export default function ReactorSubstitutesEditor({
                                   : `${sub.name} (${subId})`
                                 : subId}
                               <span className="ml-1 text-ink-500">
-                                {sub ? `· ${sub.moc} · ${sub.capacityKg}kg` : ""}
+                                {sub ? `· ${sub.moc} · ${sub.capacityKg}L` : ""}
                               </span>
                             </span>
                             <button
@@ -244,7 +244,7 @@ export default function ReactorSubstitutesEditor({
                               <optgroup key={moc} label={moc}>
                                 {group.map((r) => (
                                   <option key={r.id} value={r.id} className="bg-ink-900">
-                                    {reactorLabel(r.id)} · {r.capacityKg}kg
+                                    {reactorLabel(r.id)} · {r.capacityKg}L
                                   </option>
                                 ))}
                               </optgroup>

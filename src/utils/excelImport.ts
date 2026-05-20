@@ -98,8 +98,23 @@ function isNA(cell: AnyCell): boolean {
 }
 
 function extractStageNo(stageName: string): number | null {
-  const m = stageName.match(/-[Ss](\d+)$/);
-  return m ? parseInt(m[1], 10) : null;
+  // Most specific first — avoids false positives on reactor IDs ("R203" → 3).
+  let m = stageName.match(/-[Ss](\d+)(?:\b|$)/);       // "API-S3"
+  if (m) return parseInt(m[1], 10);
+  m = stageName.match(/_[Ss](\d+)(?:\b|$)/);            // "API_S3"
+  if (m) return parseInt(m[1], 10);
+  m = stageName.match(/^[Ss](\d+)$/);                   // bare "S3"
+  if (m) return parseInt(m[1], 10);
+  m = stageName.match(/(?:stage|step)\s*[-_]?\s*(\d+)/i); // "Stage 3", "Step-3"
+  if (m) return parseInt(m[1], 10);
+  m = stageName.match(/[-_\s](\d+)\s*$/);               // trailing "- 3", "_ 3"
+  if (m) return parseInt(m[1], 10);
+  return null;
+}
+
+/** Lower-cased, trimmed key for case-insensitive API name matching across sheets. */
+function normalizeKey(s: string): string {
+  return s.toLowerCase();
 }
 
 // ─── Internal stage data structure ───────────────────────────────────────────
@@ -164,8 +179,11 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
     const pmDays = cellNum(row.getCell(12));    // col L: PM Duration (days)
     const bmDate = cellDate(row.getCell(13));   // col M: Building Maint. First Date
 
+    const rawClassUp = (rawClass ?? "").toUpperCase();
     const reactorClass =
-      rawClass === "CL" || rawClass === "INT" ? rawClass : undefined;
+      rawClassUp === "CL" || rawClassUp === "INT"
+        ? (rawClassUp as "CL" | "INT")
+        : undefined;
 
     reactorIds.add(equipId);
     reactors.push({
@@ -207,10 +225,12 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
 
     if (!carryApi || !carryStageNo) return;
 
-    let stageMap = stageDataByApi.get(carryApi);
+    // Use normalised key so API names that differ only in case still match.
+    const apiKey = normalizeKey(carryApi);
+    let stageMap = stageDataByApi.get(apiKey);
     if (!stageMap) {
       stageMap = new Map();
-      stageDataByApi.set(carryApi, stageMap);
+      stageDataByApi.set(apiKey, stageMap);
     }
 
     // First row for this stage: capture stage-level params
@@ -278,6 +298,10 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
     const mainStages = Math.max(1, cellNum(row.getCell(9)) ?? 1); // col I
     const plannedBatchesOverride = cellNum(row.getCell(25)) ?? null; // col Y
 
+    // Look up Stages sheet data now (normalised key) so it's available to both
+    // the linear-length calculation and the per-stage overlay below.
+    const stageMap = stageDataByApi.get(normalizeKey(name));
+
     // Build topology spec
     let topoSpec: TopologyPresetSpec;
     let topology: API["topology"] = "linear";
@@ -336,15 +360,15 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
       };
     } else {
       topology = "linear";
-      // Pass the stage count so applyTopologyPresetToApi scaffolds stages from
-      // scratch (it returns 0 stages for linear when api.stages is empty).
+      // Pass stage count so applyTopologyPresetToApi scaffolds from scratch.
+      // Guard against stageMap.size===0 (stage names unreadable) — fall back
+      // to mainStages from the API sheet so we at least get the right count.
       const linearLength =
-        stageDataByApi.get(name)?.size ?? Math.max(1, mainStages);
+        (stageMap?.size ?? 0) > 0 ? stageMap!.size : Math.max(1, mainStages);
       topoSpec = { kind: "linear", length: linearLength };
     }
 
-    // Build scaffold defaults from first stage's parsed data (if any)
-    const stageMap = stageDataByApi.get(name);
+    // (stageMap already looked up above)
     const first = stageMap?.get(1);
     const defaults = {
       batchSizeKg: first?.batchSizeKg ?? 100,
