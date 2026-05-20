@@ -15,6 +15,12 @@ export type TopologyPresetSpec =
 
 export interface LinearSpec {
   kind: "linear";
+  /**
+   * Number of stages to scaffold. 0 (default) = no scaffolding — existing
+   * stages are carried as trailing rows and re-wired linearly (UI behaviour).
+   * Pass a positive integer from the importer to scaffold stages from scratch.
+   */
+  length?: number;
 }
 
 export interface ParallelSpec {
@@ -239,19 +245,23 @@ interface ScaffoldPosition {
 }
 
 function buildPositions(spec: TopologyPresetSpec): ScaffoldPosition[] {
-  if (spec.kind === "linear") return buildLinearPositions();
+  if (spec.kind === "linear") return buildLinearPositions(spec.length ?? 0);
   if (spec.kind === "parallel") return buildParallelPositions(spec);
   return buildSideChainsPositions(spec);
 }
 
 /**
- * Linear topology — degenerate scaffold with zero positions. The store
- * action handles "linear" by leaving existing stages in place and just
- * re-wiring them as a chain (see below). Returning [] makes the merge
- * path collapse to "all existing stages become trailing → linear wired".
+ * Linear topology scaffold. When `length` is 0 (UI default) no positions are
+ * emitted — existing stages become trailing rows and are re-wired as a chain.
+ * When `length > 0` (import path) the requested number of stages are
+ * scaffolded fresh so an API with no existing stages still gets content.
  */
-function buildLinearPositions(): ScaffoldPosition[] {
-  return [];
+function buildLinearPositions(length = 0): ScaffoldPosition[] {
+  if (length <= 0) return [];
+  return Array.from({ length }, (_, i) => ({
+    defaultName: `S${i + 1}`,
+    inputStageNos: i === 0 ? [] : [i], // stage i+1 depends on stage i (1-based)
+  }));
 }
 
 function buildParallelPositions(spec: ParallelSpec): ScaffoldPosition[] {

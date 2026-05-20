@@ -1,9 +1,12 @@
 /**
  * Excel import parser for the standard three-sheet template:
- *   "API"              — API list with topology spec (data from row 6, cols B–X)
- *   "Stages"           — Per-stage operational params (data from row 4, cols A–N)
+ *   "API"              — API list with topology spec (data from row 6, cols B–Y)
+ *                        Y(25)=PlannedBatches (optional override; cascade still runs)
+ *   "Stages"           — Per-stage operational params (data from row 4, cols A–O)
+ *                        O(15)=ProcessHours (active time within BCT slot)
  *                        Multi-reactor rows use merged-cell carry-forward.
- *   "Master Equipment" — Reactor registry (data from row 3, cols A–H)
+ *   "Master Equipment" — Reactor registry (data from row 3, cols A–M)
+ *                        I(9)=Class  J(10)=Block  K(11)=PM Date  L(12)=PM Days  M(13)=Bldg Maint Date
  *
  * ExcelJS is dynamically imported so it stays out of the main bundle.
  */
@@ -102,10 +105,12 @@ function extractStageNo(stageName: string): number | null {
 // ─── Internal stage data structure ───────────────────────────────────────────
 
 interface ParsedStageData {
+  stageName: string;
   inputKgPerBatch: number;
   batchSizeKg: number;
   bcfHours: number;
   bctHours: number;
+  processHours: number;
   analysisHours: number;
   pcoHours: number;
   reactorPool: string[];
@@ -153,6 +158,15 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
     const moc = cellStr(row.getCell(6));      // col F: MOC
     const agitator = cellStr(row.getCell(7)); // col G: Agitator
     const cap = cellNum(row.getCell(8));      // col H: Capacity
+    const rawClass = cellStr(row.getCell(9)); // col I: Reactor Class (CL/INT)
+    const prodBlock = cellStr(row.getCell(10)); // col J: Production Block
+    const pmDate = cellDate(row.getCell(11));   // col K: PM First Date
+    const pmDays = cellNum(row.getCell(12));    // col L: PM Duration (days)
+    const bmDate = cellDate(row.getCell(13));   // col M: Building Maint. First Date
+
+    const reactorClass =
+      rawClass === "CL" || rawClass === "INT" ? rawClass : undefined;
+
     reactorIds.add(equipId);
     reactors.push({
       id: equipId,
@@ -160,6 +174,11 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
       moc: migrateMoc(moc),
       agitatorType: migrateAgitator(agitator),
       capacityKg: cap ?? 0,
+      ...(reactorClass !== undefined ? { reactorClass } : {}),
+      ...(prodBlock ? { productionBlock: prodBlock } : {}),
+      ...(pmDate !== null ? { pmFirstDateMs: pmDate } : {}),
+      ...(pmDays !== null ? { pmDurationDays: pmDays } : {}),
+      ...(bmDate !== null ? { buildingMaintenanceFirstDateMs: bmDate } : {}),
     });
   });
 
@@ -172,6 +191,7 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
   const stageDataByApi = new Map<string, Map<number, ParsedStageData>>();
   let carryApi = "";
   let carryStageNo: number | null = null;
+  let carryStageStr = "";
 
   stagesSheet!.eachRow({ includeEmpty: true }, (row, rn) => {
     if (rn <= 3) return; // rows 1–3 are headers
@@ -182,6 +202,7 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
     if (rawApi) carryApi = rawApi;
     if (rawStage) {
       carryStageNo = extractStageNo(rawStage);
+      carryStageStr = rawStage;
     }
 
     if (!carryApi || !carryStageNo) return;
@@ -194,11 +215,14 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
 
     // First row for this stage: capture stage-level params
     if (!stageMap.has(carryStageNo)) {
+      const bct = cellNum(row.getCell(6)) ?? 120;        // col F: BCT
       stageMap.set(carryStageNo, {
+        stageName: carryStageStr,
         inputKgPerBatch: cellNum(row.getCell(3)) ?? 100, // col C
         batchSizeKg: cellNum(row.getCell(4)) ?? 100,     // col D
         bcfHours: cellNum(row.getCell(5)) ?? 120,        // col E
-        bctHours: cellNum(row.getCell(6)) ?? 120,        // col F
+        bctHours: bct,
+        processHours: cellNum(row.getCell(15)) ?? bct,   // col O (active time within BCT; defaults to bct)
         analysisHours: cellNum(row.getCell(7)) ?? 0,     // col G
         pcoHours: cellNum(row.getCell(8)) ?? 8,          // col H
         reactorPool: [],
@@ -252,6 +276,7 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
     const endMs = cellDate(row.getCell(6)) ?? FY_END_MS;
     const topoStr = (cellStr(row.getCell(7)) ?? "Linear").toLowerCase();
     const mainStages = Math.max(1, cellNum(row.getCell(9)) ?? 1); // col I
+    const plannedBatchesOverride = cellNum(row.getCell(25)) ?? null; // col Y
 
     // Build topology spec
     let topoSpec: TopologyPresetSpec;
@@ -311,7 +336,11 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
       };
     } else {
       topology = "linear";
-      topoSpec = { kind: "linear" };
+      // Pass the stage count so applyTopologyPresetToApi scaffolds stages from
+      // scratch (it returns 0 stages for linear when api.stages is empty).
+      const linearLength =
+        stageDataByApi.get(name)?.size ?? Math.max(1, mainStages);
+      topoSpec = { kind: "linear", length: linearLength };
     }
 
     // Build scaffold defaults from first stage's parsed data (if any)
@@ -322,10 +351,10 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
       inputKgPerBatch: first?.inputKgPerBatch ?? 100,
       bcfHours: first?.bcfHours ?? 120,
       bctHours: first?.bctHours ?? 120,
-      processHours: first?.bctHours ?? 120,
+      processHours: first?.processHours ?? first?.bctHours ?? 120,
       analysisHours: first?.analysisHours ?? 0,
       pcoHours: first?.pcoHours ?? 8,
-      plannedBatches: 1,
+      plannedBatches: plannedBatchesOverride ?? 1,
       reactorPool: first?.reactorPool.slice() ?? [],
     };
 
@@ -350,11 +379,12 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
       if (!data) return stage;
       return {
         ...stage,
+        stageName: data.stageName || stage.stageName,
         batchSizeKg: data.batchSizeKg,
         inputKgPerBatch: data.inputKgPerBatch,
         bcfHours: data.bcfHours,
         bctHours: data.bctHours,
-        processHours: data.bctHours,
+        processHours: data.processHours,
         analysisHours: data.analysisHours,
         pcoHours: data.pcoHours,
         reactorPool: data.reactorPool.slice(),
