@@ -1,12 +1,21 @@
 /**
  * Excel import parser for the standard three-sheet template:
  *   "API"              — API list with topology spec (data from row 6, cols B–Y)
+ *                        B(2)=Sl.No  C(3)=Name  D(4)=TargetKg  E(5)=Start  F(6)=End
+ *                        G(7)=Topology  H(8)=TotalStages  I(9)=MainStages
+ *                        Side chains:  J/K/L  M/N/O  P/Q/R  (merge / factor / length)
+ *                        Parallel:     S/T/U sub-chain lengths, V/W/X merge & factors
  *                        Y(25)=PlannedBatches (optional override; cascade still runs)
- *   "Stages"           — Per-stage operational params (data from row 4, cols A–O)
- *                        O(15)=ProcessHours (active time within BCT slot)
- *                        Multi-reactor rows use merged-cell carry-forward.
- *   "Master Equipment" — Reactor registry (data from row 3, cols A–M)
- *                        I(9)=Class  J(10)=Block  K(11)=PM Date  L(12)=PM Days  M(13)=Bldg Maint Date
+ *   "Stages"           — Per-stage operational params (data from row 3, cols A–N)
+ *                        A=API  B=Stage  C=Input/Batch  D=Output/Batch
+ *                        E=BCF  F=BCT  G=Analysis  H=PCO
+ *                        I=Nos  J=Main  K–N=Substitutes P1–P4
+ *                        O(15)=ProcessHours (optional; falls back to BCT)
+ *                        Stage numbers are assigned by encounter order per API,
+ *                        so names like "DT1", "DT2C", "AX7" work without regex.
+ *   "Master Equipment" — Reactor registry (data from row 3, cols A–I)
+ *                        A=Sl.No  B=Unit  C=Block  D=Class (CL/INT)  E=Name
+ *                        F=MOC  G=Agitator  H=Capacity (L)  I=PM First Date
  *
  * ExcelJS is dynamically imported so it stays out of the main bundle.
  */
@@ -97,24 +106,16 @@ function isNA(cell: AnyCell): boolean {
   return s.toUpperCase() === "NA" || s === "" || s === "-";
 }
 
-function extractStageNo(stageName: string): number | null {
-  // Most specific first — avoids false positives on reactor IDs ("R203" → 3).
-  let m = stageName.match(/-[Ss](\d+)(?:\b|$)/);       // "API-S3"
-  if (m) return parseInt(m[1], 10);
-  m = stageName.match(/_[Ss](\d+)(?:\b|$)/);            // "API_S3"
-  if (m) return parseInt(m[1], 10);
-  m = stageName.match(/^[Ss](\d+)$/);                   // bare "S3"
-  if (m) return parseInt(m[1], 10);
-  m = stageName.match(/(?:stage|step)\s*[-_]?\s*(\d+)/i); // "Stage 3", "Step-3"
-  if (m) return parseInt(m[1], 10);
-  m = stageName.match(/[-_\s](\d+)\s*$/);               // trailing "- 3", "_ 3"
-  if (m) return parseInt(m[1], 10);
-  return null;
-}
-
 /** Lower-cased, trimmed key for case-insensitive API name matching across sheets. */
 function normalizeKey(s: string): string {
   return s.toLowerCase();
+}
+
+/** Strip internal whitespace so "GLR 102" (Equipment) matches "GLR102" (Stages). */
+function normalizeReactorId(s: string | null): string | null {
+  if (s === null) return null;
+  const cleaned = s.replace(/\s+/g, "");
+  return cleaned === "" ? null : cleaned;
 }
 
 // ─── Internal stage data structure ───────────────────────────────────────────
@@ -164,20 +165,22 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
   const reactorIds = new Set<string>();
   equipSheet!.eachRow({ includeEmpty: false }, (row, rn) => {
     if (rn <= 2) return; // rows 1–2 are headers
-    const equipId = cellStr(row.getCell(5)); // col E: Equipment ID
+    const equipId = normalizeReactorId(cellStr(row.getCell(5))); // col E: NAME
     if (!equipId) return;
     if (reactorIds.has(equipId)) {
       warnings.push(`Duplicate equipment ID "${equipId}" at row ${rn} — skipped.`);
       return;
     }
-    const moc = cellStr(row.getCell(6));      // col F: MOC
-    const agitator = cellStr(row.getCell(7)); // col G: Agitator
-    const cap = cellNum(row.getCell(8));      // col H: Capacity
-    const rawClass = cellStr(row.getCell(9)); // col I: Reactor Class (CL/INT)
-    const prodBlock = cellStr(row.getCell(10)); // col J: Production Block
-    const pmDate = cellDate(row.getCell(11));   // col K: PM First Date
-    const pmDays = cellNum(row.getCell(12));    // col L: PM Duration (days)
-    const bmDate = cellDate(row.getCell(13));   // col M: Building Maint. First Date
+    const prodBlock = cellStr(row.getCell(3));  // col C: BLOCK
+    const rawClass = cellStr(row.getCell(4));   // col D: CLASS (CL/INT)
+    const moc = cellStr(row.getCell(6));        // col F: MOC
+    const agitator = cellStr(row.getCell(7));   // col G: AGITATOR
+    const cap = cellNum(row.getCell(8));        // col H: CAP.(L)
+    const pmDate = cellDate(row.getCell(9));    // col I: PM FIRST DATE
+    // Optional extended-template columns (this template only goes through I,
+    // but accept them when present for forwards-compat with richer files).
+    const pmDays = cellNum(row.getCell(12));    // col L: PM Duration (days), if present
+    const bmDate = cellDate(row.getCell(13));   // col M: Building Maint. First Date, if present
 
     const rawClassUp = (rawClass ?? "").toUpperCase();
     const reactorClass =
@@ -202,25 +205,47 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
 
   // ── 2. Stages sheet → Map<apiName, Map<stageNo, ParsedStageData>> ──────────
   //
-  // The sheet uses Excel merged cells for multi-reactor rows:
-  // first row of a stage group has all cols A–H + col I=1 + col J=reactor1
-  // continuation rows have only col I (Nos) and col J (Main reactor).
+  // Data starts at row 3 (rows 1–2 are merged group/sub headers).
+  // Stage numbers are assigned by encounter order per API — the Excel sheet
+  // lists stages in topology order, so the Nth distinct stage name for an API
+  // becomes stageNo N. This handles names like "DT1", "DT2C", "DT3I", "AX7"
+  // uniformly without trying to extract numbers from the name itself.
+  //
+  // Multi-reactor rows repeat (or merge) the API + Stage columns:
+  //   first row has all cols A–H filled + col I=Nos + col J=reactor1
+  //   continuation rows may repeat A/B or leave them blank (merged cells)
   // Substitutes P1–P4 (cols K–N) are per reactor row.
   const stageDataByApi = new Map<string, Map<number, ParsedStageData>>();
+  const stageNameToNo = new Map<string, Map<string, number>>(); // per-API: name → stageNo
+  const stageNoCounter = new Map<string, number>();             // per-API: next number
   let carryApi = "";
   let carryStageNo: number | null = null;
   let carryStageStr = "";
 
   stagesSheet!.eachRow({ includeEmpty: true }, (row, rn) => {
-    if (rn <= 3) return; // rows 1–3 are headers
+    if (rn <= 2) return; // rows 1–2 are headers; data starts row 3
 
     const rawApi = cellStr(row.getCell(1));   // col A
     const rawStage = cellStr(row.getCell(2)); // col B
 
     if (rawApi) carryApi = rawApi;
-    if (rawStage) {
-      carryStageNo = extractStageNo(rawStage);
+    if (rawStage && carryApi) {
       carryStageStr = rawStage;
+      const apiKey = normalizeKey(carryApi);
+      let nameMap = stageNameToNo.get(apiKey);
+      if (!nameMap) {
+        nameMap = new Map();
+        stageNameToNo.set(apiKey, nameMap);
+      }
+      const existing = nameMap.get(rawStage);
+      if (existing !== undefined) {
+        carryStageNo = existing;
+      } else {
+        const nextNo = (stageNoCounter.get(apiKey) ?? 0) + 1;
+        stageNoCounter.set(apiKey, nextNo);
+        nameMap.set(rawStage, nextNo);
+        carryStageNo = nextNo;
+      }
     }
 
     if (!carryApi || !carryStageNo) return;
@@ -242,7 +267,7 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
         batchSizeKg: cellNum(row.getCell(4)) ?? 100,     // col D
         bcfHours: cellNum(row.getCell(5)) ?? 120,        // col E
         bctHours: bct,
-        processHours: cellNum(row.getCell(15)) ?? bct,   // col O (active time within BCT; defaults to bct)
+        processHours: cellNum(row.getCell(15)) ?? bct,   // col O (optional; defaults to bct)
         analysisHours: cellNum(row.getCell(7)) ?? 0,     // col G
         pcoHours: cellNum(row.getCell(8)) ?? 8,          // col H
         reactorPool: [],
@@ -251,7 +276,7 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
     }
 
     // Reactor row: col J = Main reactor ID; cols K–N = substitutes P1–P4
-    const mainReactor = cellStr(row.getCell(10)); // col J
+    const mainReactor = normalizeReactorId(cellStr(row.getCell(10)));
     if (!mainReactor || isNA(row.getCell(10))) return;
 
     const data = stageMap.get(carryStageNo)!;
@@ -264,8 +289,11 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
       row.getCell(13), // P3
       row.getCell(14), // P4
     ]
-      .map(cellStr)
-      .filter((s): s is string => s !== null && s.toUpperCase() !== "NA");
+      .map((c) => {
+        if (isNA(c)) return null;
+        return normalizeReactorId(cellStr(c));
+      })
+      .filter((s): s is string => s !== null);
     if (subs.length > 0) {
       data.reactorSubstitutes[mainReactor] = subs;
     }
