@@ -460,6 +460,25 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
     cascadePlannedBatches
   );
 
+  // Diagnostic: surface any API whose stages came back with empty reactor
+  // pools — that's almost always a sign the Stages sheet wasn't parsed
+  // correctly for that API (e.g. name mismatch between API sheet and
+  // Stages sheet).
+  apis.forEach((api) => {
+    const emptyPoolCount = api.stages.filter(
+      (s) => !s.reactorPool || s.reactorPool.length === 0
+    ).length;
+    if (emptyPoolCount === api.stages.length && api.stages.length > 0) {
+      warnings.push(
+        `API "${api.name}": all ${api.stages.length} stages have empty reactor pools — check the Stages sheet has rows for this API name (case-insensitive match).`
+      );
+    } else if (emptyPoolCount > 0) {
+      warnings.push(
+        `API "${api.name}": ${emptyPoolCount} of ${api.stages.length} stages have no reactors assigned.`
+      );
+    }
+  });
+
   // Warn about reactors referenced in stages but absent from Equipment sheet
   const allRefsInStages = new Set<string>();
   apis.forEach((api) =>
@@ -477,6 +496,29 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
       );
     }
   });
+
+  // Dev-console diagnostic so users can verify exactly what landed in
+  // the import — invaluable when a UI shows defaults and the user isn't
+  // sure whether parsing failed or the import wasn't applied.
+  if (typeof console !== "undefined") {
+    // eslint-disable-next-line no-console
+    console.info(
+      `[Excel import] ${apis.length} APIs · ${apis.reduce(
+        (n, a) => n + a.stages.length,
+        0
+      )} stages · ${reactors.length} reactors`,
+      apis.map((a) => ({
+        name: a.name,
+        topology: a.topology,
+        stages: a.stages.map((s) => ({
+          n: s.stageNo,
+          name: s.stageName,
+          pool: s.reactorPool,
+          subs: s.reactorSubstitutes ?? {},
+        })),
+      }))
+    );
+  }
 
   const stageCount = apis.reduce((n, a) => n + a.stages.length, 0);
   return {
