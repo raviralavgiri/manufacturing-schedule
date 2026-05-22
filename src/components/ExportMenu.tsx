@@ -5,6 +5,7 @@ import {
   Image as ImageIcon,
   FileText,
   FileSpreadsheet,
+  Layers,
   Printer,
   Loader2,
 } from "lucide-react";
@@ -16,6 +17,8 @@ interface Props {
   onReactorCsv?: () => void;
   /** Visual Gantt grid as Excel — coloured cells per reactor × week. */
   onGanttXls?: () => void;
+  /** Combined workbook — re-importable inputs + schedule + Gantt grids. */
+  onGlobalXls?: () => Promise<void> | void;
   onPng?: () => Promise<void> | void;
   onPrint?: () => void;
   /** Override the button's primary label (default "Export"). */
@@ -28,6 +31,7 @@ export default function ExportMenu({
   onCsv,
   onReactorCsv,
   onGanttXls,
+  onGlobalXls,
   onPng,
   onPrint,
   label = "Export",
@@ -113,6 +117,17 @@ export default function ExportMenu({
               onClick={() => {
                 setOpen(false);
                 onGanttXls();
+              }}
+            />
+          )}
+          {onGlobalXls && (
+            <ExportItem
+              icon={<Layers size={13} />}
+              title="Global workbook (Excel)"
+              subtitle="inputs + schedule + Gantt in one file"
+              onClick={() => {
+                setOpen(false);
+                void onGlobalXls();
               }}
             />
           )}

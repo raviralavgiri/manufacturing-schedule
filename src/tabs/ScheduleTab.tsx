@@ -4,10 +4,11 @@ import { clsx } from "clsx";
 import { useStore } from "../store";
 import { Card, SectionHeader, Tag } from "../components/Primitives";
 import ExportMenu from "../components/ExportMenu";
-import { fmtDate, fmtDateTime } from "../utils/dates";
+import { computeWeeks, fmtDate, fmtDateTime } from "../utils/dates";
 import {
   downloadCsv,
   downloadElementAsPng,
+  downloadGlobalWorkbookAsXls,
   fileStamp,
   printPage,
 } from "../utils/exporters";
@@ -189,6 +190,17 @@ export default function ScheduleTab() {
         right={
           <ExportMenu
             onCsv={exportCsv}
+            onGlobalXls={async () => {
+              await downloadGlobalWorkbookAsXls(
+                `plan_global_${fileStamp()}.xlsx`,
+                {
+                  apis: apisRaw,
+                  reactors,
+                  schedule,
+                  weeks: computeWeeks(planWindow.startMs, planWindow.endMs),
+                }
+              );
+            }}
             onPng={async () => {
               await downloadElementAsPng(
                 tableCardRef.current,

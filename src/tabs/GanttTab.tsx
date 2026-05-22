@@ -20,12 +20,13 @@ import MultiSelectPopover, {
 import ExportMenu from "../components/ExportMenu";
 import { computeWeeks, fmtDateTime } from "../utils/dates";
 import {
+  buildGanttGridSheets,
   downloadCsv,
   downloadElementAsPng,
   downloadGanttGridAsXls,
+  downloadGlobalWorkbookAsXls,
   fileStamp,
   printPage,
-  type GanttGridRow,
 } from "../utils/exporters";
 import type { BatchScheduleEntry, Reactor } from "../types";
 
@@ -467,144 +468,26 @@ export default function GanttTab() {
                 );
               }}
               onGanttXls={async () => {
-                // Build three Gantt-grid sheets (by-reactor, by-stage,
-                // by-api). Each sheet shares the same week / quarter
-                // header but rows + filtering differ. Cell color = API.
-                const weekMs = 7 * 24 * 3600 * 1000;
-                const totalWeeks = weeks.length;
-
-                // Helper: paint every week a batch overlaps onto the
-                // given cell array. Last write wins so longer-running
-                // batches stay visible if multiple share a week.
-                const paintBatchOnto = (
-                  cells: GanttGridRow["weeks"],
-                  b: BatchScheduleEntry
-                ) => {
-                  const startWk = Math.max(
-                    0,
-                    Math.floor((b.startMs - fyStartMs) / weekMs)
-                  );
-                  const endWk = Math.min(
-                    totalWeeks - 1,
-                    Math.floor((b.endMs - 1 - fyStartMs) / weekMs)
-                  );
-                  if (endWk < 0 || startWk > totalWeeks - 1) return;
-                  const color =
-                    apiColorById.get(b.apiId) ?? b.apiColor ?? "#9ca3af";
-                  const text = b.apiId;
-                  const title = `${b.batchId} · ${b.apiName} · S${b.stageNo}`;
-                  for (let i = startWk; i <= endWk; i++) {
-                    cells[i] = { color, text, title };
-                  }
-                };
-                const blankWeeks = (): GanttGridRow["weeks"] =>
-                  new Array(totalWeeks).fill(null);
-
-                // ─ By Reactor: row per reactor in master order
-                const reactorRows: GanttGridRow[] = reactors.map((r) => {
-                  const cells = blankWeeks();
-                  schedule.batches.forEach((b) => {
-                    if (b.reactorIds.includes(r.id)) paintBatchOnto(cells, b);
-                  });
-                  return { label: r.name, secondary: r.moc, weeks: cells };
+                // Build the three Gantt-grid sheets (by-reactor, by-stage,
+                // by-api) via the shared builder so cell labels (stage +
+                // batch no) match the combined workbook. Cell color = API.
+                const sheets = buildGanttGridSheets({
+                  apis,
+                  reactors,
+                  schedule,
+                  weeks,
                 });
-
-                // ─ By Stage: row per (api, stage) in api-id × stage-no order
-                const stageRows: GanttGridRow[] = [];
-                apis
-                  .slice()
-                  .sort((a, b) => a.id.localeCompare(b.id))
-                  .forEach((a) => {
-                    a.stages
-                      .slice()
-                      .sort((x, y) => x.stageNo - y.stageNo)
-                      .forEach((s) => {
-                        const cells = blankWeeks();
-                        schedule.batches.forEach((b) => {
-                          if (b.stageId === s.id) paintBatchOnto(cells, b);
-                        });
-                        stageRows.push({
-                          label: `${a.id} · S${s.stageNo}`,
-                          secondary: s.stageName,
-                          weeks: cells,
-                        });
-                      });
-                  });
-
-                // ─ By API: row per API
-                const apiRows: GanttGridRow[] = apis
-                  .slice()
-                  .sort((a, b) => a.id.localeCompare(b.id))
-                  .map((a) => {
-                    const cells = blankWeeks();
-                    schedule.batches.forEach((b) => {
-                      if (b.apiId === a.id) paintBatchOnto(cells, b);
-                    });
-                    return {
-                      label: a.id,
-                      secondary: a.name === a.id ? undefined : a.name,
-                      weeks: cells,
-                    };
-                  });
-
-                // Quarter bands — same on every sheet.
-                const quarterLabels: string[] = [];
-                const quarterSpans: number[] = [];
-                if (weeks.length > 0) {
-                  const monthOf = (i: number) =>
-                    weeks[i].start.toLocaleString("en-US", {
-                      month: "short",
-                    });
-                  const sliceSize = Math.max(1, Math.ceil(weeks.length / 4));
-                  for (let q = 0; q < 4; q++) {
-                    const a = q * sliceSize;
-                    const b = Math.min(weeks.length, a + sliceSize);
-                    if (a >= weeks.length) break;
-                    const span = b - a;
-                    quarterSpans.push(span);
-                    quarterLabels.push(
-                      `Q${q + 1} · ${monthOf(a)}-${monthOf(b - 1)}`
-                    );
-                  }
-                }
-                const weekLabels = weeks.map((w) =>
-                  w.start.toLocaleString("en-US", {
-                    day: "2-digit",
-                    month: "short",
-                  })
-                );
-
-                await downloadGanttGridAsXls(
-                  `gantt_grid_${fileStamp()}.xlsx`,
-                  {
-                    subtitle: `${reactors.length} reactors · ${apis.length} APIs · ${weeks.length} weeks · ${schedule.batches.length} batches · cell color = API`,
-                    sheets: [
-                      {
-                        sheetName: "By Reactor",
-                        rowHeader: "Reactor",
-                        quarterLabels,
-                        quarterSpans,
-                        weekLabels,
-                        rows: reactorRows,
-                      },
-                      {
-                        sheetName: "By Stage",
-                        rowHeader: "Stage",
-                        quarterLabels,
-                        quarterSpans,
-                        weekLabels,
-                        rows: stageRows,
-                      },
-                      {
-                        sheetName: "By API",
-                        rowHeader: "API",
-                        quarterLabels,
-                        quarterSpans,
-                        weekLabels,
-                        rows: apiRows,
-                      },
-                    ],
-                  }
+                await downloadGanttGridAsXls(`gantt_grid_${fileStamp()}.xlsx`, {
+                  subtitle: `${reactors.length} reactors · ${apis.length} APIs · ${weeks.length} weeks · ${schedule.batches.length} batches · cell = stage·batch, color = API`,
+                  sheets,
+                });
+              }}
+              onGlobalXls={async () => {
+                // One combined workbook: re-importable inputs + schedule +
+                // Gantt grids.
+                await downloadGlobalWorkbookAsXls(
+                  `plan_global_${fileStamp()}.xlsx`,
+                  { apis, reactors, schedule, weeks }
                 );
               }}
               onPng={async () => {
