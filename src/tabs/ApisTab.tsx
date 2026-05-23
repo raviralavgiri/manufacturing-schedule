@@ -78,32 +78,6 @@ export default function ApisTab() {
     );
   }, [sortedApis, q]);
 
-  // Per-API derived numbers
-  const enriched = useMemo(
-    () =>
-      filteredApis.map((api) => {
-        const finalStage =
-          api.stages.length > 0
-            ? api.stages.reduce((acc, s) =>
-                s.stageNo > acc.stageNo ? s : acc
-              )
-            : null;
-        const actualOutputKg = finalStage
-          ? finalStage.batchSizeKg * finalStage.plannedBatches
-          : 0;
-        return {
-          api,
-          finalStage,
-          actualOutputKg,
-          plannedBatchesAcrossStages: api.stages.reduce(
-            (acc, s) => acc + s.plannedBatches,
-            0
-          ),
-        };
-      }),
-    [filteredApis]
-  );
-
   // Auto-scroll to + flash newly-added row
   useEffect(() => {
     if (!recentlyAddedApiId) return;
@@ -205,21 +179,11 @@ export default function ApisTab() {
                 <Th yellow title="Stage Flow preset that scaffolds this API's stages. Linear chains stages 1→N. Parallel converges multiple sub-chains into a merge stage. Side chains add factor-driven sub-streams to a main backbone. Fork diverges one preamble into N independent branches each with its own sink and optional per-branch target.">
                   Stage Flow
                 </Th>
-                <Th align="right" locked>
-                  Actual (kg)
-                </Th>
-                <Th align="right" locked>
-                  Final Btc
-                </Th>
-                <Th align="right" locked>
-                  Total Btc
-                </Th>
                 <Th align="right">&nbsp;</Th>
               </tr>
             </thead>
             <tbody>
-              {enriched.map(
-                ({ api, finalStage, actualOutputKg, plannedBatchesAcrossStages }, i) => {
+              {filteredApis.map((api, i) => {
                   const isNew = api.id === recentlyAddedApiId;
                   const isConfirming = api.id === confirmDeleteId;
                   const isParked = api.targetKg === 0;
@@ -275,7 +239,7 @@ export default function ApisTab() {
                         />
                       </td>
                       <td className="px-3 py-2 text-right">
-                        {finalStage ? (
+                        {api.stages.length > 0 ? (
                           <EditableNumCell
                             value={api.targetKg}
                             min={0}
@@ -311,21 +275,6 @@ export default function ApisTab() {
                           }}
                         />
                       </td>
-                      <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-cyan-300">
-                        {actualOutputKg.toLocaleString()}
-                      </td>
-                      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-ink-200">
-                        <span className="inline-flex items-center gap-1">
-                          <Lock size={10} className="text-ink-500" />
-                          {finalStage?.plannedBatches ?? 0}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-ink-200">
-                        <span className="inline-flex items-center gap-1">
-                          <Lock size={10} className="text-ink-500" />
-                          {plannedBatchesAcrossStages}
-                        </span>
-                      </td>
                       <td className="px-2 py-2 text-right">
                         {isConfirming ? (
                           <div className="inline-flex items-center gap-1">
@@ -359,7 +308,7 @@ export default function ApisTab() {
                       {isExpanded && currentTopology !== "linear" && (
                         <tr className="border-t border-white/5">
                           <td
-                            colSpan={9}
+                            colSpan={6}
                             className="bg-ink-900/40 px-3 py-3"
                           >
                             {currentTopology === "parallel" && (
@@ -435,7 +384,7 @@ export default function ApisTab() {
               {filteredApis.length === 0 && (
                 <tr>
                   <td
-                    colSpan={9}
+                    colSpan={6}
                     className="py-12 text-center text-sm text-ink-300"
                   >
                     No APIs match. Click{" "}
@@ -470,7 +419,9 @@ export default function ApisTab() {
           <span className="font-mono text-cyan-300">
             ⌈ next-stage actual output ÷ this stage's batch ⌉
           </span>
-          .
+          . Per-stage planned counts and outputs are shown in the{" "}
+          <span className="font-bold text-ink-200">No. of Batches</span> tab
+          in Stages.
         </div>
       </div>
     </div>

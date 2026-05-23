@@ -20,7 +20,7 @@ import StageInputsEditor from "../components/StageInputsEditor";
 import type { ApiTopology, StageMaster } from "../types";
 import { Share2 } from "lucide-react";
 
-type SubTab = "parameters" | "equipment";
+type SubTab = "parameters" | "equipment" | "batches";
 
 export default function StagesTab() {
   const apis = useStore((s) => s.apis);
@@ -202,6 +202,9 @@ export default function StagesTab() {
         <SubTabBtn active={subTab === "equipment"} onClick={() => setSubTab("equipment")}>
           Equipment &amp; Flow
         </SubTabBtn>
+        <SubTabBtn active={subTab === "batches"} onClick={() => setSubTab("batches")}>
+          No. of Batches
+        </SubTabBtn>
       </div>
 
       {subTab === "parameters" && (
@@ -216,6 +219,14 @@ export default function StagesTab() {
           setStageName={setStageName}
           setSinkOutputTarget={setSinkOutputTarget}
           removeStage={removeStage}
+        />
+      )}
+
+      {subTab === "batches" && (
+        <BatchesTab
+          rows={rows}
+          recentlyAddedStageId={recentlyAddedStageId}
+          newRowRef={newRowRef}
         />
       )}
 
@@ -322,21 +333,15 @@ function ParametersTab({
                 <Th align="right" yellow>Analysis (h)</Th>
                 <Th align="right" yellow>PCO (h)</Th>
                 <Th align="right" yellow title="Per-branch output target for fork topology sinks. Drives unequal cascade splits (e.g. 140 kg vs 50 kg). Leave blank for equal split of api.targetKg.">Branch Target (kg)</Th>
-                <Th align="right" locked>Required (kg)</Th>
-                <Th align="right" locked>Planned</Th>
-                <Th align="right" locked>Actual Output (kg)</Th>
-                <Th align="right" locked>Input Consumed (kg)</Th>
                 <Th align="right">&nbsp;</Th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r, i) => {
-                const actualOutput = r.batchSizeKg * r.plannedBatches;
                 const inputPerBatch =
                   typeof r.inputKgPerBatch === "number" && r.inputKgPerBatch > 0
                     ? r.inputKgPerBatch
                     : r.batchSizeKg;
-                const inputConsumed = inputPerBatch * r.plannedBatches;
                 const isNew = r.id === recentlyAddedStageId;
                 const isConfirming = r.id === confirmDeleteId;
                 return (
@@ -440,27 +445,6 @@ function ParametersTab({
                         <span className="flex justify-end text-[11px] text-ink-600">—</span>
                       )}
                     </td>
-                    <td className="px-3 py-2.5 text-right font-mono tabular-nums text-ink-200">
-                      <span className="inline-flex items-center gap-1" title={`Required: ${r.demandKg.toFixed(2)} kg`}>
-                        <Lock size={10} className="text-ink-500" />
-                        {Math.round(r.demandKg).toLocaleString()}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-ink-200">
-                      <span className="inline-flex items-center gap-1">
-                        <Lock size={10} className="text-ink-500" />
-                        {r.plannedBatches}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-cyan-300" title={`Actual output = planned batches × output/batch. Exact: ${actualOutput.toFixed(2)} kg`}>
-                      {Math.round(actualOutput).toLocaleString()}
-                    </td>
-                    <td className="px-3 py-2.5 text-right font-mono tabular-nums text-ink-200" title={`Total input consumed. Exact: ${inputConsumed.toFixed(2)} kg`}>
-                      <span className="inline-flex items-center gap-1">
-                        <Lock size={10} className="text-ink-500" />
-                        {Math.round(inputConsumed).toLocaleString()}
-                      </span>
-                    </td>
                     <td className="px-2 py-2 text-right">
                       {isConfirming ? (
                         <div className="inline-flex items-center gap-1">
@@ -492,7 +476,7 @@ function ParametersTab({
               })}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={15} className="py-12 text-center text-sm text-ink-300">
+                  <td colSpan={11} className="py-12 text-center text-sm text-ink-300">
                     No stages match. Click{" "}
                     <span className="font-bold text-cyan-300">+ Add Stage</span>{" "}
                     above to create one.
@@ -530,6 +514,8 @@ function ParametersTab({
           </span>
           ; Input Consumed = Planned × Input/Batch ⇒ becomes upstream Required.
           Set Input/Batch &lt; Output/Batch for yield gain (rare); &gt; for yield loss (common).
+          Cascade results (Required, Planned, Actual Output, Input Consumed) are shown in the{" "}
+          <span className="font-bold text-ink-200">No. of Batches</span> tab.
         </div>
       </div>
     </>
@@ -707,6 +693,169 @@ function EquipmentFlowTab({
           Default is the immediate previous stage. Pick multiple for convergence (S3+S7→S8)
           or a sub-stream (S2 ← {"{"}S1, S2i{"}"}).
         </span>
+      </div>
+    </>
+  );
+}
+
+// ─── Tab 3: No. of Batches ───────────────────────────────────────────────────
+
+function BatchesTab({
+  rows,
+  recentlyAddedStageId,
+  newRowRef,
+}: {
+  rows: RowType[];
+  recentlyAddedStageId: string | null;
+  newRowRef: React.RefObject<HTMLTableRowElement>;
+}) {
+  return (
+    <>
+      <Card className="overflow-hidden p-0">
+        <div className="max-h-[68vh] overflow-auto">
+          <table className="min-w-full text-sm">
+            <thead className="sticky top-0 z-10 bg-ink-900/90 backdrop-blur-md">
+              <tr className="text-left text-[11px] uppercase tracking-wider text-ink-300">
+                <Th>API</Th>
+                <Th>Stage</Th>
+                <Th>Stage Name</Th>
+                <Th align="right" locked title="Cascade-computed demand — kg this stage must deliver to satisfy all downstream stages.">
+                  Required (kg)
+                </Th>
+                <Th align="right" locked title="Planned batches = ⌈ Required ÷ Output/Batch ⌉.">
+                  Planned
+                </Th>
+                <Th align="right" locked title="Actual output = Planned × Output/Batch (kg).">
+                  Actual Output (kg)
+                </Th>
+                <Th align="right" locked title="Total input consumed = Planned × Input/Batch (kg).">
+                  Input Consumed (kg)
+                </Th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => {
+                const actualOutput = r.batchSizeKg * r.plannedBatches;
+                const inputPerBatch =
+                  typeof r.inputKgPerBatch === "number" && r.inputKgPerBatch > 0
+                    ? r.inputKgPerBatch
+                    : r.batchSizeKg;
+                const inputConsumed = inputPerBatch * r.plannedBatches;
+                const isNew = r.id === recentlyAddedStageId;
+                return (
+                  <tr
+                    key={r.id}
+                    ref={isNew ? newRowRef : undefined}
+                    className={clsx(
+                      "group border-t border-white/5 transition hover:bg-white/[0.04]",
+                      i % 2 === 0 ? "bg-white/[0.01]" : "",
+                      isNew && "row-flash"
+                    )}
+                  >
+                    <td className="px-3 py-2 font-semibold text-white">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ background: r.color, boxShadow: `0 0 8px 0 ${r.color}80` }}
+                        />
+                        <span className="truncate" title={`${r.apiDisplayName} (id: ${r.apiId})`}>
+                          {r.apiDisplayName}
+                        </span>
+                        <TopologyIndicator topology={r.apiTopology} />
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5 text-ink-100">S{r.stageNo}</td>
+                    <td className="px-3 py-2 text-left">
+                      <div
+                        className="flex items-center gap-2"
+                        style={r.isSideChainStage ? { paddingLeft: 16 } : undefined}
+                      >
+                        <span className="font-mono text-xs text-ink-100">{r.stageName}</span>
+                        {r.isSideChainAnchor && r.sideChainFactor !== null && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-md border border-cyan-300/40 bg-cyan-300/10 px-1.5 py-0.5 font-mono text-[9px] font-bold text-cyan-300"
+                            title={`Side-chain anchor — factor = ${r.sideChainFactor}`}
+                          >
+                            <Workflow size={9} /> side × {formatFactor(r.sideChainFactor)}
+                          </span>
+                        )}
+                        {r.isSideChainStage && !r.isSideChainAnchor && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-md border border-cyan-300/20 bg-cyan-300/5 px-1.5 py-0.5 font-mono text-[9px] font-bold text-cyan-300/80"
+                            title="Side-chain continuation."
+                          >
+                            <Workflow size={9} /> side
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td
+                      className="px-3 py-2.5 text-right font-mono tabular-nums text-ink-200"
+                      title={`Required: ${r.demandKg.toFixed(2)} kg`}
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        <Lock size={10} className="text-ink-500" />
+                        {Math.round(r.demandKg).toLocaleString()}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-ink-200">
+                      <span className="inline-flex items-center gap-1">
+                        <Lock size={10} className="text-ink-500" />
+                        {r.plannedBatches}
+                      </span>
+                    </td>
+                    <td
+                      className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-cyan-300"
+                      title={`Actual output = planned batches × output/batch. Exact: ${actualOutput.toFixed(2)} kg`}
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        <Lock size={10} className="text-ink-500" />
+                        {Math.round(actualOutput).toLocaleString()}
+                      </span>
+                    </td>
+                    <td
+                      className="px-3 py-2.5 text-right font-mono tabular-nums text-ink-200"
+                      title={`Total input consumed. Exact: ${inputConsumed.toFixed(2)} kg`}
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        <Lock size={10} className="text-ink-500" />
+                        {Math.round(inputConsumed).toLocaleString()}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="py-12 text-center text-sm text-ink-300">
+                    No stages match. Click{" "}
+                    <span className="font-bold text-cyan-300">+ Add Stage</span>{" "}
+                    above to create one.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs text-ink-300">
+          <span className="mr-1 font-bold text-ink-100">
+            <Lock size={11} className="inline" /> All values cascade-derived (read-only):
+          </span>
+          <span className="font-mono text-cyan-300">
+            Planned = ⌈ Required ÷ Output/Batch ⌉
+          </span>
+          ; Input Consumed = Planned × Input/Batch ⇒ becomes the upstream stage's Required.
+          Edit stage parameters on the{" "}
+          <span className="font-bold text-ink-200">Stage Parameters</span> tab to recompute.
+        </div>
+        <div className="rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-xs text-amber-200">
+          <span className="mr-1 font-bold">Side chains:</span>
+          Side-chain stages are sized forward from their anchor's actual output × factor.
+          Their output feeds the stage they input to, but is not counted in the API's projected total.
+        </div>
       </div>
     </>
   );
