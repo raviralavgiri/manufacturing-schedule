@@ -387,6 +387,14 @@ function ParametersTab({
                             <Workflow size={9} /> side
                           </span>
                         )}
+                        {r.isSink && r.apiTopology === "fork" && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-md border border-lime-300/50 bg-lime-300/15 px-1.5 py-0.5 font-mono text-[9px] font-bold text-lime-300"
+                            title="Fork branch sink — this is the final product output stage for this branch. The cascade seeds demand here."
+                          >
+                            <Share2 size={9} /> Final API
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td className="px-3 py-2 text-right">
@@ -612,6 +620,14 @@ function EquipmentFlowTab({
                             <Workflow size={9} /> side
                           </span>
                         )}
+                        {r.isSink && r.apiTopology === "fork" && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-md border border-lime-300/50 bg-lime-300/15 px-1.5 py-0.5 font-mono text-[9px] font-bold text-lime-300"
+                            title="Fork branch sink — final product output stage for this branch."
+                          >
+                            <Share2 size={9} /> Final API
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td className="px-3 py-2 text-left">
@@ -766,6 +782,14 @@ function BatchesTab({
                             title="Side-chain continuation."
                           >
                             <Workflow size={9} /> side
+                          </span>
+                        )}
+                        {r.isSink && r.apiTopology === "fork" && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-md border border-lime-300/50 bg-lime-300/15 px-1.5 py-0.5 font-mono text-[9px] font-bold text-lime-300"
+                            title="Fork branch sink — final product output stage for this branch."
+                          >
+                            <Share2 size={9} /> Final API
                           </span>
                         )}
                       </div>
