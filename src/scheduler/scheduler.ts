@@ -71,14 +71,21 @@ const CAMPAIGN_MAX_MS = 30 * 24 * 3600 * 1000;
  * Constraints (provably never violated):
  *   1. No reactor clash: a reactor's [start, cycleEnd] windows are
  *      non-overlapping per reactor.
- *   2. Stage ordering inside an API (DAG): batch B at stage S can only start
- *      after batch B's analysis ends on EVERY predecessor stage in
- *      `inputStageIds`. If a predecessor has fewer planned batches than S,
- *      the predecessor's LAST batch is used (the "any_done" rule). For a
- *      strictly linear chain this collapses to the legacy "stage N+1 waits
- *      for stage N" behaviour.
- *   3. Priority ordering: APIs are processed in priority order (P1 first,
- *      P5 last) within each round so high-priority APIs grab earliest slots.
+ *   2. Input-material gate (cumulative mass balance): to start batch K of a
+ *      stage S, EACH predecessor in `inputStageIds` must have accumulated
+ *      enough APPROVED output — cumulative ≥ K × S.inputKgPerBatch — where
+ *      "approved" means the predecessor batch's analysis (QC) window has
+ *      ended. One large upstream batch can feed several downstream batches,
+ *      or several upstream batches accumulate to feed one. This replaces the
+ *      old 1:1 "batch B waits for predecessor batch B" rule and is why the
+ *      engine uses LIST SCHEDULING (book whichever ready batch starts
+ *      earliest) instead of a fixed round-robin: a downstream batch is never
+ *      placed before the upstream batches that supply it.
+ *   3. Priority ordering: when two ready batches could start at the same
+ *      time, ties break by `stage.schedulePriority` (lower = earlier) so the
+ *      planner can make high-priority stages — e.g. cleanroom batches — grab
+ *      the earliest contended reactor slots, then by API id + topological
+ *      order. Stages without an explicit priority keep the legacy order.
  *   4. BCF cadence: same-stage consecutive batches respect
  *      start_n - start_(n-1) >= BCF (cross-reactor; tracked per stage in
  *      stageLastBatchStart).
@@ -246,13 +253,6 @@ export function runScheduler(
   // order. Round-robin across APIs ensures fair scheduling.
   const apisInOrder = [...apis].sort((a, b) => a.id.localeCompare(b.id));
 
-  let maxBatches = 0;
-  apis.forEach((a) =>
-    a.stages.forEach((s) => {
-      if (s.plannedBatches > maxBatches) maxBatches = s.plannedBatches;
-    })
-  );
-
   // Topological order of stages PER API. Falls back to stageNo order if
   // the DAG is cyclic (validation surfaces that elsewhere; the scheduler
   // never crashes). For a clean linear chain this is identical to the
@@ -266,10 +266,33 @@ export function runScheduler(
     apiTopoStages.set(a.id, ordered);
   });
 
-  // Per-stage list of analysisEnd times by batch index. Replaces the
-  // legacy `apiStageLastEnd[sIdx]` (one-number-per-stage) so the
-  // per-batch "any_done" rule can look up batch N's predecessor end
-  // directly. arr[k] = analysisEnd of stage's k-th booked batch.
+  // ─ Priority + predecessor lookups (for the per-round work-item sort) ──
+  // stageById: any stage by id. predStagesById: each stage's same-API
+  // predecessor stage objects (resolved from inputStageIds). priorityOf:
+  // the user-defined schedulePriority, or a sentinel that sorts last so
+  // unprioritised stages keep the legacy alphabetical/topological order.
+  const stageById = new Map<string, StageMaster>();
+  apis.forEach((a) => a.stages.forEach((s) => stageById.set(s.id, s)));
+  const predStagesById = new Map<string, StageMaster[]>();
+  apis.forEach((a) =>
+    a.stages.forEach((s) => {
+      const preds = (Array.isArray(s.inputStageIds) ? s.inputStageIds : [])
+        .map((id) => stageById.get(id))
+        .filter((x): x is StageMaster => !!x);
+      predStagesById.set(s.id, preds);
+    })
+  );
+  const NO_PRIORITY = Number.MAX_SAFE_INTEGER;
+  const priorityOf = (s: StageMaster): number =>
+    typeof s.schedulePriority === "number" && Number.isFinite(s.schedulePriority)
+      ? s.schedulePriority
+      : NO_PRIORITY;
+  const apiIndexById = new Map(apisInOrder.map((a, i) => [a.id, i]));
+
+  // Per-stage APPROVED-output timeline: each stage's booked-batch analysisEnd
+  // (= QC-done) times, kept SORTED ascending. The material gate reads the
+  // m-th element to learn when cumulative approved output crosses a threshold
+  // (see materialReadyTime). Sorted insert happens in commitBatch.
   const stageBatchAnalysisEnds = new Map<string, number[]>();
   apis.forEach((a) =>
     a.stages.forEach((s) => stageBatchAnalysisEnds.set(s.id, []))
@@ -490,187 +513,357 @@ export function runScheduler(
     return newStartMs;
   }
 
-  for (let round = 0; round < maxBatches; round++) {
-    for (const api of apisInOrder) {
-      const apiStart = apiStartMs(api);
-      const apiEnd = apiEndMs(api);
-      const stagesInOrder = apiTopoStages.get(api.id) ?? api.stages;
-      for (const stage of stagesInOrder) {
-        if (round >= stage.plannedBatches) continue;
-        if (stage.reactorPool.length === 0) continue;
+  type CleanKind = "none" | "pco" | "campaign";
 
-        // BCT = physical reactor occupancy duration (per batch).
-        // BCF = interval between consecutive same-stage batch STARTS
-        //       (cross-reactor; honoured if the pool has enough reactors,
-        //       otherwise BCT dominates because the reactor stays busy).
-        const bctMs = hoursToMs(
-          typeof stage.bctHours === "number" && stage.bctHours > 0
-            ? stage.bctHours
-            : stage.bcfHours // defensive fallback for legacy data
-        );
-        const bcfMs = hoursToMs(stage.bcfHours);
-        // cycleMs = reactor occupancy = BCT.
-        const cycleMs = bctMs;
-        const analysisMs = hoursToMs(stage.analysisHours);
-        const bufferMs = hoursToMs(INTER_STAGE_BUFFER_HOURS);
-        const pcoMs = hoursToMs(
+  // ─ Per-stage scheduling runtime ──────────────────────────────────────────
+  // One record per schedulable stage. `booked` advances as batches are placed.
+  // Hour fields are pre-converted to ms once. `effectivePool` already folds in
+  // the BMR substitutes. Stages with 0 planned batches or an empty pool are
+  // dropped here (they can never be booked).
+  interface StageRT {
+    api: API;
+    stage: StageMaster;
+    topoIndex: number;
+    planned: number;
+    booked: number;
+    bctMs: number;
+    bcfMs: number;
+    cycleMs: number;
+    analysisMs: number;
+    pcoMs: number;
+    inputPerBatch: number;
+    effectivePool: string[];
+    apiStart: number;
+    apiEnd: number;
+  }
+
+  const bufferMs = hoursToMs(INTER_STAGE_BUFFER_HOURS);
+  const stageRTs: StageRT[] = [];
+  for (const api of apisInOrder) {
+    const apiStart = apiStartMs(api);
+    const apiEnd = apiEndMs(api);
+    const stagesInOrder = apiTopoStages.get(api.id) ?? api.stages;
+    stagesInOrder.forEach((stage, topoIndex) => {
+      const planned = stage.plannedBatches;
+      if (planned <= 0) return;
+      const effectivePool = expandPool(
+        stage.reactorPool,
+        stage.reactorSubstitutes
+      );
+      if (effectivePool.length === 0) return;
+      const bctMs = hoursToMs(
+        typeof stage.bctHours === "number" && stage.bctHours > 0
+          ? stage.bctHours
+          : stage.bcfHours
+      );
+      stageRTs.push({
+        api,
+        stage,
+        topoIndex,
+        planned,
+        booked: 0,
+        bctMs,
+        bcfMs: hoursToMs(stage.bcfHours),
+        cycleMs: bctMs,
+        analysisMs: hoursToMs(stage.analysisHours),
+        pcoMs: hoursToMs(
           typeof stage.pcoHours === "number" && stage.pcoHours >= 0
             ? stage.pcoHours
             : 0
-        );
+        ),
+        inputPerBatch:
+          typeof stage.inputKgPerBatch === "number" &&
+          stage.inputKgPerBatch > 0
+            ? stage.inputKgPerBatch
+            : stage.batchSizeKg,
+        effectivePool,
+        apiStart,
+        apiEnd,
+      });
+    });
+  }
 
-        // DAG predecessor wait — "any_done" per-batch rule:
-        //   prevStageReady = max over P in inputStageIds of P.batch[round].analysisEnd
-        // If P has fewer batches than `round + 1`, fall back to P's LAST
-        // analysisEnd so we don't gate on a batch that will never exist.
-        // First-stage (no predecessors) anchors at the API window start.
-        const preds = Array.isArray(stage.inputStageIds)
-          ? stage.inputStageIds
-          : [];
-        let prevStageReady: number;
-        if (preds.length === 0) {
-          prevStageReady = apiStart;
-        } else {
-          let maxPredAnalysisEnd = -Infinity;
-          for (const pid of preds) {
-            const arr = stageBatchAnalysisEnds.get(pid);
-            if (!arr || arr.length === 0) continue;
-            const idx = Math.min(round, arr.length - 1);
-            const ae = arr[idx];
-            if (ae > maxPredAnalysisEnd) maxPredAnalysisEnd = ae;
-          }
-          prevStageReady = Number.isFinite(maxPredAnalysisEnd)
-            ? maxPredAnalysisEnd + bufferMs
-            : apiStart;
-        }
+  // MATERIAL GATE — cumulative mass balance.
+  // To start batch K (= booked + 1) of a stage, EACH predecessor must have
+  // accumulated enough APPROVED output: cumulative ≥ K × inputPerBatch.
+  // "Approved" = the predecessor batch's analysisEnd has been reached (QC
+  // done). Each predecessor batch contributes its stage's batchSizeKg, so the
+  // number of predecessor batches needed is m = ⌈required / predOutputPerBatch⌉
+  // and the gate is that predecessor's m-th approved analysisEnd. The arrays
+  // in `stageBatchAnalysisEnds` are kept sorted ascending so element m-1 is the
+  // m-th approval time.
+  //   • returns the latest material-ready time across predecessors, or
+  //   • null when a predecessor hasn't booked m batches YET (book it first), or
+  //   • (fallback mode) the predecessor's LAST approval when it can never
+  //     supply m batches — avoids a deadlock on a cascade-rounding shortfall.
+  const materialReadyTime = (rt: StageRT, fallback: boolean): number | null => {
+    const preds = predStagesById.get(rt.stage.id) ?? [];
+    if (preds.length === 0) return rt.apiStart;
+    const K = rt.booked + 1;
+    const required = K * rt.inputPerBatch;
+    let matTime = rt.apiStart;
+    for (const P of preds) {
+      const outPer =
+        typeof P.batchSizeKg === "number" && P.batchSizeKg > 0
+          ? P.batchSizeKg
+          : 1;
+      const m = Math.max(1, Math.ceil(required / outPer));
+      const ends = stageBatchAnalysisEnds.get(P.id) ?? [];
+      if (ends.length < m) {
+        if (!fallback) return null; // wait until predecessor books more
+        if (ends.length === 0) continue; // nothing yet — leave at apiStart
+        const last = ends[ends.length - 1];
+        if (last > matTime) matTime = last;
+        continue;
+      }
+      const perP = ends[m - 1];
+      if (perP > matTime) matTime = perP;
+    }
+    return matTime;
+  };
 
-        // BCF gate: the next batch of THIS stage cannot start before
-        // (last booked start of this stage) + BCF, no matter which reactor.
-        const prevSameStageStart = stageLastBatchStart.get(stage.id);
-        const bcfGate =
-          prevSameStageStart !== undefined
-            ? prevSameStageStart + bcfMs
-            : -Infinity;
-
-        const earliestStart = Math.max(
-          prevStageReady,
-          apiStart, // per-API window start
-          bcfGate
-        );
-
-        // POOL pick with substitution: the effective pool is the primary
-        // reactorPool followed by each primary's user-defined optional
-        // substitutes (from stage.reactorSubstitutes), in declared order.
-        // Each candidate is probed for its earliest-free slot; the overall
-        // earliest wins. Primary reactors come first in iteration order so
-        // ties break in favour of the booked reactor.
-        const effectivePool = expandPool(
-          stage.reactorPool,
-          stage.reactorSubstitutes
-        );
-        let bestStart = Infinity;
-        let bestReactor = effectivePool[0] ?? stage.reactorPool[0];
-        let bestKind: "none" | "pco" | "campaign" = "none";
-        for (const rid of effectivePool) {
-          const probe = findTrainSlot(
-            [rid],
-            earliestStart,
-            cycleMs,
-            api.id,
-            stage.id,
-            pcoMs
-          );
-          if (probe.startMs < bestStart) {
-            bestStart = probe.startMs;
-            bestReactor = rid;
-            bestKind = probe.cleaningKind;
-          }
-        }
-
-        const startMs = bestStart;
-        const cleaningKind = bestKind;
-        const cycleEndMs = startMs + cycleMs;
-        const analysisEndMs = cycleEndMs + analysisMs;
-
-        // Defensive clash check on the chosen reactor only.
-        let clash = false;
-        const chosenSlots = reactorBookings.get(bestReactor)!;
-        for (const s of chosenSlots) {
-          if (s.cycleEndMs <= startMs) continue;
-          if (s.startMs >= cycleEndMs) break;
-          clash = true;
-          break;
-        }
-        if (clash) clashCount++;
-
-        // Book the slot on the chosen reactor (only).
-        const campaignStartMs = deriveCampaignStart(
-          chosenSlots,
-          startMs,
-          api.id,
-          stage.id
-        );
-        const newSlot: BookedSlot = {
-          startMs,
-          endMs: analysisEndMs,
-          cycleEndMs,
-          nextSameCampaignStartMs: startMs + bcfMs,
-          apiId: api.id,
-          stageId: stage.id,
-          pcoMs,
-          campaignStartMs,
-        };
-        insertSorted(chosenSlots, newSlot);
-        const bctHrs =
-          typeof stage.bctHours === "number" && stage.bctHours > 0
-            ? stage.bctHours
-            : stage.bcfHours;
-        reactorLoadHours.set(
-          bestReactor,
-          (reactorLoadHours.get(bestReactor) ?? 0) + bctHrs
-        );
-        reactorBatchCount.set(
-          bestReactor,
-          (reactorBatchCount.get(bestReactor) ?? 0) + 1
-        );
-
-        // Append this batch's analysisEnd in batch order so per-batch
-        // predecessor lookups (above) can find batch N's exact end.
-        stageBatchAnalysisEnds.get(stage.id)!.push(analysisEndMs);
-        stageLastBatchStart.set(stage.id, startMs);
-
-        const cleaningBeforeMs = cleaningKind === "none" ? 0 : pcoMs;
-
-        const entry: BatchScheduleEntry = {
-          batchId: `${stage.id}-B${round + 1}`,
-          apiId: api.id,
-          apiName: api.name,
-          apiColor: api.color,
-          stageId: stage.id,
-          stageNo: stage.stageNo,
-          stageName: stage.stageName,
-          batchNo: round + 1,
-          reactorId: bestReactor,
-          // Single-reactor list (pool model) — kept as array for API compat.
-          reactorIds: [bestReactor],
-          startMs,
-          endMs: cycleEndMs,
-          analysisEndMs,
-          // "In FY" now means: within THIS API's plan window.
-          inFY: startMs >= apiStart && cycleEndMs <= apiEnd,
-          clash,
-          outputKg: stage.batchSizeKg,
-          inputKg:
-            typeof stage.inputKgPerBatch === "number" &&
-            stage.inputKgPerBatch > 0
-              ? stage.inputKgPerBatch
-              : stage.batchSizeKg,
-          cleaningBeforeMs,
-          cleaningType: cleaningKind,
-        };
-        allBatches.push(entry);
+  // Probe the stage's effective pool for the earliest feasible slot ≥ earliest,
+  // honouring reactor occupancy + PCO/campaign cleaning + maintenance. Pure —
+  // does not mutate any booking state.
+  const findBestSlot = (
+    rt: StageRT,
+    earliest: number
+  ): { startMs: number; reactor: string; cleaningKind: CleanKind } => {
+    let bestStart = Infinity;
+    let bestReactor = rt.effectivePool[0] ?? rt.stage.reactorPool[0];
+    let bestKind: CleanKind = "none";
+    for (const rid of rt.effectivePool) {
+      const probe = findTrainSlot(
+        [rid],
+        earliest,
+        rt.cycleMs,
+        rt.api.id,
+        rt.stage.id,
+        rt.pcoMs
+      );
+      if (probe.startMs < bestStart) {
+        bestStart = probe.startMs;
+        bestReactor = rid;
+        bestKind = probe.cleaningKind;
       }
     }
+    return { startMs: bestStart, reactor: bestReactor, cleaningKind: bestKind };
+  };
+
+  // Commit a batch: book the reactor slot, update load/usage counters, record
+  // the (sorted) approval time + last start, and emit the BatchScheduleEntry.
+  const commitBatch = (
+    rt: StageRT,
+    slot: { startMs: number; reactor: string; cleaningKind: CleanKind }
+  ): void => {
+    const { api, stage } = rt;
+    const startMs = slot.startMs;
+    const bestReactor = slot.reactor;
+    const cleaningKind = slot.cleaningKind;
+    const cycleEndMs = startMs + rt.cycleMs;
+    const analysisEndMs = cycleEndMs + rt.analysisMs;
+    const batchNo = rt.booked + 1;
+
+    // Defensive clash check on the chosen reactor only.
+    let clash = false;
+    const chosenSlots = reactorBookings.get(bestReactor)!;
+    for (const s of chosenSlots) {
+      if (s.cycleEndMs <= startMs) continue;
+      if (s.startMs >= cycleEndMs) break;
+      clash = true;
+      break;
+    }
+    if (clash) clashCount++;
+
+    const campaignStartMs = deriveCampaignStart(
+      chosenSlots,
+      startMs,
+      api.id,
+      stage.id
+    );
+    const newSlot: BookedSlot = {
+      startMs,
+      endMs: analysisEndMs,
+      cycleEndMs,
+      nextSameCampaignStartMs: startMs + rt.bcfMs,
+      apiId: api.id,
+      stageId: stage.id,
+      pcoMs: rt.pcoMs,
+      campaignStartMs,
+    };
+    insertSorted(chosenSlots, newSlot);
+
+    const bctHrs =
+      typeof stage.bctHours === "number" && stage.bctHours > 0
+        ? stage.bctHours
+        : stage.bcfHours;
+    reactorLoadHours.set(
+      bestReactor,
+      (reactorLoadHours.get(bestReactor) ?? 0) + bctHrs
+    );
+    reactorBatchCount.set(
+      bestReactor,
+      (reactorBatchCount.get(bestReactor) ?? 0) + 1
+    );
+
+    // Sorted insert of this batch's approval time so the material gate can
+    // read the m-th approval in O(1).
+    const ends = stageBatchAnalysisEnds.get(stage.id)!;
+    let qi = ends.length;
+    while (qi > 0 && ends[qi - 1] > analysisEndMs) qi--;
+    ends.splice(qi, 0, analysisEndMs);
+    stageLastBatchStart.set(stage.id, startMs);
+
+    const cleaningBeforeMs = cleaningKind === "none" ? 0 : rt.pcoMs;
+    allBatches.push({
+      batchId: `${stage.id}-B${batchNo}`,
+      apiId: api.id,
+      apiName: api.name,
+      apiColor: api.color,
+      stageId: stage.id,
+      stageNo: stage.stageNo,
+      stageName: stage.stageName,
+      batchNo,
+      reactorId: bestReactor,
+      reactorIds: [bestReactor],
+      startMs,
+      endMs: cycleEndMs,
+      analysisEndMs,
+      inFY: startMs >= rt.apiStart && cycleEndMs <= rt.apiEnd,
+      clash,
+      outputKg: stage.batchSizeKg,
+      inputKg: rt.inputPerBatch,
+      cleaningBeforeMs,
+      cleaningType: cleaningKind,
+    });
+    rt.booked++;
+  };
+
+  // Tie-break between two equally-early candidates: user priority first
+  // (lower = earlier), then API order, then topological order, then id. This
+  // is where the cleanroom Q-Plan priority and the legacy ordering apply.
+  const aWins = (a: StageRT, b: StageRT): boolean => {
+    const pa = priorityOf(a.stage);
+    const pb = priorityOf(b.stage);
+    if (pa !== pb) return pa < pb;
+    const ia = apiIndexById.get(a.api.id) ?? 0;
+    const ib = apiIndexById.get(b.api.id) ?? 0;
+    if (ia !== ib) return ia < ib;
+    if (a.topoIndex !== b.topoIndex) return a.topoIndex < b.topoIndex;
+    return a.stage.id < b.stage.id;
+  };
+
+  const bcfGateOf = (rt: StageRT): number => {
+    const prev = stageLastBatchStart.get(rt.stage.id);
+    return prev !== undefined ? prev + rt.bcfMs : -Infinity;
+  };
+
+  type Cand = { startMs: number; reactor: string; cleaningKind: CleanKind } | null;
+
+  // Invalidation indexes: which stages must be re-probed when a reactor is
+  // booked (pool sharers) or when a stage produces another approved batch
+  // (its successors may newly clear their material gate).
+  const rtByStageId = new Map(stageRTs.map((rt) => [rt.stage.id, rt]));
+  const sharersOfReactor = new Map<string, StageRT[]>();
+  const successorsOfStage = new Map<string, StageRT[]>();
+  for (const rt of stageRTs) {
+    for (const rid of rt.effectivePool) {
+      const arr = sharersOfReactor.get(rid);
+      if (arr) arr.push(rt);
+      else sharersOfReactor.set(rid, [rt]);
+    }
+    for (const P of predStagesById.get(rt.stage.id) ?? []) {
+      const arr = successorsOfStage.get(P.id);
+      if (arr) arr.push(rt);
+      else successorsOfStage.set(P.id, [rt]);
+    }
+  }
+
+  // Cached earliest-start candidate per stage. `dirty` holds stage ids whose
+  // candidate must be recomputed before the next pick.
+  const cand = new Map<string, Cand>();
+  const dirty = new Set<string>(stageRTs.map((rt) => rt.stage.id));
+
+  const recompute = (rt: StageRT): void => {
+    if (rt.booked >= rt.planned) {
+      cand.set(rt.stage.id, null);
+      return;
+    }
+    const matTime = materialReadyTime(rt, false);
+    if (matTime === null) {
+      cand.set(rt.stage.id, null);
+      return;
+    }
+    const earliest = Math.max(matTime + bufferMs, rt.apiStart, bcfGateOf(rt));
+    cand.set(rt.stage.id, findBestSlot(rt, earliest));
+  };
+
+  // Commit a placement, then invalidate exactly the stages whose earliest
+  // start could have changed: this stage (next batch), every stage that can
+  // use the just-booked reactor, and any previously-unready successor.
+  const place = (
+    rt: StageRT,
+    slot: { startMs: number; reactor: string; cleaningKind: CleanKind }
+  ): void => {
+    const stageId = rt.stage.id;
+    commitBatch(rt, slot);
+    dirty.add(stageId);
+    for (const other of sharersOfReactor.get(slot.reactor) ?? [])
+      dirty.add(other.stage.id);
+    for (const succ of successorsOfStage.get(stageId) ?? [])
+      if (cand.get(succ.stage.id) == null) dirty.add(succ.stage.id);
+  };
+
+  // ─ List-scheduling main loop ───────────────────────────────────────────
+  // Repeatedly book whichever ready batch can start earliest. "Ready" = its
+  // material gate is satisfiable from already-approved upstream output. This
+  // replaces the old round-robin so a downstream batch is never placed before
+  // the upstream batches that feed it have been scheduled.
+  let remainingBatches = stageRTs.reduce((n, rt) => n + rt.planned, 0);
+  const guardMax = remainingBatches + stageRTs.length + 10;
+  let guard = 0;
+  while (remainingBatches > 0 && guard++ < guardMax) {
+    for (const sid of dirty) {
+      const rt = rtByStageId.get(sid);
+      if (rt) recompute(rt);
+    }
+    dirty.clear();
+
+    let best: Cand = null;
+    let bestRt: StageRT | null = null;
+    for (const rt of stageRTs) {
+      if (rt.booked >= rt.planned) continue;
+      const c = cand.get(rt.stage.id);
+      if (!c) continue;
+      if (
+        best === null ||
+        c.startMs < best.startMs ||
+        (c.startMs === best.startMs && bestRt !== null && aWins(rt, bestRt))
+      ) {
+        best = c;
+        bestRt = rt;
+      }
+    }
+
+    if (best === null || bestRt === null) {
+      // No stage is materially ready — upstream genuinely can't supply enough
+      // (usually a cascade-rounding shortfall). Force progress on the
+      // best-ranked unbooked stage, gated on its predecessors' LAST approval.
+      let fb: StageRT | null = null;
+      for (const rt of stageRTs) {
+        if (rt.booked >= rt.planned) continue;
+        if (fb === null || aWins(rt, fb)) fb = rt;
+      }
+      if (!fb) break;
+      const matTime = materialReadyTime(fb, true) ?? fb.apiStart;
+      const earliest = Math.max(matTime + bufferMs, fb.apiStart, bcfGateOf(fb));
+      place(fb, findBestSlot(fb, earliest));
+      remainingBatches--;
+      continue;
+    }
+
+    place(bestRt, best);
+    remainingBatches--;
   }
 
   allBatches.sort((a, b) => a.startMs - b.startMs);

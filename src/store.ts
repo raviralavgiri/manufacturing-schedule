@@ -143,6 +143,13 @@ interface AppState {
   setStageInputs: (stageId: string, ids: string[]) => void;
   addStage: (input: NewStageInput) => string;
   removeStage: (stageId: string) => void;
+  /**
+   * Set the scheduling priority of stages from an ordered id list. The first
+   * id gets priority 1 (scheduled earliest), the second 2, and so on. Used by
+   * the Q-Plan "Cleanroom Stage Priority" up/down control. Stages not in the
+   * list are left untouched. Triggers an immediate schedule recompute.
+   */
+  setStageSchedulePriorities: (orderedStageIds: string[]) => void;
 
   // ─ API actions (operate on active project) ──────────────────────
   setApiName: (apiId: string, name: string) => void;
@@ -660,6 +667,28 @@ export const useStore = create<AppState>((set, get) => ({
       return { ...p, apis };
     });
     scheduleRecompute(set, get, true);
+  },
+
+  setStageSchedulePriorities: (orderedStageIds) => {
+    const rank = new Map<string, number>();
+    orderedStageIds.forEach((id, i) => rank.set(id, i + 1));
+    const { changed } = mutateActive(set, get, (p) => {
+      let touched = false;
+      const apis = p.apis.map((a) => {
+        let changedHere = false;
+        const stages = a.stages.map((s) => {
+          if (!rank.has(s.id)) return s;
+          const next = rank.get(s.id)!;
+          if (s.schedulePriority === next) return s;
+          changedHere = true;
+          return { ...s, schedulePriority: next };
+        });
+        if (changedHere) touched = true;
+        return changedHere ? { ...a, stages } : a;
+      });
+      return touched ? { ...p, apis } : p;
+    });
+    if (changed) scheduleRecompute(set, get, true);
   },
 
   // ─ API actions ─────────────────────────────────────────────────
