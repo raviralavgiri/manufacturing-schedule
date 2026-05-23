@@ -1,17 +1,9 @@
 import { useMemo, useState, useRef, useLayoutEffect } from "react";
-import { Search, Filter, AlertTriangle, RefreshCw } from "lucide-react";
+import { Search, AlertTriangle, RefreshCw } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
 import { Card, SectionHeader, Tag } from "../components/Primitives";
-import ExportMenu from "../components/ExportMenu";
-import { computeWeeks, fmtDate, fmtDateTime } from "../utils/dates";
-import {
-  downloadCsv,
-  downloadElementAsPng,
-  downloadGlobalWorkbookAsXls,
-  fileStamp,
-  printPage,
-} from "../utils/exporters";
+import { fmtDate, fmtDateTime } from "../utils/dates";
 
 const ROW_H = 40;
 
@@ -113,54 +105,6 @@ export default function ScheduleTab() {
   );
   const visible = filtered.slice(startIdx, endIdx);
 
-  const tableCardRef = useRef<HTMLDivElement>(null);
-
-  function exportCsv() {
-    downloadCsv(
-      `schedule_${filtered.length}rows_${fileStamp()}.csv`,
-      [
-        "Batch ID",
-        "API ID",
-        "API Name",
-        "Stage",
-        "Stage Name",
-        "Batch #",
-        "Reactor ID",
-        "Reactor Name",
-        "Reactor Pool",
-        "Start",
-        "End (cycle)",
-        "Analysis End",
-        "FY",
-        "Clash",
-        "Input kg",
-        "Output kg",
-      ],
-      filtered.map((b) => [
-        b.batchId,
-        b.apiId,
-        b.apiName,
-        `Stage ${b.stageNo}`,
-        b.stageName,
-        b.batchNo,
-        b.reactorIds.join(" + "),
-        b.reactorIds
-          .map((id) => reactors.find((x) => x.id === id)?.name ?? id)
-          .join(" + "),
-        (stagePoolById.get(b.stageId) ?? [])
-          .map((id) => reactors.find((x) => x.id === id)?.name ?? id)
-          .join(" | "),
-        fmtDateTime(b.startMs),
-        fmtDateTime(b.endMs),
-        fmtDateTime(b.analysisEndMs),
-        b.inFY ? "FY" : "Ovr",
-        b.clash ? "CLASH" : "OK",
-        b.inputKg,
-        b.outputKg,
-      ])
-    );
-  }
-
   // Detect batches whose start is BEFORE the global plan window OR whose
   // cycle ends AFTER it. If any exist, the schedule is stale relative to
   // the current window and the user should recompute.
@@ -187,30 +131,6 @@ export default function ScheduleTab() {
       <SectionHeader
         title="Schedule"
         subtitle={`${filtered.length.toLocaleString()} batches · Plan window: ${fmtDate(planWindow.startMs)} → ${fmtDate(planWindow.endMs)}`}
-        right={
-          <ExportMenu
-            onCsv={exportCsv}
-            onGlobalXls={async () => {
-              await downloadGlobalWorkbookAsXls(
-                `plan_global_${fileStamp()}.xlsx`,
-                {
-                  apis: apisRaw,
-                  reactors,
-                  schedule,
-                  weeks: computeWeeks(planWindow.startMs, planWindow.endMs),
-                }
-              );
-            }}
-            onPng={async () => {
-              await downloadElementAsPng(
-                tableCardRef.current,
-                `schedule_${filtered.length}rows_${fileStamp()}.png`,
-                { backgroundColor: "#04081a", pixelRatio: 2 }
-              );
-            }}
-            onPrint={() => printPage()}
-          />
-        }
       />
 
       {hasStaleData && (
@@ -334,7 +254,6 @@ export default function ScheduleTab() {
         </div>
       </Card>
 
-      <div ref={tableCardRef} className="schedule-table-card">
       <Card className="overflow-hidden p-0">
         <div
           className="grid gap-0 border-b border-white/10 bg-ink-900/80 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-ink-300"
@@ -485,7 +404,6 @@ export default function ScheduleTab() {
           </div>
         </div>
       </Card>
-      </div>
     </div>
   );
 }

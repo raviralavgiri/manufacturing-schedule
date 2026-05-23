@@ -23,7 +23,10 @@ import ThemeToggle from "./components/ThemeToggle";
 import ProjectSwitcher from "./components/ProjectSwitcher";
 import WelcomeGuide from "./components/WelcomeGuide";
 import ExcelImportModal from "./components/ExcelImportModal";
+import ExportMenu from "./components/ExportMenu";
 import { hasSeenGuide, markGuideSeen } from "./utils/storage";
+import { computeWeeks } from "./utils/dates";
+import { downloadGlobalWorkbookAsXls, fileStamp } from "./utils/exporters";
 import ApisTab from "./tabs/ApisTab";
 import StagesTab from "./tabs/StagesTab";
 import MasterReactorTab from "./tabs/MasterReactorTab";
@@ -190,6 +193,23 @@ export default function App() {
               <Upload size={12} />
               Import
             </button>
+            <ExportMenu
+              label="Export"
+              onGlobalXls={async () => {
+                await downloadGlobalWorkbookAsXls(
+                  `plan_global_${fileStamp()}.xlsx`,
+                  {
+                    apis,
+                    reactors,
+                    schedule,
+                    weeks: computeWeeks(
+                      Math.min(...(apis.length ? apis.map((a) => a.window.startMs) : [Date.now()])),
+                      Math.max(...(apis.length ? apis.map((a) => a.window.endMs) : [Date.now()]))
+                    ),
+                  }
+                );
+              }}
+            />
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
             <div className="block sm:hidden">

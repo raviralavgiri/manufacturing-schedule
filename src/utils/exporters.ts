@@ -783,8 +783,19 @@ function renderScheduleSheet(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   sheet: any,
   schedule: ScheduleResult,
-  reactors: Reactor[]
+  reactors: Reactor[],
+  apis: API[]
 ): void {
+  // Build stage-id → pool lookup so we can show the full configured pool,
+  // matching the "Reactor Pool" column in the Schedule tab on screen.
+  const stagePoolById = new Map<string, string[]>();
+  apis.forEach((a) =>
+    a.stages.forEach((s) => stagePoolById.set(s.id, s.reactorPool))
+  );
+
+  const nameOf = (id: string) =>
+    reactors.find((x) => x.id === id)?.name ?? id;
+
   const headers = [
     "Batch ID",
     "API ID",
@@ -792,8 +803,7 @@ function renderScheduleSheet(
     "Stage No",
     "Stage Name",
     "Batch #",
-    "Reactor ID",
-    "Reactor Name",
+    "Reactor Pool",
     "Start",
     "End (Cycle)",
     "Analysis End",
@@ -803,26 +813,35 @@ function renderScheduleSheet(
     "Input kg",
     "Output kg",
   ];
-  const rows = schedule.batches.map((b) => [
-    b.batchId,
-    b.apiId,
-    b.apiName,
-    b.stageNo,
-    b.stageName,
-    b.batchNo,
-    b.reactorIds.join(" + "),
-    b.reactorIds
-      .map((id) => reactors.find((x) => x.id === id)?.name ?? id)
-      .join(" + "),
-    fmtDateTime(b.startMs),
-    fmtDateTime(b.endMs),
-    fmtDateTime(b.analysisEndMs),
-    ((b.cleaningBeforeMs ?? 0) / 3600 / 1000).toFixed(2),
-    b.cleaningType ?? "none",
-    b.inFY ? "FY" : "Ovr",
-    Math.round(b.inputKg),
-    Math.round(b.outputKg),
-  ]);
+
+  const rows = schedule.batches.map((b) => {
+    const bookedNames = b.reactorIds.map(nameOf).join(" + ") || "—";
+    const poolIds = stagePoolById.get(b.stageId) ?? [];
+    const poolNames = poolIds.map(nameOf).join(", ");
+    // Format: "Booked · Pool: R101, R102" — mirrors the on-screen column
+    const reactorPoolCell =
+      poolNames && poolNames !== bookedNames
+        ? `${bookedNames} · Pool: ${poolNames}`
+        : bookedNames;
+    return [
+      b.batchId,
+      b.apiId,
+      b.apiName,
+      b.stageNo,
+      b.stageName,
+      b.batchNo,
+      reactorPoolCell,
+      fmtDateTime(b.startMs),
+      fmtDateTime(b.endMs),
+      fmtDateTime(b.analysisEndMs),
+      ((b.cleaningBeforeMs ?? 0) / 3600 / 1000).toFixed(2),
+      b.cleaningType ?? "none",
+      b.inFY ? "FY" : "Ovr",
+      Math.round(b.inputKg),
+      Math.round(b.outputKg),
+    ];
+  });
+
   renderTableSheet(sheet, headers, rows);
 }
 
@@ -849,7 +868,8 @@ export async function downloadGlobalWorkbookAsXls(
   renderScheduleSheet(
     wb.addWorksheet("Schedule"),
     data.schedule,
-    data.reactors
+    data.reactors,
+    data.apis
   );
 
   // 3. Gantt grid views
