@@ -205,7 +205,9 @@ export function validateApiDag(api: API): DagIssue[] {
       !sideChainStageIds.has(s.id) &&
       (successors.get(s.id) ?? []).length === 0
   );
-  if (mainSinks.length > 1) {
+  // For fork topology, multiple sinks are intentional — suppress the warning
+  // (each sink carries its own outputTargetKg, or equal-split applies).
+  if (mainSinks.length > 1 && api.topology !== "fork") {
     issues.push({
       apiId: api.id,
       stageId: null,

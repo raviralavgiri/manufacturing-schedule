@@ -11,6 +11,7 @@ import {
   GitMerge,
   Workflow,
   GitBranch,
+  Share2,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
@@ -19,6 +20,7 @@ import { fmtIsoDate, parseIsoDate } from "../utils/dates";
 import type { ApiTopology } from "../types";
 import ParallelTopologyEditor from "../components/ParallelTopologyEditor";
 import SideChainsTopologyEditor from "../components/SideChainsTopologyEditor";
+import ForkTopologyEditor from "../components/ForkTopologyEditor";
 
 /**
  * APIs tab — high-level "what we want to make" view.
@@ -200,7 +202,7 @@ export default function ApisTab() {
                 <Th align="right" yellow>
                   Target (kg)
                 </Th>
-                <Th yellow title="Stage Flow preset that scaffolds this API's stages. Linear chains stages 1→N. Parallel converges multiple sub-chains into a merge stage. Side chains add factor-driven sub-streams to a main backbone.">
+                <Th yellow title="Stage Flow preset that scaffolds this API's stages. Linear chains stages 1→N. Parallel converges multiple sub-chains into a merge stage. Side chains add factor-driven sub-streams to a main backbone. Fork diverges one preamble into N independent branches each with its own sink and optional per-branch target.">
                   Stage Flow
                 </Th>
                 <Th align="right" locked>
@@ -300,10 +302,7 @@ export default function ApisTab() {
                               });
                               if (isExpanded) setExpandedApiId(null);
                             } else {
-                              setPendingKindByApi((p) => ({
-                                ...p,
-                                [api.id]: kind,
-                              }));
+                              setPendingKindByApi((p) => ({ ...p, [api.id]: kind }));
                               setExpandedApiId(api.id);
                             }
                           }}
@@ -386,6 +385,27 @@ export default function ApisTab() {
                             )}
                             {currentTopology === "side_chains" && (
                               <SideChainsTopologyEditor
+                                onApply={(spec) => {
+                                  applyTopologyPreset(api.id, spec);
+                                  setExpandedApiId(null);
+                                  setPendingKindByApi((p) => {
+                                    const c = { ...p };
+                                    delete c[api.id];
+                                    return c;
+                                  });
+                                }}
+                                onCancel={() => {
+                                  setExpandedApiId(null);
+                                  setPendingKindByApi((p) => {
+                                    const c = { ...p };
+                                    delete c[api.id];
+                                    return c;
+                                  });
+                                }}
+                              />
+                            )}
+                            {currentTopology === "fork" && (
+                              <ForkTopologyEditor
                                 onApply={(spec) => {
                                   applyTopologyPreset(api.id, spec);
                                   setExpandedApiId(null);
@@ -606,6 +626,8 @@ function TopologyCell({
       <GitMerge size={12} className="text-violet-300" />
     ) : value === "side_chains" ? (
       <Workflow size={12} className="text-cyan-300" />
+    ) : value === "fork" ? (
+      <Share2 size={12} className="text-lime-300" />
     ) : (
       <GitBranch size={12} className="text-ink-300" />
     );
@@ -630,6 +652,9 @@ function TopologyCell({
         </option>
         <option value="side_chains" className="bg-ink-900 text-white">
           Side chains
+        </option>
+        <option value="fork" className="bg-ink-900 text-white">
+          Fork
         </option>
       </select>
       {value !== "linear" && (

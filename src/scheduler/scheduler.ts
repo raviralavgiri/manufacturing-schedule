@@ -716,7 +716,7 @@ export function runScheduler(
 
     const cleaningBeforeMs = cleaningKind === "none" ? 0 : rt.pcoMs;
     allBatches.push({
-      batchId: `${stage.id}-B${batchNo}`,
+      batchId: `${stage.stageName.replace(/\s+/g, "")}#${String(batchNo).padStart(3, "0")}`,
       apiId: api.id,
       apiName: api.name,
       apiColor: api.color,
