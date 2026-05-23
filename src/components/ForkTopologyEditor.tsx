@@ -15,46 +15,23 @@ interface Props {
  *                                ├── Branch-B[1] → … → Branch-B[M]  (sink B)
  *                                └── Branch-C[1] → … → Branch-C[M]  (sink C)
  *
- * The user configures: shared-preamble length, branch count, stages-per-branch,
- * and an optional output target (kg) per branch sink for unequal splits.
+ * The user configures: shared-preamble length, branch count, stages-per-branch.
+ * api.targetKg is split equally across all sinks; per-stage Input/Batch and
+ * Output/Batch (set in the Stages tab) drive the material balance cascade.
  */
 export default function ForkTopologyEditor({ initial, onApply, onCancel }: Props) {
   const [sharedStages,    setSharedStages]    = useState(clamp(initial?.sharedStages    ?? 1, 1, 8));
   const [branches,        setBranches]        = useState(clamp(initial?.branches        ?? 2, 2, 8));
   const [stagesPerBranch, setStagesPerBranch] = useState(clamp(initial?.stagesPerBranch ?? 2, 1, 8));
-  const [branchTargets,   setBranchTargets]   = useState<string[]>(
-    Array.from({ length: initial?.branches ?? 2 }, (_, i) =>
-      String(initial?.branchTargetKg?.[i] ?? "")
-    )
-  );
 
   const totalStages = sharedStages + branches * stagesPerBranch;
 
-  const adjustBranches = (delta: number) => {
-    const next = clamp(branches + delta, 2, 8);
-    setBranches(next);
-    setBranchTargets((prev) => {
-      const updated = prev.slice(0, next);
-      while (updated.length < next) updated.push("");
-      return updated;
-    });
-  };
-
-  const setTarget = (idx: number, v: string) => {
-    setBranchTargets((prev) => prev.map((x, i) => (i === idx ? v : x)));
-  };
-
   const handleApply = () => {
-    const parsedTargets = branchTargets.map((t) => {
-      const n = parseFloat(t);
-      return Number.isFinite(n) && n > 0 ? n : 0;
-    });
     onApply({
       kind: "fork",
       sharedStages:    Math.max(1, Math.floor(sharedStages)),
       branches:        Math.max(2, Math.floor(branches)),
       stagesPerBranch: Math.max(1, Math.floor(stagesPerBranch)),
-      branchTargetKg:  parsedTargets.some((x) => x > 0) ? parsedTargets : undefined,
     });
   };
 
@@ -93,7 +70,7 @@ export default function ForkTopologyEditor({ initial, onApply, onCancel }: Props
         <div className="sm:col-span-4">
           <Label>Branches</Label>
           <div className="flex items-center gap-1">
-            <button type="button" onClick={() => adjustBranches(-1)}
+            <button type="button" onClick={() => setBranches((v) => clamp(v - 1, 2, 8))}
               disabled={branches <= 2}
               className="rounded-md border border-white/10 bg-white/5 p-1.5 text-ink-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40">
               <Minus size={12} />
@@ -101,7 +78,7 @@ export default function ForkTopologyEditor({ initial, onApply, onCancel }: Props
             <span className="flex-1 rounded-md border border-white/10 bg-ink-900 px-2 py-1.5 text-center font-mono text-sm tabular-nums text-white">
               {branches}
             </span>
-            <button type="button" onClick={() => adjustBranches(1)}
+            <button type="button" onClick={() => setBranches((v) => clamp(v + 1, 2, 8))}
               disabled={branches >= 8}
               className="rounded-md border border-white/10 bg-white/5 p-1.5 text-ink-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40">
               <Plus size={12} />
@@ -130,36 +107,13 @@ export default function ForkTopologyEditor({ initial, onApply, onCancel }: Props
         </div>
       </div>
 
-      {/* Per-branch output targets */}
-      <div className="mt-3">
-        <Label>Branch output targets (kg) — optional, leave blank for equal split</Label>
-        <div className="flex flex-wrap items-center gap-2">
-          {Array.from({ length: branches }, (_, i) => {
-            const letter = String.fromCharCode(65 + i);
-            return (
-              <div key={i} className="flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1">
-                <span className="font-mono text-[11px] font-bold text-cyan-300">{letter}</span>
-                <input
-                  type="number"
-                  min={0}
-                  placeholder="auto"
-                  value={branchTargets[i] ?? ""}
-                  onChange={(e) => setTarget(i, e.target.value)}
-                  className="cell-yellow w-20 rounded px-1.5 py-0.5 text-right font-mono text-xs tabular-nums"
-                />
-                <span className="text-[10px] text-ink-400">kg</span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
       <p className="mt-3 flex items-start gap-1.5 text-[11px] text-ink-300">
         <Info size={11} className="mt-0.5 shrink-0 text-cyan-300" />
-        Shared preamble stages are linear. Each branch starts from the last
-        shared stage and runs independently to its own sink. Branch targets
-        drive the backward cascade for that arm — set them to get unequal
-        splits (e.g. 140 kg / 50 kg). Leave blank to split api.targetKg equally.
+        Shared preamble stages are linear. Each branch starts from the last shared
+        stage and runs independently to its own sink. The API target is split equally
+        across all branch sinks. Set each stage's Input/Batch and Output/Batch in the
+        <span className="mx-1 font-bold text-ink-100">Stages → Stage Parameters</span>
+        tab to drive the per-branch material balance.
       </p>
 
       <div className="mt-4 flex items-center justify-end gap-2">

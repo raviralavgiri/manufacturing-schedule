@@ -155,17 +155,6 @@ export interface StageMaster {
    */
   inputStageIds: string[];
   /**
-   * OPTIONAL — per-sink output target (kg) for fork / divergence topology.
-   * When set on a SINK stage (a stage with no successors in the main DAG),
-   * the cascade uses this value as the demand seed for that branch instead
-   * of the equal-split of `api.targetKg`. This lets different branches of a
-   * fork carry unequal targets (e.g. EZ4a → 140 kg, EZ4b → 50 kg).
-   *
-   * Leave undefined for non-sink stages and for single-sink linear chains —
-   * the cascade falls back to `targetKg / #sinks` in that case.
-   */
-  outputTargetKg?: number;
-  /**
    * OPTIONAL — side-chain anchor policy. When present, this stage is the
    * FIRST stage of a side chain (a sub-stream that feeds back into the
    * main backbone) and its `outputDemand` is OVERRIDDEN during cascade to
@@ -223,9 +212,10 @@ export type SideChainCascadePolicy = {
  *                     its main-predecessor's actualOutput to size the
  *                     side chain's output demand (see `cascadePolicy`).
  *   - "fork"        — A shared preamble that diverges into N independent
- *                     parallel branches, each ending in its own sink. Each
- *                     branch's sink carries an optional `outputTargetKg`
- *                     for an unequal per-branch target split.
+ *                     parallel branches, each ending in its own sink.
+ *                     api.targetKg is split equally across all sinks; the
+ *                     material balance uses each stage's batchSizeKg /
+ *                     inputKgPerBatch for backward cascade sizing.
  *
  * Topology is metadata describing how the stages were SCAFFOLDED — the
  * authoritative graph lives in `stage.inputStageIds` + `stage.cascadePolicy`.

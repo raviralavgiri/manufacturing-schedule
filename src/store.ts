@@ -144,12 +144,6 @@ interface AppState {
   addStage: (input: NewStageInput) => string;
   removeStage: (stageId: string) => void;
   /**
-   * Set (or clear) the per-sink output target (kg) for a fork/divergence
-   * sink stage. Pass `kg ≤ 0` to clear the override (equal-split applies).
-   * Triggers a cascade re-run and schedule recompute immediately.
-   */
-  setSinkOutputTarget: (stageId: string, kg: number) => void;
-  /**
    * Set the scheduling priority of stages from an ordered id list. The first
    * id gets priority 1 (scheduled earliest), the second 2, and so on. Used by
    * the Q-Plan "Cleanroom Stage Priority" up/down control. Stages not in the
@@ -522,21 +516,6 @@ export const useStore = create<AppState>((set, get) => ({
       return { ...p, apis };
     });
     scheduleRecompute(set, get, true);
-  },
-
-  setSinkOutputTarget: (stageId, kg) => {
-    const target = kg > 0 ? kg : undefined;
-    mutateActive(set, get, (p) => {
-      const apis = p.apis.map((a) => {
-        if (!a.stages.some((s) => s.id === stageId)) return a;
-        const stages = a.stages.map((s) =>
-          s.id === stageId ? { ...s, outputTargetKg: target } : s
-        );
-        return cascadePlannedBatches({ ...a, stages });
-      });
-      return { ...p, apis };
-    });
-    scheduleRecompute(set, get);
   },
 
   setStageInputs: (stageId, ids) => {

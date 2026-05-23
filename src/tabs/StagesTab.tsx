@@ -30,7 +30,6 @@ export default function StagesTab() {
   const setStageReactorPool = useStore((s) => s.setStageReactorPool);
   const setStageReactorSubstitutes = useStore((s) => s.setStageReactorSubstitutes);
   const setStageInputs = useStore((s) => s.setStageInputs);
-  const setSinkOutputTarget = useStore((s) => s.setSinkOutputTarget);
   const removeStage = useStore((s) => s.removeStage);
   const recentlyAddedStageId = useStore((s) => s.recentlyAddedStageId);
   const clearRecentlyAdded = useStore((s) => s.clearRecentlyAdded);
@@ -217,7 +216,6 @@ export default function StagesTab() {
           newRowRef={newRowRef}
           updateStageField={updateStageField}
           setStageName={setStageName}
-          setSinkOutputTarget={setSinkOutputTarget}
           removeStage={removeStage}
         />
       )}
@@ -297,7 +295,6 @@ function ParametersTab({
   newRowRef,
   updateStageField,
   setStageName,
-  setSinkOutputTarget,
   removeStage,
 }: {
   rows: RowType[];
@@ -309,7 +306,6 @@ function ParametersTab({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   updateStageField: (id: string, field: any, value: number) => void;
   setStageName: (id: string, name: string) => void;
-  setSinkOutputTarget: (stageId: string, kg: number) => void;
   removeStage: (id: string) => void;
 }) {
   return (
@@ -332,7 +328,6 @@ function ParametersTab({
                 </Th>
                 <Th align="right" yellow>Analysis (h)</Th>
                 <Th align="right" yellow>PCO (h)</Th>
-                <Th align="right" yellow title="Per-branch output target for fork topology sinks. Drives unequal cascade splits (e.g. 140 kg vs 50 kg). Leave blank for equal split of api.targetKg.">Branch Target (kg)</Th>
                 <Th align="right">&nbsp;</Th>
               </tr>
             </thead>
@@ -431,20 +426,6 @@ function ParametersTab({
                         allowZero
                       />
                     </td>
-                    {/* Branch Target (kg) — editable only for fork sink stages */}
-                    <td className="px-3 py-2">
-                      {r.isSink && r.apiTopology === "fork" ? (
-                        <div className="flex items-center justify-end gap-1">
-                          <Share2 size={10} className="shrink-0 text-lime-400/70" />
-                          <SinkTargetInput
-                            value={r.outputTargetKg ?? 0}
-                            onChange={(kg) => setSinkOutputTarget(r.id, kg)}
-                          />
-                        </div>
-                      ) : (
-                        <span className="flex justify-end text-[11px] text-ink-600">—</span>
-                      )}
-                    </td>
                     <td className="px-2 py-2 text-right">
                       {isConfirming ? (
                         <div className="inline-flex items-center gap-1">
@@ -476,7 +457,7 @@ function ParametersTab({
               })}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="py-12 text-center text-sm text-ink-300">
+                  <td colSpan={10} className="py-12 text-center text-sm text-ink-300">
                     No stages match. Click{" "}
                     <span className="font-bold text-cyan-300">+ Add Stage</span>{" "}
                     above to create one.
@@ -863,44 +844,6 @@ function BatchesTab({
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
-/** Small editable cell for a fork-sink's per-branch output target (kg). */
-function SinkTargetInput({
-  value,
-  onChange,
-}: {
-  value: number;
-  onChange: (kg: number) => void;
-}) {
-  const [local, setLocal] = useState(value > 0 ? String(value) : "");
-  useEffect(() => setLocal(value > 0 ? String(value) : ""), [value]);
-  const commit = () => {
-    const n = parseFloat(local);
-    if (Number.isFinite(n) && n > 0) {
-      onChange(n);
-      setLocal(String(n));
-    } else {
-      onChange(0);
-      setLocal("");
-    }
-  };
-  return (
-    <input
-      type="number"
-      min={0}
-      placeholder="auto"
-      value={local}
-      onChange={(e) => setLocal(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-        if (e.key === "Escape") { setLocal(value > 0 ? String(value) : ""); (e.target as HTMLInputElement).blur(); }
-      }}
-      className="cell-yellow w-24 rounded-md px-2 py-1 text-right font-mono text-xs tabular-nums transition"
-      title="Per-branch output target (kg) for this fork sink. Leave blank to auto-split api.targetKg equally across branches."
-    />
-  );
-}
-
 function Th({
   children,
   align = "left",
@@ -988,6 +931,16 @@ function TopologyIndicator({ topology }: { topology: ApiTopology }) {
         title="Stage Flow: side chains (sub-streams)"
       >
         <Workflow size={9} /> side
+      </span>
+    );
+  }
+  if (topology === "fork") {
+    return (
+      <span
+        className="inline-flex items-center gap-0.5 rounded border border-lime-300/30 bg-lime-300/10 px-1 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-lime-300"
+        title="Stage Flow: fork (divergence — shared preamble → independent branches)"
+      >
+        <Share2 size={9} /> fork
       </span>
     );
   }

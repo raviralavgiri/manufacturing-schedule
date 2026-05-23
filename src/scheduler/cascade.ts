@@ -78,23 +78,17 @@ export function cascadePlannedBatches(api: API): API {
   );
   const target = Math.max(0, api.targetKg ?? 0);
 
-  // Per-sink demand seeding: honour `outputTargetKg` on each sink when set
-  // (fork / divergence topology with unequal branch targets). Equal-split
-  // the remaining target across sinks that don't carry an explicit target.
-  const sinksWithTarget = mainSinks.filter((s) => (s.outputTargetKg ?? 0) > 0);
-  const sinksWithout    = mainSinks.filter((s) => !((s.outputTargetKg ?? 0) > 0));
-  const explicitTotal   = sinksWithTarget.reduce((sum, s) => sum + s.outputTargetKg!, 0);
-  const remaining       = Math.max(0, target - explicitTotal);
-  const perImplicit     = sinksWithout.length > 0 ? remaining / sinksWithout.length : 0;
+  // Per-sink demand seeding: split api.targetKg equally across all main sinks.
+  // Stage-level input/output quantities (batchSizeKg, inputKgPerBatch) on each
+  // stage drive the material balance — the cascade works backward from these
+  // per-sink seeds using those per-stage quantities.
+  const perSink = mainSinks.length > 0 ? target / mainSinks.length : 0;
 
   const mainSinkIds = new Set(mainSinks.map((s) => s.id));
 
   const outputDemandByStageId = new Map<string, number>();
   api.stages.forEach((s) => outputDemandByStageId.set(s.id, 0));
-  mainSinks.forEach((s) => {
-    const d = (s.outputTargetKg ?? 0) > 0 ? s.outputTargetKg! : perImplicit;
-    outputDemandByStageId.set(s.id, d);
-  });
+  mainSinks.forEach((s) => outputDemandByStageId.set(s.id, perSink));
 
   const plannedById = new Map<string, number>();
   api.stages.forEach((s) => plannedById.set(s.id, 0));

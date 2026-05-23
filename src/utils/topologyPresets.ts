@@ -44,8 +44,9 @@ export interface ParallelSpec {
  *                                └── Branch-C[1] → … → Branch-C[M]  (sink C)
  *
  * One shared preamble splits into `branches` independent parallel branches,
- * each ending in its own sink. Each branch's sink may carry a different
- * `outputTargetKg` so the cascade sizes each arm individually.
+ * each ending in its own sink. api.targetKg is split equally across all sinks;
+ * the material balance uses each stage's batchSizeKg / inputKgPerBatch for
+ * the backward cascade.
  */
 export interface ForkSpec {
   kind: "fork";
@@ -55,12 +56,6 @@ export interface ForkSpec {
   branches: number;
   /** Stages in every branch (same length for all branches). ≥ 1. */
   stagesPerBranch: number;
-  /**
-   * Per-branch output target in kg, applied to each branch's sink stage
-   * as `outputTargetKg`. Length = branches; missing entries → no explicit
-   * target (equal-split of any remaining `api.targetKg` at cascade time).
-   */
-  branchTargetKg?: number[];
 }
 
 export interface SideChainsSpec {
@@ -177,9 +172,6 @@ export function applyTopologyPresetToApi(
         ...existing,
         stageNo,
         stageName: existing.stageName,
-        // outputTargetKg from the spec position overrides existing value for
-        // fork sinks; undefined = clear any stale value from a previous preset.
-        outputTargetKg: pos.outputTargetKg,
         // inputStageIds / cascadePolicy are filled in below once all rows
         // have a stable id.
         inputStageIds: [],
@@ -203,7 +195,6 @@ export function applyTopologyPresetToApi(
       plannedBatches: defaults.plannedBatches,
       inputStageIds: [],
       cascadePolicy: undefined,
-      outputTargetKg: pos.outputTargetKg,
     };
   });
 
@@ -267,15 +258,12 @@ export function applyTopologyPresetToApi(
 /**
  * Internal scaffold position. Represents one stage in stageNo order with
  * its display name, the stageNos it should pull from in `inputStageIds`,
- * an optional `cascadePolicy` (only side-chain anchors), and an optional
- * per-branch sink target (only fork sinks).
+ * and an optional `cascadePolicy` (only side-chain anchors).
  */
 interface ScaffoldPosition {
   defaultName: string;
   inputStageNos: number[];
   cascadePolicy?: { baseStageNo: number; factor: number };
-  /** outputTargetKg to stamp on the stage when it's a fork sink. */
-  outputTargetKg?: number;
 }
 
 function buildPositions(spec: TopologyPresetSpec): ScaffoldPosition[] {
@@ -342,7 +330,6 @@ function buildForkPositions(spec: ForkSpec): ScaffoldPosition[] {
   const shared    = Math.max(1, Math.floor(spec.sharedStages));
   const branches  = Math.max(2, Math.floor(spec.branches));
   const perBranch = Math.max(1, Math.floor(spec.stagesPerBranch));
-  const targets   = spec.branchTargetKg ?? [];
   const positions: ScaffoldPosition[] = [];
 
   // ── Shared preamble ───────────────────────────────────────────────────
@@ -356,7 +343,8 @@ function buildForkPositions(spec: ForkSpec): ScaffoldPosition[] {
   // ── Parallel branches ─────────────────────────────────────────────────
   // Each branch starts at stageNo = shared + branchIdx * perBranch + 1.
   // The first stage of every branch lists the last shared stage as its
-  // predecessor.
+  // predecessor. api.targetKg is split equally across all sinks at cascade
+  // time; per-stage batchSizeKg / inputKgPerBatch drive the material balance.
   const lastSharedNo = shared;
   for (let b = 0; b < branches; b++) {
     const letter = chainLabel(b); // A, B, C …
@@ -365,11 +353,9 @@ function buildForkPositions(spec: ForkSpec): ScaffoldPosition[] {
       const stageNo = branchStart + k;
       const isFirst = k === 0;
       const isLast  = k === perBranch - 1;
-      const targetKg = isLast ? (targets[b] ?? 0) : 0;
       positions.push({
         defaultName: isLast ? `${letter}-API` : `${letter}${k + 1}`,
         inputStageNos: isFirst ? [lastSharedNo] : [stageNo - 1],
-        outputTargetKg: targetKg > 0 ? targetKg : undefined,
       });
     }
   }
