@@ -77,7 +77,7 @@ export default function GanttTab() {
     if (!anyFilterActive) return schedule.batches;
     return schedule.batches.filter((b) => {
       if (apiFilter.size > 0 && !apiFilter.has(b.apiId)) return false;
-      if (stageFilter.size > 0 && !stageFilter.has(b.stageName)) return false;
+      if (stageFilter.size > 0 && !stageFilter.has(b.stageId)) return false;
       if (
         reactorFilter.size > 0 &&
         !b.reactorIds.some((rid) => reactorFilter.has(rid))
@@ -100,19 +100,21 @@ export default function GanttTab() {
   );
 
   const stageOptions: MsOption[] = useMemo(() => {
-    const seen = new Map<string, number>();
+    const opts: MsOption[] = [];
     apis.forEach((a) =>
-      a.stages.forEach((s) =>
-        seen.set(s.stageName, (seen.get(s.stageName) ?? 0) + 1)
-      )
+      [...a.stages]
+        .sort((x, y) => x.stageNo - y.stageNo)
+        .forEach((s) =>
+          opts.push({
+            value: s.id,            // stageId — unique UUID, avoids name collisions
+            label: `S${s.stageNo} · ${s.stageName}`,
+            secondary: a.name,      // which API this stage belongs to
+            group: a.name,          // visually group by API in the dropdown
+            color: a.color,
+          })
+        )
     );
-    return Array.from(seen.entries())
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([name, count]) => ({
-        value: name,
-        label: name,
-        secondary: `${count} use${count === 1 ? "" : "s"}`,
-      }));
+    return opts;
   }, [apis]);
 
   const reactorOptions: MsOption[] = useMemo(
@@ -369,7 +371,7 @@ export default function GanttTab() {
           options={stageOptions}
           selected={stageFilter}
           onChange={setStageFilter}
-          width={240}
+          width={300}
         />
         <MultiSelectPopover
           label="Reactors"
