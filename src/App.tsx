@@ -38,6 +38,7 @@ import DashboardTab from "./tabs/DashboardTab";
 import QuarterlyPlanTab from "./tabs/QuarterlyPlanTab";
 import BatchesTab from "./tabs/BatchesTab";
 import BioreactorIcon from "./components/icons/BioreactorIcon";
+import StageFlowIcon from "./components/icons/StageFlowIcon";
 
 type TabId =
   | "apis"
@@ -68,7 +69,7 @@ const TABS: {
   {
     id: "stages",
     label: "Stages",
-    icon: <Database size={18} />,
+    icon: <StageFlowIcon size={18} />,
     accent: "amber",
     desc: "Per-stage operational details",
   },
