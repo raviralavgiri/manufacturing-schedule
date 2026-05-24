@@ -44,6 +44,15 @@ interface BookedSlot {
 const CAMPAIGN_MAX_MS = 30 * 24 * 3600 * 1000;
 
 /**
+ * PCO-minimisation: how far into the future we push a candidate batch when
+ * it would cause a PCO on a reactor whose current campaign still has batches
+ * remaining. 90 days is large enough that the scheduler always prefers to
+ * finish the active campaign first. If the active campaign is genuinely blocked
+ * for longer than this horizon, the switch is allowed (preventing starvation).
+ */
+const CAMPAIGN_SWITCH_PENALTY_MS = 90 * 24 * 3600 * 1000;
+
+/**
  * Equipment-availability sequencer — POOL model + PCO + 30-day campaign cap.
  *
  * Each batch uses ONE reactor at a time. `stage.reactorPool` is the list of
@@ -170,6 +179,18 @@ export function runScheduler(
     reactorLoadHours.set(r.id, 0);
     reactorBatchCount.set(r.id, 0);
   });
+
+  /**
+   * Last committed (apiId, stageId) campaign per reactor.
+   * Used by the PCO-minimisation heuristic: when a candidate batch would
+   * cause a PCO on a reactor whose current campaign still has batches
+   * remaining, its effective start is inflated by CAMPAIGN_SWITCH_PENALTY_MS
+   * so the scheduler finishes the active campaign before switching.
+   */
+  const reactorActiveCampaign = new Map<
+    string,
+    { apiId: string; stageId: string } | null
+  >(reactors.map((r) => [r.id, null]));
 
   // ─ Maintenance windows ───────────────────────────────────────────────────
   // Pre-compute unavailability windows per reactor:
@@ -737,6 +758,8 @@ export function runScheduler(
       cleaningType: cleaningKind,
     });
     rt.booked++;
+    // Track the active campaign on this reactor for PCO-minimisation.
+    reactorActiveCampaign.set(bestReactor, { apiId: api.id, stageId: stage.id });
   };
 
   // Tie-break between two equally-early candidates: user priority first
@@ -814,6 +837,37 @@ export function runScheduler(
       if (cand.get(succ.stage.id) == null) dirty.add(succ.stage.id);
   };
 
+  // ─ PCO-minimisation helper ────────────────────────────────────────────────
+  /**
+   * Returns the "effective" start time used for candidate comparison.
+   *
+   * If the candidate batch would cause a PCO (`cleaningKind === "pco"`) on
+   * the chosen reactor, AND that reactor's currently active campaign still has
+   * batches remaining, we inflate the effective start by
+   * CAMPAIGN_SWITCH_PENALTY_MS. This makes the scheduler strongly prefer
+   * continuing the active campaign (no PCO) over starting a new one
+   * (PCO), naturally serialising campaigns on shared reactors and minimising
+   * the total number of PCOs. If the active campaign is genuinely blocked for
+   * longer than the penalty window, the switch proceeds normally to prevent
+   * starvation.
+   */
+  const effectiveStartOf = (rt: StageRT, c: NonNullable<Cand>): number => {
+    if (c.cleaningKind !== "pco") return c.startMs;
+    const active = reactorActiveCampaign.get(c.reactor);
+    if (!active) return c.startMs;
+    if (active.apiId === rt.api.id && active.stageId === rt.stage.id)
+      return c.startMs; // same campaign — no penalty
+    // Different campaign: penalise only if the active campaign still has
+    // unscheduled batches.
+    const hasRemaining = stageRTs.some(
+      (srt) =>
+        srt.api.id === active.apiId &&
+        srt.stage.id === active.stageId &&
+        srt.booked < srt.planned
+    );
+    return hasRemaining ? c.startMs + CAMPAIGN_SWITCH_PENALTY_MS : c.startMs;
+  };
+
   // ─ List-scheduling main loop ───────────────────────────────────────────
   // Repeatedly book whichever ready batch can start earliest. "Ready" = its
   // material gate is satisfiable from already-approved upstream output. This
@@ -831,17 +885,22 @@ export function runScheduler(
 
     let best: Cand = null;
     let bestRt: StageRT | null = null;
+    let bestEff = Infinity;
     for (const rt of stageRTs) {
       if (rt.booked >= rt.planned) continue;
       const c = cand.get(rt.stage.id);
       if (!c) continue;
+      // Use campaign-penalty-adjusted effective start for comparison so the
+      // scheduler finishes the active campaign before switching to a new one.
+      const cEff = effectiveStartOf(rt, c);
       if (
         best === null ||
-        c.startMs < best.startMs ||
-        (c.startMs === best.startMs && bestRt !== null && aWins(rt, bestRt))
+        cEff < bestEff ||
+        (cEff === bestEff && bestRt !== null && aWins(rt, bestRt))
       ) {
         best = c;
         bestRt = rt;
+        bestEff = cEff;
       }
     }
 
