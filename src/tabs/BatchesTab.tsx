@@ -1,15 +1,23 @@
 import { useMemo, useRef, useState } from "react";
 import {
-  Lock,
-  Workflow,
+  Filter,
+  FlaskConical,
   GitBranch,
   GitMerge,
+  Layers,
+  Lock,
   Search,
   Share2,
+  Workflow,
+  X,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
 import { Card, SectionHeader } from "../components/Primitives";
+import MultiSelectPopover, {
+  ClearFiltersButton,
+  type Option as MsOption,
+} from "../components/MultiSelectPopover";
 import type { ApiTopology, StageMaster } from "../types";
 
 /**
@@ -23,13 +31,48 @@ import type { ApiTopology, StageMaster } from "../types";
  */
 export default function BatchesTab() {
   const apis = useStore((s) => s.apis);
+
+  // ── Search + filter state ─────────────────────────────────────────────────
   const [q, setQ] = useState("");
+  const [apiFilter, setApiFilter] = useState<Set<string>>(new Set());
+  const [stageFilter, setStageFilter] = useState<Set<string>>(new Set());
+
+  const anyFilterActive =
+    apiFilter.size > 0 || stageFilter.size > 0 || q.trim() !== "";
 
   const sortedApis = useMemo(
     () => [...apis].sort((a, b) => a.id.localeCompare(b.id)),
     [apis]
   );
 
+  // ── Filter option lists ───────────────────────────────────────────────────
+  const apiOptions: MsOption[] = useMemo(
+    () =>
+      sortedApis.map((a) => ({
+        value: a.id,
+        label: a.name === a.id ? a.id : a.name,
+        color: a.color,
+      })),
+    [sortedApis]
+  );
+
+  const stageOptions: MsOption[] = useMemo(() => {
+    const seen = new Map<string, number>();
+    sortedApis.forEach((a) =>
+      a.stages.forEach((s) =>
+        seen.set(s.stageName, (seen.get(s.stageName) ?? 0) + 1)
+      )
+    );
+    return Array.from(seen.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([name, count]) => ({
+        value: name,
+        label: name,
+        secondary: `${count} API${count === 1 ? "" : "s"}`,
+      }));
+  }, [sortedApis]);
+
+  // ── Row building + filtering ──────────────────────────────────────────────
   const rows = useMemo(() => {
     type Row = StageMaster & {
       color: string;
@@ -121,16 +164,31 @@ export default function BatchesTab() {
       );
     });
 
-    if (!q) return all;
-    const lower = q.toLowerCase();
-    return all.filter(
-      (r) =>
-        r.apiId.toLowerCase().includes(lower) ||
-        r.apiDisplayName.toLowerCase().includes(lower) ||
-        r.stageName.toLowerCase().includes(lower) ||
-        r.id.toLowerCase().includes(lower)
-    );
-  }, [sortedApis, q]);
+    // Apply API filter
+    let result = all;
+    if (apiFilter.size > 0) {
+      result = result.filter((r) => apiFilter.has(r.apiId));
+    }
+
+    // Apply Stage name filter
+    if (stageFilter.size > 0) {
+      result = result.filter((r) => stageFilter.has(r.stageName));
+    }
+
+    // Apply text search
+    if (q.trim()) {
+      const lower = q.toLowerCase().trim();
+      result = result.filter(
+        (r) =>
+          r.apiId.toLowerCase().includes(lower) ||
+          r.apiDisplayName.toLowerCase().includes(lower) ||
+          r.stageName.toLowerCase().includes(lower) ||
+          r.id.toLowerCase().includes(lower)
+      );
+    }
+
+    return result;
+  }, [sortedApis, q, apiFilter, stageFilter]);
 
   const newRowRef = useRef<HTMLTableRowElement>(null);
   const recentlyAddedStageId = useStore((s) => s.recentlyAddedStageId);
@@ -152,11 +210,59 @@ export default function BatchesTab() {
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search stage / API…"
-              className="w-64 rounded-lg border border-white/10 bg-white/5 py-2 pl-9 pr-3 text-sm text-white placeholder-ink-400 outline-none focus:border-cyan-300/50"
+              className="w-56 rounded-lg border border-white/10 bg-white/5 py-2 pl-9 pr-3 text-sm text-white placeholder-ink-400 outline-none focus:border-cyan-300/50"
             />
+            {q && (
+              <button
+                onClick={() => setQ("")}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-400 hover:text-white"
+              >
+                <X size={12} />
+              </button>
+            )}
           </div>
         }
       />
+
+      {/* Filter bar */}
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/5 bg-white/[0.02] p-2">
+        <span className="ml-1 inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-ink-400">
+          <Filter size={12} /> Filter
+        </span>
+
+        <MultiSelectPopover
+          label="APIs"
+          icon={<FlaskConical size={12} />}
+          options={apiOptions}
+          selected={apiFilter}
+          onChange={setApiFilter}
+          width={300}
+        />
+
+        <MultiSelectPopover
+          label="Stages"
+          icon={<Layers size={12} />}
+          options={stageOptions}
+          selected={stageFilter}
+          onChange={setStageFilter}
+          width={260}
+        />
+
+        <ClearFiltersButton
+          active={anyFilterActive}
+          onClear={() => {
+            setApiFilter(new Set());
+            setStageFilter(new Set());
+            setQ("");
+          }}
+        />
+
+        {anyFilterActive && (
+          <span className="ml-auto inline-flex items-center gap-1 rounded-md border border-cyan-300/30 bg-cyan-300/8 px-2 py-1 text-[11px] font-semibold text-cyan-200">
+            {rows.length.toLocaleString()} of {totalStages.toLocaleString()} stages
+          </span>
+        )}
+      </div>
 
       <Card className="overflow-hidden p-0">
         <div className="max-h-[68vh] overflow-auto">
@@ -323,7 +429,9 @@ export default function BatchesTab() {
                     colSpan={7}
                     className="py-12 text-center text-sm text-ink-300"
                   >
-                    No stages match.
+                    {anyFilterActive
+                      ? "No stages match the active filters."
+                      : "No stages found."}
                   </td>
                 </tr>
               )}
