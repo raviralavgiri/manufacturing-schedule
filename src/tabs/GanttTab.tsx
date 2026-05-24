@@ -816,7 +816,7 @@ export default function GanttTab() {
                                     {processWidth > 36 && (
                                       <span className="pointer-events-none absolute inset-0 flex items-center overflow-hidden px-1.5">
                                         <span
-                                          className="truncate font-mono text-[10px] font-bold leading-none tracking-tight text-white"
+                                          className="truncate font-mono text-[10px] font-bold leading-none tracking-tight text-sky-200"
                                           style={{ textShadow: "0 1px 3px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.7)" }}
                                         >
                                           {b.batchId}
@@ -843,7 +843,7 @@ export default function GanttTab() {
                                   {cycleWidth > 36 && (
                                     <span className="pointer-events-none absolute inset-0 flex items-center overflow-hidden px-1.5">
                                       <span
-                                        className="truncate font-mono text-[10px] font-bold leading-none tracking-tight text-white"
+                                        className="truncate font-mono text-[10px] font-bold leading-none tracking-tight text-sky-200"
                                         style={{ textShadow: "0 1px 3px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.7)" }}
                                       >
                                         {b.batchId}
