@@ -37,6 +37,7 @@ import ClashTab from "./tabs/ClashTab";
 import DashboardTab from "./tabs/DashboardTab";
 import QuarterlyPlanTab from "./tabs/QuarterlyPlanTab";
 import BatchesTab from "./tabs/BatchesTab";
+import BioreactorIcon from "./components/icons/BioreactorIcon";
 
 type TabId =
   | "apis"
@@ -73,8 +74,8 @@ const TABS: {
   },
   {
     id: "reactors",
-    label: "Master Equipment",
-    icon: <Beaker size={18} />,
+    label: "Equipment",
+    icon: <BioreactorIcon size={18} />,
     accent: "cyan",
     desc: "Manage the equipment fleet",
   },
