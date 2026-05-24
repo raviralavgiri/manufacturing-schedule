@@ -337,9 +337,9 @@ export interface GlobalWorkbookData {
   weeks: WeekBucket[];
 }
 
-/** Short cell label for a batch on the Gantt grid: "S2·#5". */
-function batchCellText(stageNo: number, batchNo: number): string {
-  return `S${stageNo}·#${batchNo}`;
+/** Short cell label for a batch on the Gantt grid — uses the scheduler's batchId (e.g. "DT1#001"). */
+function batchCellText(batchId: string): string {
+  return batchId;
 }
 
 /**
@@ -369,7 +369,7 @@ export function buildGanttGridSheets(
     );
     if (endWk < 0 || startWk > totalWeeks - 1) return;
     const color = apiColorById.get(b.apiId) ?? b.apiColor ?? "#9ca3af";
-    const text = batchCellText(b.stageNo, b.batchNo);
+    const text = batchCellText(b.batchId);
     const title = `${b.batchId} · ${b.apiName} · S${b.stageNo} · #${b.batchNo}`;
     for (let i = startWk; i <= endWk; i++) {
       cells[i] = { color, text, title };

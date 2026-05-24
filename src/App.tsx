@@ -36,11 +36,13 @@ import EquipmentTab from "./tabs/EquipmentTab";
 import ClashTab from "./tabs/ClashTab";
 import DashboardTab from "./tabs/DashboardTab";
 import QuarterlyPlanTab from "./tabs/QuarterlyPlanTab";
+import BatchesTab from "./tabs/BatchesTab";
 
 type TabId =
   | "apis"
   | "stages"
   | "reactors"
+  | "batches"
   | "schedule"
   | "gantt"
   | "equipment"
@@ -75,6 +77,13 @@ const TABS: {
     icon: <Beaker size={18} />,
     accent: "cyan",
     desc: "Manage the equipment fleet",
+  },
+  {
+    id: "batches",
+    label: "No. of Batches",
+    icon: <Activity size={18} />,
+    accent: "cyan",
+    desc: "Cascade-computed material balance per stage",
   },
   {
     id: "schedule",
@@ -302,6 +311,7 @@ export default function App() {
           {active === "apis" && <ApisTab />}
           {active === "stages" && <StagesTab />}
           {active === "reactors" && <MasterReactorTab />}
+          {active === "batches" && <BatchesTab />}
           {active === "schedule" && <ScheduleTab />}
           {active === "gantt" && <GanttTab />}
           {active === "equipment" && <EquipmentTab />}

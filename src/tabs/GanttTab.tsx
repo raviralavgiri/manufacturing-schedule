@@ -811,8 +811,16 @@ export default function GanttTab() {
                                       background: barColor,
                                       boxShadow: `0 0 6px ${barColor}99, inset 0 1px 0 rgba(255,255,255,0.25)`,
                                     }}
-                                    className="border border-white/20 transition-all group-hover:brightness-125 group-hover:saturate-150"
-                                  />
+                                    className="relative border border-white/20 transition-all group-hover:brightness-125 group-hover:saturate-150"
+                                  >
+                                    {processWidth > 44 && (
+                                      <span className="pointer-events-none absolute inset-0 flex items-center overflow-hidden px-1">
+                                        <span className="truncate font-mono text-[8px] font-semibold leading-none text-white/90 drop-shadow-sm">
+                                          {b.batchId}
+                                        </span>
+                                      </span>
+                                    )}
+                                  </div>
                                 </>
                               ) : (
                                 <div
@@ -823,12 +831,20 @@ export default function GanttTab() {
                                     boxShadow: `0 0 6px ${barColor}99, inset 0 1px 0 rgba(255,255,255,0.25)`,
                                   }}
                                   className={clsx(
-                                    "border border-white/20 transition-all group-hover:brightness-125 group-hover:saturate-150",
+                                    "relative border border-white/20 transition-all group-hover:brightness-125 group-hover:saturate-150",
                                     cleanColor && cleaningWidth > 1
                                       ? ""
                                       : "rounded-l-sm"
                                   )}
-                                />
+                                >
+                                  {cycleWidth > 44 && (
+                                    <span className="pointer-events-none absolute inset-0 flex items-center overflow-hidden px-1">
+                                      <span className="truncate font-mono text-[8px] font-semibold leading-none text-white/90 drop-shadow-sm">
+                                        {b.batchId}
+                                      </span>
+                                    </span>
+                                  )}
+                                </div>
                               )}
                               {tailWidth > 1 && (
                                 <div
