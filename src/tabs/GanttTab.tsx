@@ -813,9 +813,12 @@ export default function GanttTab() {
                                     }}
                                     className="relative border border-white/20 transition-all group-hover:brightness-125 group-hover:saturate-150"
                                   >
-                                    {processWidth > 44 && (
-                                      <span className="pointer-events-none absolute inset-0 flex items-center overflow-hidden px-1">
-                                        <span className="truncate font-mono text-[8px] font-semibold leading-none text-white/90 drop-shadow-sm">
+                                    {processWidth > 36 && (
+                                      <span className="pointer-events-none absolute inset-0 flex items-center overflow-hidden px-1.5">
+                                        <span
+                                          className="truncate font-mono text-[10px] font-bold leading-none tracking-tight text-white"
+                                          style={{ textShadow: "0 1px 3px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.7)" }}
+                                        >
                                           {b.batchId}
                                         </span>
                                       </span>
@@ -837,9 +840,12 @@ export default function GanttTab() {
                                       : "rounded-l-sm"
                                   )}
                                 >
-                                  {cycleWidth > 44 && (
-                                    <span className="pointer-events-none absolute inset-0 flex items-center overflow-hidden px-1">
-                                      <span className="truncate font-mono text-[8px] font-semibold leading-none text-white/90 drop-shadow-sm">
+                                  {cycleWidth > 36 && (
+                                    <span className="pointer-events-none absolute inset-0 flex items-center overflow-hidden px-1.5">
+                                      <span
+                                        className="truncate font-mono text-[10px] font-bold leading-none tracking-tight text-white"
+                                        style={{ textShadow: "0 1px 3px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.7)" }}
+                                      >
                                         {b.batchId}
                                       </span>
                                     </span>
