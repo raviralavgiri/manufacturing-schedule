@@ -781,6 +781,44 @@ export function runScheduler(
     return prev !== undefined ? prev + rt.bcfMs : -Infinity;
   };
 
+  // ─ Quarterly distribution (backward integration from API quantities) ───────
+  // Each stage's planned batches are spread roughly evenly across the API's
+  // four quarters (≈ planned/4 per quarter) instead of being scheduled in one
+  // continuous run. This is what keeps every API "live" in a shared cleanroom
+  // every quarter rather than one API monopolising a quarter while the others
+  // wait. The mapping is purely by batch index → quarter, so it's deterministic
+  // and round-trips cleanly with the No. of Batches cascade.
+  //
+  //   perQuarterLimit = ⌈ planned / 4 ⌉
+  //   target quarter of batch k (0-based) = ⌊ k / perQuarterLimit ⌋  (clamped 0..3)
+  //
+  // The quarter floor is applied via Math.max alongside the material/BCF gates,
+  // so it can only DELAY a batch into its quarter — never pull one earlier than
+  // its inputs allow.
+  const perQuarterLimitOf = (rt: StageRT): number =>
+    Math.max(1, Math.ceil(rt.planned / 4));
+
+  const quarterLenOf = (rt: StageRT): number => {
+    const span = rt.apiEnd - rt.apiStart;
+    return span > 0 ? span / 4 : 0;
+  };
+
+  /** Earliest start imposed by the quarter the NEXT batch (index = booked)
+   *  is assigned to. Returns apiStart when the API window is degenerate. */
+  const quarterFloorOf = (rt: StageRT): number => {
+    const qLen = quarterLenOf(rt);
+    if (qLen <= 0) return rt.apiStart;
+    const targetQ = Math.min(3, Math.floor(rt.booked / perQuarterLimitOf(rt)));
+    return rt.apiStart + targetQ * qLen;
+  };
+
+  /** Quarter index (0..3) that a timestamp falls in within rt's API window. */
+  const quarterOfTime = (rt: StageRT, ms: number): number => {
+    const qLen = quarterLenOf(rt);
+    if (qLen <= 0) return 0;
+    return Math.max(0, Math.min(3, Math.floor((ms - rt.apiStart) / qLen)));
+  };
+
   type Cand = { startMs: number; reactor: string; cleaningKind: CleanKind } | null;
 
   // Invalidation indexes: which stages must be re-probed when a reactor is
@@ -817,7 +855,12 @@ export function runScheduler(
       cand.set(rt.stage.id, null);
       return;
     }
-    const earliest = Math.max(matTime + bufferMs, rt.apiStart, bcfGateOf(rt));
+    const earliest = Math.max(
+      matTime + bufferMs,
+      rt.apiStart,
+      bcfGateOf(rt),
+      quarterFloorOf(rt)
+    );
     cand.set(rt.stage.id, findBestSlot(rt, earliest));
   };
 
@@ -857,15 +900,27 @@ export function runScheduler(
     if (!active) return c.startMs;
     if (active.apiId === rt.api.id && active.stageId === rt.stage.id)
       return c.startMs; // same campaign — no penalty
-    // Different campaign: penalise only if the active campaign still has
-    // unscheduled batches.
-    const hasRemaining = stageRTs.some(
-      (srt) =>
-        srt.api.id === active.apiId &&
-        srt.stage.id === active.stageId &&
-        srt.booked < srt.planned
-    );
-    return hasRemaining ? c.startMs + CAMPAIGN_SWITCH_PENALTY_MS : c.startMs;
+    // Different campaign: penalise the switch ONLY if the active campaign still
+    // owes batches in THIS quarter (or an earlier one). Once it has filled its
+    // quarterly quota, the remaining batches belong to later quarters and must
+    // NOT block another API's current-quarter campaign — otherwise a single API
+    // would monopolise the shared cleanroom. This is the quarter-aware fix for
+    // the old "annual remaining" check that starved later campaigns.
+    const candQ = quarterOfTime(rt, c.startMs);
+    const hasRemainingThisQuarter = stageRTs.some((srt) => {
+      if (srt.api.id !== active.apiId || srt.stage.id !== active.stageId)
+        return false;
+      if (srt.booked >= srt.planned) return false;
+      // Quarter the active campaign's NEXT unbooked batch is assigned to.
+      const nextQ = Math.min(
+        3,
+        Math.floor(srt.booked / perQuarterLimitOf(srt))
+      );
+      return nextQ <= candQ;
+    });
+    return hasRemainingThisQuarter
+      ? c.startMs + CAMPAIGN_SWITCH_PENALTY_MS
+      : c.startMs;
   };
 
   // ─ List-scheduling main loop ───────────────────────────────────────────
@@ -915,7 +970,12 @@ export function runScheduler(
       }
       if (!fb) break;
       const matTime = materialReadyTime(fb, true) ?? fb.apiStart;
-      const earliest = Math.max(matTime + bufferMs, fb.apiStart, bcfGateOf(fb));
+      const earliest = Math.max(
+        matTime + bufferMs,
+        fb.apiStart,
+        bcfGateOf(fb),
+        quarterFloorOf(fb)
+      );
       place(fb, findBestSlot(fb, earliest));
       remainingBatches--;
       continue;

@@ -58,6 +58,43 @@ export default function GanttTab() {
     );
     return m;
   }, [apisRaw]);
+  // Sink stages per API = stages no other stage consumes (final product
+  // stages). In By-API mode we render ONLY these so each API row shows its
+  // finished-product timeline, not every intermediate stage stacked together.
+  const sinkStageIds = useMemo(() => {
+    const sinks = new Set<string>();
+    apisRaw.forEach((a) => {
+      const consumed = new Set<string>();
+      a.stages.forEach((s) =>
+        (s.inputStageIds ?? []).forEach((id) => consumed.add(id))
+      );
+      a.stages.forEach((s) => {
+        if (!consumed.has(s.id)) sinks.add(s.id);
+      });
+    });
+    return sinks;
+  }, [apisRaw]);
+
+  // apiId → label of its final stage(s), shown in the By-API rail.
+  const sinkLabelByApiId = useMemo(() => {
+    const m = new Map<string, string>();
+    apisRaw.forEach((a) => {
+      const consumed = new Set<string>();
+      a.stages.forEach((s) =>
+        (s.inputStageIds ?? []).forEach((id) => consumed.add(id))
+      );
+      const sinks = [...a.stages]
+        .sort((x, y) => x.stageNo - y.stageNo)
+        .filter((s) => !consumed.has(s.id));
+      if (sinks.length === 1) {
+        m.set(a.id, `S${sinks[0].stageNo} · ${sinks[0].stageName}`);
+      } else if (sinks.length > 1) {
+        m.set(a.id, `${sinks.length} final stages`);
+      }
+    });
+    return m;
+  }, [apisRaw]);
+
   const [pxPerWeek, setPxPerWeek] = useState(64); // default = "Quarter view": ~13 weeks visible per ~830px
   const [mode, setMode] = useState<Mode>("by-stage");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -143,13 +180,20 @@ export default function GanttTab() {
         });
         return;
       }
-      const key =
-        mode === "by-api" ? b.apiId : `${b.apiId}__S${b.stageNo}`;
+      if (mode === "by-api") {
+        // Final-stage only: skip intermediate stages so each API row shows
+        // its finished-product timeline.
+        if (!sinkStageIds.has(b.stageId)) return;
+        if (!map.has(b.apiId)) map.set(b.apiId, []);
+        map.get(b.apiId)!.push(b);
+        return;
+      }
+      const key = `${b.apiId}__S${b.stageNo}`;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(b);
     });
     return map;
-  }, [filteredBatches, mode, reactorFilter]);
+  }, [filteredBatches, mode, reactorFilter, sinkStageIds]);
 
   // Build row list
   const rows = useMemo(() => {
@@ -259,6 +303,8 @@ export default function GanttTab() {
         subtitle={
           anyFilterActive
             ? `Showing ${filteredBatches.length} of ${schedule.batches.length} batches (filters active)`
+            : mode === "by-api"
+            ? "By API — final (product) stage only. Solid bar = process; cyan tail = analysis."
             : "Solid bar = process; striped bar = wait inside slot. Cyan tail = analysis, yellow pre-tail = PCO, green pre-tail = 30-day campaign cleaning."
         }
         right={
@@ -400,11 +446,14 @@ export default function GanttTab() {
 
       <div ref={chartCardRef} className="gantt-chart-card">
       <Card className="overflow-hidden p-0">
-        <div className="flex">
-          {/* Left labels column */}
-          <div className="w-[200px] shrink-0 border-r border-white/10 bg-ink-900/40">
-            {/* Header spacer */}
-            <div className="h-[60px] border-b border-white/10" />
+        {/* Single scroll container — freezes the dates header (sticky top) and
+            the left labels column (sticky left) while both axes scroll. */}
+        <div className="max-h-[72vh] overflow-auto">
+        <div className="flex" style={{ width: 200 + totalWeeks * pxPerWeek }}>
+          {/* Left labels column — frozen on horizontal scroll */}
+          <div className="sticky left-0 z-20 w-[200px] shrink-0 border-r border-white/10 bg-ink-950">
+            {/* Header spacer — frozen on BOTH axes (corner) */}
+            <div className="sticky top-0 z-30 h-[60px] border-b border-white/10 bg-ink-950" />
             {/* Rows */}
             {mode === "by-stage" &&
               apis.map((a) => {
@@ -485,6 +534,14 @@ export default function GanttTab() {
                       }}
                     />
                     <span className="truncate">{a.name}</span>
+                    {sinkLabelByApiId.get(a.id) && (
+                      <span
+                        className="ml-auto shrink-0 truncate text-[9px] font-normal text-ink-400"
+                        title={`Final stage: ${sinkLabelByApiId.get(a.id)}`}
+                      >
+                        {sinkLabelByApiId.get(a.id)}
+                      </span>
+                    )}
                   </div>
                 );
               })}
@@ -523,8 +580,8 @@ export default function GanttTab() {
               })}
           </div>
 
-          {/* Right scrollable timeline */}
-          <div className="relative flex-1 overflow-auto">
+          {/* Right timeline — scrolls within the shared container */}
+          <div className="relative shrink-0">
             <div
               style={{
                 width: totalWeeks * pxPerWeek,
@@ -928,6 +985,7 @@ export default function GanttTab() {
               </div>
             </div>
           </div>
+        </div>
         </div>
       </Card>
       </div>

@@ -275,7 +275,8 @@ function renderGanttSheet(
   );
   sheet.getColumn(1).width = labelWidth;
   for (let i = 2; i <= totalCols; i++) {
-    sheet.getColumn(i).width = 6;
+    // Wide enough for the "01 Apr 26" date-wise header without truncation.
+    sheet.getColumn(i).width = 9;
   }
   sheet.getRow(1).height = 22;
   sheet.getRow(2).height = 18;
@@ -435,8 +436,15 @@ export function buildGanttGridSheets(
       quarterLabels.push(`Q${q + 1} · ${monthOf(a)}-${monthOf(b - 1)}`);
     }
   }
+  // Date-wise column header: each week column is labelled with the actual
+  // start date (incl. 2-digit year so weeks across the FY boundary stay
+  // distinct), e.g. "01 Apr 26".
   const weekLabels = weeks.map((w) =>
-    w.start.toLocaleString("en-US", { day: "2-digit", month: "short" })
+    w.start.toLocaleString("en-US", {
+      day: "2-digit",
+      month: "short",
+      year: "2-digit",
+    })
   );
 
   const mk = (
@@ -846,6 +854,78 @@ function renderScheduleSheet(
 }
 
 /**
+ * "No. of Batches" sheet — cascade-computed material balance per stage,
+ * mirroring the on-screen No. of Batches tab. Columns:
+ *   API · Stage · Stage Name · Required (kg) · Planned · Actual Output (kg)
+ *   · Input Consumed (kg)
+ *
+ * Cascade (backward integration from api.targetKg):
+ *   sinks share targetKg equally → each non-sink stage's Required = Σ over its
+ *   successors of (successor input/batch × successor planned). Planned/Actual/
+ *   Input are read directly from each stage's cascade-derived fields.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function renderNoBatchesSheet(sheet: any, apis: API[]): void {
+  const headers = [
+    "API",
+    "Stage",
+    "Stage Name",
+    "Required (kg)",
+    "Planned",
+    "Actual Output (kg)",
+    "Input Consumed (kg)",
+  ];
+
+  const rows: (string | number)[][] = [];
+  apis
+    .slice()
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .forEach((api) => {
+      const stages = api.stages.slice().sort((x, y) => x.stageNo - y.stageNo);
+
+      // Successor map for sink detection + demand roll-up.
+      const successors = new Map<string, StageMaster[]>();
+      stages.forEach((s) => successors.set(s.id, []));
+      stages.forEach((s) =>
+        (s.inputStageIds ?? []).forEach((pid) => {
+          successors.get(pid)?.push(s);
+        })
+      );
+      const sinkIds = new Set(
+        stages.filter((s) => (successors.get(s.id)?.length ?? 0) === 0).map((s) => s.id)
+      );
+      const perSinkTarget = sinkIds.size === 0 ? 0 : api.targetKg / sinkIds.size;
+
+      const inputPerBatchOf = (s: StageMaster) =>
+        typeof s.inputKgPerBatch === "number" && s.inputKgPerBatch > 0
+          ? s.inputKgPerBatch
+          : s.batchSizeKg;
+
+      stages.forEach((s) => {
+        const demand = sinkIds.has(s.id)
+          ? perSinkTarget
+          : (successors.get(s.id) ?? []).reduce(
+              (acc, succ) => acc + inputPerBatchOf(succ) * succ.plannedBatches,
+              0
+            );
+        const actualOutput = s.batchSizeKg * s.plannedBatches;
+        const inputConsumed = inputPerBatchOf(s) * s.plannedBatches;
+        rows.push([
+          api.name,
+          `S${s.stageNo}`,
+          s.stageName,
+          Math.round(demand),
+          s.plannedBatches,
+          Math.round(actualOutput),
+          Math.round(inputConsumed),
+        ]);
+      });
+    });
+
+  renderTableSheet(sheet, headers, rows);
+}
+
+/**
  * Build and download the combined "global" workbook (input sheets + schedule
  * + Gantt grids) as a single .xlsx.
  */
@@ -871,6 +951,9 @@ export async function downloadGlobalWorkbookAsXls(
     data.reactors,
     data.apis
   );
+
+  // 2b. No. of Batches — cascade material balance
+  renderNoBatchesSheet(wb.addWorksheet("No. of Batches"), data.apis);
 
   // 3. Gantt grid views
   buildGanttGridSheets(data).forEach((spec) => {
