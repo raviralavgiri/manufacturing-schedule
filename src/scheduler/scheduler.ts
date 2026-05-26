@@ -53,29 +53,25 @@ const CAMPAIGN_MAX_MS = 30 * 24 * 3600 * 1000;
 const CAMPAIGN_SWITCH_PENALTY_MS = 90 * 24 * 3600 * 1000;
 
 /**
- * Equipment-availability sequencer — POOL model + PCO + 30-day campaign cap.
+ * Equipment-availability sequencer — TRAIN model + PCO + 30-day campaign cap.
  *
- * Each batch uses ONE reactor at a time. `stage.reactorPool` is the list of
- * primary (booked) reactors; the scheduler picks whichever one becomes free
- * earliest at the candidate start time.
+ * Each batch occupies the WHOLE reactor pool simultaneously. `stage.reactorPool`
+ * is an equipment TRAIN — every reactor in it is booked for the batch's cycle;
+ * a batch can NOT run on a subset. The number of reactors booked per batch
+ * equals the pool size.
  *
- * SUBSTITUTION RULE (BMR-defined): against each primary reactor the user may
- * list optional substitute reactors in `stage.reactorSubstitutes` (entered in
- * the Stages tab). When the primary is busy, substitutes are tried in the
- * order listed. Substitution requires the optional reactor to be available at
- * scheduling time. No automatic spec-matching (capacity / MOC / agitator) is
- * applied — the user takes responsibility for suitability.
+ * SUBSTITUTION RULE (BMR-defined): against each primary reactor (= one train
+ * "position") the user may list optional substitutes in
+ * `stage.reactorSubstitutes` (Stages tab). When a primary is busy at the
+ * candidate start, that position is filled by its first free substitute
+ * instead — the train still books the full count, just with a spare standing
+ * in for one position. No automatic spec-matching (capacity / MOC / agitator)
+ * is applied — the user takes responsibility for suitability.
  *
- *   pool = [R101, R102, R103], BCF = 24h, BCT = 72h
- *      → B1 on R1 [0, 72]
- *        B2 on R2 [24, 96]   ← 24h after B1 — BCF honoured
- *        B3 on R3 [48, 120]
- *        B4 on R1 [72, 144]  ← R1 free again at 72 — cadence holds
- *
- *   pool = [R101], BCF = 24h, BCT = 72h
- *      → B1 on R1 [0, 72]
- *        B2 on R1 [72, 144]  ← BCT dominates, BCF can't be honoured
- *      Add reactors to the pool to unlock BCF cadence.
+ *   pool = [R101, R102, R103]  (train of 3), BCT = 72h
+ *      → B1 books R101 + R102 + R103 together [0, 72]
+ *        B2 waits until all three are free again [72, 144]
+ *        (a substitute may replace any one of them if it's busy at t)
  *
  * Constraints (provably never violated):
  *   1. No reactor clash: a reactor's [start, cycleEnd] windows are
@@ -391,117 +387,129 @@ export function runScheduler(
   }
 
   /**
-   * Find the EARLIEST time t >= earliest such that [t, t + cycleMs) is free
-   * on every reactor in the pool simultaneously, INCLUDING any cleaning
-   * gap required by predecessor or successor slots.
+   * Per-reactor availability probe at a candidate start time `t`. Reports
+   * whether reactor `rid` can host a [t, t+cycleMs) booking — honouring its
+   * existing occupancy, the successor-PCO gap, maintenance windows, and the
+   * predecessor cleaning requirement. When it can't, `nextTry` is the earliest
+   * later time worth retrying for THIS reactor.
+   */
+  function reactorReadyAt(
+    rid: string,
+    t: number,
+    cycleMs: number,
+    newApiId: string,
+    newStageId: string,
+    newPcoMs: number
+  ): { ok: boolean; kind: "none" | "pco" | "campaign"; nextTry: number } {
+    const slots = reactorBookings.get(rid)!;
+    const maintWins = reactorMaintWindows.get(rid) ?? [];
+    let advance = t;
+
+    for (const slot of slots) {
+      const sameCampaign =
+        slot.apiId === newApiId && slot.stageId === newStageId;
+      if (slot.cycleEndMs <= t) continue;
+      if (slot.startMs >= t + cycleMs) {
+        const requiredEnd = slot.startMs - (sameCampaign ? 0 : slot.pcoMs);
+        if (t + cycleMs > requiredEnd && slot.cycleEndMs > advance)
+          advance = slot.cycleEndMs;
+        break;
+      }
+      // Slot overlaps [t, t+cycleMs)
+      if (slot.cycleEndMs > advance) advance = slot.cycleEndMs;
+      break;
+    }
+    if (advance > t) return { ok: false, kind: "none", nextTry: advance };
+
+    for (const mw of maintWins) {
+      if (mw.endMs <= t) continue;
+      if (mw.startMs >= t + cycleMs) break;
+      if (mw.endMs > advance) advance = mw.endMs;
+      break;
+    }
+    if (advance > t) return { ok: false, kind: "none", nextTry: advance };
+
+    const pred = checkPredecessor(slots, t, newApiId, newStageId, newPcoMs);
+    if (pred.earliestStart > t)
+      return { ok: false, kind: pred.kind, nextTry: pred.earliestStart };
+    return { ok: true, kind: pred.kind, nextTry: t };
+  }
+
+  const STRONGER: Record<"none" | "pco" | "campaign", number> = {
+    none: 0,
+    pco: 1,
+    campaign: 2,
+  };
+
+  /**
+   * TRAIN model: a batch occupies the WHOLE reactor pool simultaneously — the
+   * pool is an equipment train, not a set of interchangeable single reactors.
+   * `positions` has one entry per primary reactor; each entry is
+   * `[primary, ...substitutes]`. A position is filled by its primary when
+   * free, else its first free substitute. ALL positions must be filled with
+   * DISTINCT reactors at the SAME start time, or the batch waits.
    *
-   * Algorithm:
-   *   - For each reactor in the supplied list (single-element under the
-   *     pool model; multi-element is supported for the legacy code paths
-   *     that probe a "best of pool" via repeated single-reactor calls),
-   *     compute the predecessor cleaning constraint and the successor
-   *     PCO constraint.
-   *   - If any constraint forces an advance, jump to the max required
-   *     advance and retry.
-   *   - On success, return both the start time and the cleaning kind
-   *     (campaign > pco > none — campaign and pco have the same duration
-   *     but the Gantt colours them differently).
+   * Returns the chosen reactor set (one per position) and the strongest
+   * cleaning kind across them (campaign > pco > none).
    */
   function findTrainSlot(
-    pool: string[],
+    positions: string[][],
     earliest: number,
     cycleMs: number,
     newApiId: string,
     newStageId: string,
     newPcoMs: number
-  ): { startMs: number; cleaningKind: "none" | "pco" | "campaign" } {
+  ): { startMs: number; reactors: string[]; cleaningKind: "none" | "pco" | "campaign" } {
     let t = earliest;
-    const lookups = pool.map((rid) => reactorBookings.get(rid)!);
-    const maintLookups = pool.map((rid) => reactorMaintWindows.get(rid) ?? []);
-
     for (let safety = 0; safety < 5000; safety++) {
-      let advance = t;
-      let needAdvance = false;
+      const ready = new Map<
+        string,
+        { ok: boolean; kind: "none" | "pco" | "campaign"; nextTry: number }
+      >();
+      const probe = (rid: string) => {
+        let r = ready.get(rid);
+        if (!r) {
+          r = reactorReadyAt(rid, t, cycleMs, newApiId, newStageId, newPcoMs);
+          ready.set(rid, r);
+        }
+        return r;
+      };
 
-      for (let ri = 0; ri < lookups.length; ri++) {
-        const slots = lookups[ri];
-        const maintWins = maintLookups[ri];
+      const used = new Set<string>();
+      const chosen: string[] = [];
+      let cleaningKind: "none" | "pco" | "campaign" = "none";
+      let nextTry = Infinity;
+      let allFilled = true;
 
-        // Successor + overlap pass. We also separately compute the
-        // predecessor requirement via checkPredecessor below.
-        let conflictThisReactor = false;
-        for (const slot of slots) {
-          const sameCampaign =
-            slot.apiId === newApiId && slot.stageId === newStageId;
-          if (slot.cycleEndMs <= t) continue;
-          if (slot.startMs >= t + cycleMs) {
-            const requiredEnd =
-              slot.startMs - (sameCampaign ? 0 : slot.pcoMs);
-            if (t + cycleMs > requiredEnd) {
-              if (slot.cycleEndMs > advance) advance = slot.cycleEndMs;
-              needAdvance = true;
-              conflictThisReactor = true;
-            }
+      for (const pos of positions) {
+        let filled = false;
+        for (const rid of pos) {
+          if (used.has(rid)) continue;
+          const r = probe(rid);
+          if (r.ok) {
+            used.add(rid);
+            chosen.push(rid);
+            if (STRONGER[r.kind] > STRONGER[cleaningKind]) cleaningKind = r.kind;
+            filled = true;
             break;
           }
-          // Slot overlaps [t, t+cycleMs)
-          if (slot.cycleEndMs > advance) advance = slot.cycleEndMs;
-          needAdvance = true;
-          conflictThisReactor = true;
-          break;
+          if (r.nextTry > t && r.nextTry < nextTry) nextTry = r.nextTry;
         }
-        if (conflictThisReactor) continue;
-
-        // Maintenance window check: skip any window that overlaps [t, t+cycleMs)
-        for (const mw of maintWins) {
-          if (mw.endMs <= t) continue;
-          if (mw.startMs >= t + cycleMs) break;
-          // Overlaps — push past this window
-          if (mw.endMs > advance) advance = mw.endMs;
-          needAdvance = true;
-          break;
-        }
-        if (advance > t) continue; // already flagged a conflict above
-
-        const pred = checkPredecessor(
-          slots,
-          t,
-          newApiId,
-          newStageId,
-          newPcoMs
-        );
-        if (pred.earliestStart > t) {
-          if (pred.earliestStart > advance) advance = pred.earliestStart;
-          needAdvance = true;
-        }
+        if (!filled) allFilled = false;
       }
 
-      if (!needAdvance) {
-        // We've found a valid t. Now compute the strongest cleaning kind
-        // across all reactors in the pool — that's what gets shown on
-        // the batch's faded tail.
-        let cleaningKind: "none" | "pco" | "campaign" = "none";
-        for (const slots of lookups) {
-          const pred = checkPredecessor(
-            slots,
-            t,
-            newApiId,
-            newStageId,
-            newPcoMs
-          );
-          if (pred.kind === "campaign") {
-            cleaningKind = "campaign";
-            break; // strongest kind, no need to keep looking
-          }
-          if (pred.kind === "pco" && cleaningKind === "none") {
-            cleaningKind = "pco";
-          }
-        }
-        return { startMs: t, cleaningKind };
+      if (allFilled && chosen.length === positions.length) {
+        return { startMs: t, reactors: chosen, cleaningKind };
       }
-      t = advance;
+      if (!Number.isFinite(nextTry) || nextTry <= t) break; // can't progress
+      t = nextTry;
     }
-    return { startMs: t, cleaningKind: "none" }; // safety fallback
+    // Safety fallback: book the primaries regardless (clash-counted downstream).
+    return {
+      startMs: t,
+      reactors: positions.map((p) => p[0]),
+      cleaningKind: "none",
+    };
   }
 
   /** Insert a booking into a reactor's sorted slot list (by startMs). */
@@ -561,7 +569,12 @@ export function runScheduler(
     analysisMs: number;
     pcoMs: number;
     inputPerBatch: number;
+    /** Union of every reactor this stage could touch (primaries + subs).
+     *  Used only for the sharers-invalidation index. */
     effectivePool: string[];
+    /** TRAIN positions: one entry per primary reactor = [primary, ...subs].
+     *  Every batch books one reactor per position simultaneously. */
+    trainPositions: string[][];
     apiStart: number;
     apiEnd: number;
   }
@@ -575,11 +588,22 @@ export function runScheduler(
     stagesInOrder.forEach((stage, topoIndex) => {
       const planned = stage.plannedBatches;
       if (planned <= 0) return;
-      const effectivePool = expandPool(
-        stage.reactorPool,
-        stage.reactorSubstitutes
-      );
-      if (effectivePool.length === 0) return;
+      // TRAIN positions: one per primary reactor that exists, each followed by
+      // its (existing, distinct) substitutes. The batch books one reactor per
+      // position simultaneously — the whole train is required.
+      const trainPositions: string[][] = [];
+      const seenPrimary = new Set<string>();
+      for (const pid of stage.reactorPool) {
+        if (!reactorById.has(pid) || seenPrimary.has(pid)) continue;
+        seenPrimary.add(pid);
+        const subs = (stage.reactorSubstitutes?.[pid] ?? []).filter(
+          (sid) => reactorById.has(sid) && sid !== pid
+        );
+        trainPositions.push([pid, ...subs]);
+      }
+      if (trainPositions.length === 0) return;
+      // Union of all reactors this stage might touch (for the sharers index).
+      const effectivePool = Array.from(new Set(trainPositions.flat()));
       const bctMs = hoursToMs(
         typeof stage.bctHours === "number" && stage.bctHours > 0
           ? stage.bctHours
@@ -606,6 +630,7 @@ export function runScheduler(
             ? stage.inputKgPerBatch
             : stage.batchSizeKg,
         effectivePool,
+        trainPositions,
         apiStart,
         apiEnd,
       });
@@ -651,89 +676,80 @@ export function runScheduler(
     return matTime;
   };
 
-  // Probe the stage's effective pool for the earliest feasible slot ≥ earliest,
-  // honouring reactor occupancy + PCO/campaign cleaning + maintenance. Pure —
-  // does not mutate any booking state.
+  // Probe the stage's TRAIN for the earliest feasible slot ≥ earliest where
+  // the whole pool can be booked simultaneously, honouring reactor occupancy +
+  // PCO/campaign cleaning + maintenance. Pure — mutates no booking state.
   const findBestSlot = (
     rt: StageRT,
     earliest: number
-  ): { startMs: number; reactor: string; cleaningKind: CleanKind } => {
-    let bestStart = Infinity;
-    let bestReactor = rt.effectivePool[0] ?? rt.stage.reactorPool[0];
-    let bestKind: CleanKind = "none";
-    for (const rid of rt.effectivePool) {
-      const probe = findTrainSlot(
-        [rid],
-        earliest,
-        rt.cycleMs,
-        rt.api.id,
-        rt.stage.id,
-        rt.pcoMs
-      );
-      if (probe.startMs < bestStart) {
-        bestStart = probe.startMs;
-        bestReactor = rid;
-        bestKind = probe.cleaningKind;
-      }
-    }
-    return { startMs: bestStart, reactor: bestReactor, cleaningKind: bestKind };
+  ): { startMs: number; reactors: string[]; cleaningKind: CleanKind } => {
+    const probe = findTrainSlot(
+      rt.trainPositions,
+      earliest,
+      rt.cycleMs,
+      rt.api.id,
+      rt.stage.id,
+      rt.pcoMs
+    );
+    return {
+      startMs: probe.startMs,
+      reactors: probe.reactors,
+      cleaningKind: probe.cleaningKind,
+    };
   };
 
-  // Commit a batch: book the reactor slot, update load/usage counters, record
-  // the (sorted) approval time + last start, and emit the BatchScheduleEntry.
+  // Commit a batch: book the WHOLE train (every reactor in the slot), update
+  // load/usage counters per reactor, record the (sorted) approval time + last
+  // start ONCE, and emit the BatchScheduleEntry.
   const commitBatch = (
     rt: StageRT,
-    slot: { startMs: number; reactor: string; cleaningKind: CleanKind }
+    slot: { startMs: number; reactors: string[]; cleaningKind: CleanKind }
   ): void => {
     const { api, stage } = rt;
     const startMs = slot.startMs;
-    const bestReactor = slot.reactor;
+    const trainReactors = slot.reactors;
     const cleaningKind = slot.cleaningKind;
     const cycleEndMs = startMs + rt.cycleMs;
     const analysisEndMs = cycleEndMs + rt.analysisMs;
     const batchNo = rt.booked + 1;
 
-    // Defensive clash check on the chosen reactor only.
-    let clash = false;
-    const chosenSlots = reactorBookings.get(bestReactor)!;
-    for (const s of chosenSlots) {
-      if (s.cycleEndMs <= startMs) continue;
-      if (s.startMs >= cycleEndMs) break;
-      clash = true;
-      break;
-    }
-    if (clash) clashCount++;
-
-    const campaignStartMs = deriveCampaignStart(
-      chosenSlots,
-      startMs,
-      api.id,
-      stage.id
-    );
-    const newSlot: BookedSlot = {
-      startMs,
-      endMs: analysisEndMs,
-      cycleEndMs,
-      nextSameCampaignStartMs: startMs + rt.bcfMs,
-      apiId: api.id,
-      stageId: stage.id,
-      pcoMs: rt.pcoMs,
-      campaignStartMs,
-    };
-    insertSorted(chosenSlots, newSlot);
-
     const bctHrs =
       typeof stage.bctHours === "number" && stage.bctHours > 0
         ? stage.bctHours
         : stage.bcfHours;
-    reactorLoadHours.set(
-      bestReactor,
-      (reactorLoadHours.get(bestReactor) ?? 0) + bctHrs
-    );
-    reactorBatchCount.set(
-      bestReactor,
-      (reactorBatchCount.get(bestReactor) ?? 0) + 1
-    );
+
+    let clash = false;
+    for (const rid of trainReactors) {
+      const chosenSlots = reactorBookings.get(rid)!;
+      // Defensive clash check per train reactor.
+      for (const s of chosenSlots) {
+        if (s.cycleEndMs <= startMs) continue;
+        if (s.startMs >= cycleEndMs) break;
+        clash = true;
+        break;
+      }
+      const campaignStartMs = deriveCampaignStart(
+        chosenSlots,
+        startMs,
+        api.id,
+        stage.id
+      );
+      insertSorted(chosenSlots, {
+        startMs,
+        endMs: analysisEndMs,
+        cycleEndMs,
+        nextSameCampaignStartMs: startMs + rt.bcfMs,
+        apiId: api.id,
+        stageId: stage.id,
+        pcoMs: rt.pcoMs,
+        campaignStartMs,
+      });
+      reactorLoadHours.set(rid, (reactorLoadHours.get(rid) ?? 0) + bctHrs);
+      reactorBatchCount.set(rid, (reactorBatchCount.get(rid) ?? 0) + 1);
+      // Track the active campaign on every train reactor for PCO-minimisation.
+      reactorActiveCampaign.set(rid, { apiId: api.id, stageId: stage.id });
+    }
+    if (clash) clashCount++;
 
     // Sorted insert of this batch's approval time so the material gate can
     // read the m-th approval in O(1).
@@ -762,8 +778,8 @@ export function runScheduler(
       stageNo: stage.stageNo,
       stageName: stage.stageName,
       batchNo,
-      reactorId: bestReactor,
-      reactorIds: [bestReactor],
+      reactorId: trainReactors[0],
+      reactorIds: trainReactors,
       startMs,
       endMs: cycleEndMs,
       analysisEndMs,
@@ -775,8 +791,6 @@ export function runScheduler(
       cleaningType: cleaningKind,
     });
     rt.booked++;
-    // Track the active campaign on this reactor for PCO-minimisation.
-    reactorActiveCampaign.set(bestReactor, { apiId: api.id, stageId: stage.id });
   };
 
   // Tie-break between two equally-early candidates: user priority first
@@ -827,7 +841,7 @@ export function runScheduler(
     return Math.max(0, Math.min(3, Math.floor((ms - rt.apiStart) / qLen)));
   };
 
-  type Cand = { startMs: number; reactor: string; cleaningKind: CleanKind } | null;
+  type Cand = { startMs: number; reactors: string[]; cleaningKind: CleanKind } | null;
 
   // Invalidation indexes: which stages must be re-probed when a reactor is
   // booked (pool sharers) or when a stage produces another approved batch
@@ -891,13 +905,15 @@ export function runScheduler(
   // use the just-booked reactor, and any previously-unready successor.
   const place = (
     rt: StageRT,
-    slot: { startMs: number; reactor: string; cleaningKind: CleanKind }
+    slot: { startMs: number; reactors: string[]; cleaningKind: CleanKind }
   ): void => {
     const stageId = rt.stage.id;
     commitBatch(rt, slot);
     dirty.add(stageId);
-    for (const other of sharersOfReactor.get(slot.reactor) ?? [])
-      dirty.add(other.stage.id);
+    // Every reactor in the booked train can shift its sharers' earliest start.
+    for (const rid of slot.reactors)
+      for (const other of sharersOfReactor.get(rid) ?? [])
+        dirty.add(other.stage.id);
     for (const succ of successorsOfStage.get(stageId) ?? [])
       if (cand.get(succ.stage.id) == null) dirty.add(succ.stage.id);
   };
@@ -918,35 +934,34 @@ export function runScheduler(
    */
   const effectiveStartOf = (rt: StageRT, c: NonNullable<Cand>): number => {
     if (c.cleaningKind !== "pco") return c.startMs;
-    const active = reactorActiveCampaign.get(c.reactor);
-    if (!active) return c.startMs;
-    if (active.apiId === rt.api.id && active.stageId === rt.stage.id)
-      return c.startMs; // same campaign — no penalty
-    // Different campaign: penalise the switch ONLY if the active campaign still
-    // owes batches in THIS quarter (or an earlier one). Once it has filled its
-    // quarterly quota, the remaining batches belong to later quarters and must
-    // NOT block another API's current-quarter campaign — otherwise a single API
-    // would monopolise the shared cleanroom. This is the quarter-aware fix for
-    // the old "annual remaining" check that starved later campaigns.
+    // A train switch causes a PCO if ANY of its reactors carries a different
+    // active campaign. Penalise when any such campaign still owes batches in
+    // this (or an earlier) quarter — keeps each API consolidated per quarter.
     const candQ = quarterOfTime(rt, c.startMs);
-    const hasRemainingThisQuarter = stageRTs.some((srt) => {
-      if (srt.api.id !== active.apiId || srt.stage.id !== active.stageId)
-        return false;
-      if (srt.booked >= srt.planned) return false;
-      // Earliest quarter the active campaign can still place a batch in, given
-      // the soft per-quarter cap (greedy fills the lowest open quarter first).
-      // If that quarter is the candidate's quarter or earlier, the active
-      // campaign still owes work here → keep it consolidated (penalise the
-      // switch). Once its current-quarter quota is met, the switch is free.
-      const aLimit = perQuarterLimitOf(srt);
-      const aBooked = stageQuarterlyBooked.get(srt.stage.id) ?? [0, 0, 0, 0];
-      let aNextQ = 0;
-      while (aNextQ < 3 && aBooked[aNextQ] >= aLimit) aNextQ++;
-      return aNextQ <= candQ;
+    const wouldPenalise = (active: { apiId: string; stageId: string }): boolean => {
+      if (active.apiId === rt.api.id && active.stageId === rt.stage.id)
+        return false; // same campaign — no penalty
+      return stageRTs.some((srt) => {
+        if (srt.api.id !== active.apiId || srt.stage.id !== active.stageId)
+          return false;
+        if (srt.booked >= srt.planned) return false;
+        // Earliest quarter the active campaign can still place a batch in,
+        // given the soft per-quarter cap (greedy fills the lowest open quarter
+        // first). If that quarter is the candidate's quarter or earlier, the
+        // active campaign still owes work here → keep it consolidated (penalise
+        // the switch). Once its current-quarter quota is met, the switch is free.
+        const aLimit = perQuarterLimitOf(srt);
+        const aBooked = stageQuarterlyBooked.get(srt.stage.id) ?? [0, 0, 0, 0];
+        let aNextQ = 0;
+        while (aNextQ < 3 && aBooked[aNextQ] >= aLimit) aNextQ++;
+        return aNextQ <= candQ;
+      });
+    };
+    const penalise = c.reactors.some((rid) => {
+      const active = reactorActiveCampaign.get(rid);
+      return active ? wouldPenalise(active) : false;
     });
-    return hasRemainingThisQuarter
-      ? c.startMs + CAMPAIGN_SWITCH_PENALTY_MS
-      : c.startMs;
+    return penalise ? c.startMs + CAMPAIGN_SWITCH_PENALTY_MS : c.startMs;
   };
 
   // ─ List-scheduling main loop ───────────────────────────────────────────
