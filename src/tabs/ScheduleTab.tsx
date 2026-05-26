@@ -1,8 +1,21 @@
 import { useMemo, useState, useRef, useLayoutEffect } from "react";
-import { Search, AlertTriangle, RefreshCw } from "lucide-react";
+import {
+  Search,
+  AlertTriangle,
+  RefreshCw,
+  Filter,
+  FlaskConical,
+  Layers,
+  Beaker,
+  X,
+} from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
 import { Card, SectionHeader, Tag } from "../components/Primitives";
+import MultiSelectPopover, {
+  ClearFiltersButton,
+  type Option as MsOption,
+} from "../components/MultiSelectPopover";
 import { fmtDate, fmtDateTime } from "../utils/dates";
 
 const ROW_H = 40;
@@ -39,18 +52,26 @@ export default function ScheduleTab() {
     return m;
   }, [apisRaw]);
   const [q, setQ] = useState("");
-  const [apiFilter, setApiFilter] = useState<string>("ALL");
-  const [reactorFilter, setReactorFilter] = useState<string>("ALL");
-  // Stage filter: matches a batch's stageId. We provide one option per
-  // distinct stageId across all APIs (e.g. "API-01-S2", "API-02-S1"…).
-  const [stageFilter, setStageFilter] = useState<string>("ALL");
+  // Multi-select filters — empty Set means "all" (no filter), matching the
+  // Gantt tab's MultiSelectPopover convention.
+  const [apiFilter, setApiFilter] = useState<Set<string>>(new Set());
+  const [reactorFilter, setReactorFilter] = useState<Set<string>>(new Set());
+  const [stageFilter, setStageFilter] = useState<Set<string>>(new Set());
+  const anyFilterActive =
+    apiFilter.size > 0 ||
+    reactorFilter.size > 0 ||
+    stageFilter.size > 0 ||
+    q.trim() !== "";
 
   const filtered = useMemo(() => {
     return schedule.batches.filter((b) => {
-      if (apiFilter !== "ALL" && b.apiId !== apiFilter) return false;
-      if (reactorFilter !== "ALL" && !b.reactorIds.includes(reactorFilter))
+      if (apiFilter.size > 0 && !apiFilter.has(b.apiId)) return false;
+      if (
+        reactorFilter.size > 0 &&
+        !b.reactorIds.some((rid) => reactorFilter.has(rid))
+      )
         return false;
-      if (stageFilter !== "ALL" && b.stageId !== stageFilter) return false;
+      if (stageFilter.size > 0 && !stageFilter.has(b.stageId)) return false;
       if (q) {
         const lower = q.toLowerCase();
         if (
@@ -65,27 +86,46 @@ export default function ScheduleTab() {
     });
   }, [schedule.batches, q, apiFilter, reactorFilter, stageFilter]);
 
-  // Distinct stage options for the filter dropdown — sorted by api id then
-  // stage no for predictability. Label combines the api id and stage label
-  // so "API-01 · S2 · Intermediate-2" is unambiguous.
-  const stageOptions = useMemo(() => {
-    const out: { value: string; label: string }[] = [];
-    apisRaw
-      .slice()
-      .sort((a, b) => a.id.localeCompare(b.id))
-      .forEach((a) => {
-        a.stages
-          .slice()
-          .sort((x, y) => x.stageNo - y.stageNo)
-          .forEach((s) => {
-            out.push({
-              value: s.id,
-              label: `${a.id} · S${s.stageNo} · ${s.stageName}`,
-            });
-          });
-      });
+  // Filter option lists (multi-select popovers).
+  const apiOptions: MsOption[] = useMemo(
+    () =>
+      apis.map((a) => ({
+        value: a.id,
+        label: a.name === a.id ? a.id : a.name,
+        color: a.color,
+      })),
+    [apis]
+  );
+
+  // One option per distinct stageId, grouped + coloured by API.
+  const stageOptions: MsOption[] = useMemo(() => {
+    const out: MsOption[] = [];
+    apis.forEach((a) =>
+      a.stages
+        .slice()
+        .sort((x, y) => x.stageNo - y.stageNo)
+        .forEach((s) =>
+          out.push({
+            value: s.id,
+            label: `S${s.stageNo} · ${s.stageName}`,
+            secondary: a.name,
+            group: a.name,
+            color: a.color,
+          })
+        )
+    );
     return out;
-  }, [apisRaw]);
+  }, [apis]);
+
+  const reactorOptions: MsOption[] = useMemo(
+    () =>
+      reactors.map((r) => ({
+        value: r.id,
+        label: r.name,
+        group: r.moc,
+      })),
+    [reactors]
+  );
 
   // Simple windowed virtualization
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -202,6 +242,9 @@ export default function ScheduleTab() {
 
       <Card className="!p-3">
         <div className="flex flex-wrap items-center gap-2">
+          <span className="ml-1 inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-ink-400">
+            <Filter size={12} /> Filter
+          </span>
           <div className="relative">
             <Search
               size={14}
@@ -211,41 +254,49 @@ export default function ScheduleTab() {
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search batch / API / reactor"
-              className="w-72 rounded-lg border border-white/10 bg-white/5 py-2 pl-9 pr-3 text-sm text-white placeholder-ink-400 outline-none focus:border-cyan-300/50"
+              className="w-60 rounded-lg border border-white/10 bg-white/5 py-2 pl-9 pr-8 text-sm text-white placeholder-ink-400 outline-none focus:border-cyan-300/50"
             />
+            {q && (
+              <button
+                onClick={() => setQ("")}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-400 hover:text-white"
+              >
+                <X size={12} />
+              </button>
+            )}
           </div>
-          <FilterDropdown
-            label="API"
-            value={apiFilter}
+          <MultiSelectPopover
+            label="APIs"
+            icon={<FlaskConical size={12} />}
+            options={apiOptions}
+            selected={apiFilter}
             onChange={setApiFilter}
-            options={[
-              { v: "ALL", l: "All APIs" },
-              ...apis.map((a) => ({
-                v: a.id,
-                l: a.name === a.id ? a.id : `${a.name} (${a.id})`,
-              })),
-            ]}
+            width={300}
           />
-          <FilterDropdown
-            label="Reactor"
-            value={reactorFilter}
-            onChange={setReactorFilter}
-            options={[
-              { v: "ALL", l: "All Reactors" },
-              ...reactors.map((r) => ({
-                v: r.id,
-                l: r.name === r.id ? r.id : `${r.name} (${r.id})`,
-              })),
-            ]}
-          />
-          <FilterDropdown
-            label="Stage"
-            value={stageFilter}
+          <MultiSelectPopover
+            label="Stages"
+            icon={<Layers size={12} />}
+            options={stageOptions}
+            selected={stageFilter}
             onChange={setStageFilter}
-            options={[
-              { v: "ALL", l: "All Stages" },
-              ...stageOptions.map((s) => ({ v: s.value, l: s.label })),
-            ]}
+            width={300}
+          />
+          <MultiSelectPopover
+            label="Reactors"
+            icon={<Beaker size={12} />}
+            options={reactorOptions}
+            selected={reactorFilter}
+            onChange={setReactorFilter}
+            width={260}
+          />
+          <ClearFiltersButton
+            active={anyFilterActive}
+            onClear={() => {
+              setApiFilter(new Set());
+              setStageFilter(new Set());
+              setReactorFilter(new Set());
+              setQ("");
+            }}
           />
           <span className="ml-auto text-xs text-ink-300">
             Showing {filtered.length.toLocaleString()} /{" "}
@@ -405,34 +456,5 @@ export default function ScheduleTab() {
         </div>
       </Card>
     </div>
-  );
-}
-
-function FilterDropdown({
-  label,
-  value,
-  onChange,
-  options,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: { v: string; l: string }[];
-}) {
-  return (
-    <label className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs">
-      <span className="text-ink-400">{label}</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="appearance-none bg-transparent font-semibold text-white outline-none"
-      >
-        {options.map((o) => (
-          <option key={o.v} value={o.v} className="bg-ink-900">
-            {o.l}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }

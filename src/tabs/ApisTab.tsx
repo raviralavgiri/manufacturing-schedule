@@ -37,6 +37,7 @@ export default function ApisTab() {
   const apis = useStore((s) => s.apis);
   const setApiName = useStore((s) => s.setApiName);
   const setApiTargetOutput = useStore((s) => s.setApiTargetOutput);
+  const setApiProductionSequence = useStore((s) => s.setApiProductionSequence);
   const setApiWindow = useStore((s) => s.setApiWindow);
   const setApiStageCount = useStore((s) => s.setApiStageCount);
   const applyTopologyPreset = useStore((s) => s.applyTopologyPreset);
@@ -169,6 +170,13 @@ export default function ApisTab() {
             <thead className="sticky top-0 z-10 bg-ink-900/90 backdrop-blur-md">
               <tr className="text-left text-[11px] uppercase tracking-wider text-ink-300">
                 <Th yellow>API Name</Th>
+                <Th
+                  align="right"
+                  yellow
+                  title="Production sequence within the shared cleanroom / block. Lower number = campaign scheduled earlier. Leave blank to use the default (id) order."
+                >
+                  Seq
+                </Th>
                 <Th yellow>Plan Window</Th>
                 <Th align="right" yellow>
                   Stages
@@ -219,6 +227,14 @@ export default function ApisTab() {
                             />
                           </div>
                         </div>
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <SeqCell
+                          value={api.productionSequence}
+                          onChange={(v) =>
+                            setApiProductionSequence(api.id, v)
+                          }
+                        />
                       </td>
                       <td className="px-3 py-2">
                         <ApiWindowCell
@@ -308,7 +324,7 @@ export default function ApisTab() {
                       {isExpanded && currentTopology !== "linear" && (
                         <tr className="border-t border-white/5">
                           <td
-                            colSpan={6}
+                            colSpan={7}
                             className="bg-ink-900/40 px-3 py-3"
                           >
                             {currentTopology === "parallel" && (
@@ -384,7 +400,7 @@ export default function ApisTab() {
               {filteredApis.length === 0 && (
                 <tr>
                   <td
-                    colSpan={6}
+                    colSpan={7}
                     className="py-12 text-center text-sm text-ink-300"
                   >
                     No APIs match. Click{" "}
@@ -548,6 +564,56 @@ function EditableNumCell({
         }
       }}
       className={`cell-yellow ${width} rounded-md px-2 py-1 text-right font-mono text-sm tabular-nums transition`}
+    />
+  );
+}
+
+/** Production-sequence input. Blank = unset (default id order). */
+function SeqCell({
+  value,
+  onChange,
+}: {
+  value: number | undefined;
+  onChange: (v: number) => void;
+}) {
+  const [local, setLocal] = useState(value == null ? "" : String(value));
+  useEffect(() => setLocal(value == null ? "" : String(value)), [value]);
+
+  const commit = () => {
+    const trimmed = local.trim();
+    if (trimmed === "") {
+      // Clear → unset. NaN tells the store to drop the field.
+      if (value != null) onChange(Number.NaN);
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) {
+      setLocal(value == null ? "" : String(value));
+      return;
+    }
+    const v = Math.max(0, Math.round(parsed));
+    if (v !== value) onChange(v);
+    setLocal(String(v));
+  };
+
+  return (
+    <input
+      type="number"
+      inputMode="numeric"
+      value={local}
+      min={0}
+      placeholder="—"
+      onChange={(e) => setLocal(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        if (e.key === "Escape") {
+          setLocal(value == null ? "" : String(value));
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+      className="cell-yellow w-16 rounded-md px-2 py-1 text-right font-mono text-sm tabular-nums transition"
+      title="Production sequence (lower = earlier). Blank = default order."
     />
   );
 }

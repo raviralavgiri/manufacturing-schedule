@@ -263,6 +263,101 @@ export default function DashboardTab() {
     });
   }, [apis, schedule]);
 
+  // ─── Intermediate (n-1) shortfall flags ──────────────────────────
+  // Two risk checks per API:
+  //   A) Mass balance — does each stage's upstream produce enough kg to feed
+  //      this stage's planned input demand? A deficit means n-1 inventory is
+  //      structurally insufficient (rounding or a manual edit broke the
+  //      cascade) and the planned API batch count can't be supported.
+  //   B) Quarter timing — for the final (product) stage, did each quarter
+  //      actually receive its planned ≈ share of batches? A quarter that is
+  //      short while a LATER one is overloaded means the intermediate wasn't
+  //      released in time for that quarter (a bottleneck slipped batches).
+  const shortfalls = useMemo(() => {
+    type Flag = {
+      key: string;
+      apiName: string;
+      apiColor: string;
+      stageLabel: string;
+      severity: "critical" | "warning";
+      message: string;
+    };
+    const out: Flag[] = [];
+    const inputPerBatchOf = (s: {
+      inputKgPerBatch?: number;
+      batchSizeKg: number;
+    }) =>
+      typeof s.inputKgPerBatch === "number" && s.inputKgPerBatch > 0
+        ? s.inputKgPerBatch
+        : s.batchSizeKg;
+
+    apis.forEach((a) => {
+      const stages = [...a.stages].sort((x, y) => x.stageNo - y.stageNo);
+      const byId = new Map(stages.map((s) => [s.id, s]));
+
+      // A) Mass-balance check per consuming stage.
+      stages.forEach((s) => {
+        const preds = (s.inputStageIds ?? [])
+          .map((id) => byId.get(id))
+          .filter((p): p is (typeof stages)[number] => !!p);
+        if (preds.length === 0) return; // source stage — nothing upstream
+        const required = s.plannedBatches * inputPerBatchOf(s);
+        if (required <= 0) return;
+        const supplied = preds.reduce(
+          (acc, p) => acc + p.plannedBatches * p.batchSizeKg,
+          0
+        );
+        // 1% tolerance for floating rounding.
+        if (supplied < required * 0.99) {
+          const shortKg = required - supplied;
+          out.push({
+            key: `mb-${a.id}-${s.id}`,
+            apiName: a.name,
+            apiColor: a.color,
+            stageLabel: `S${s.stageNo} · ${s.stageName}`,
+            severity: "critical",
+            message: `Needs ${Math.round(required).toLocaleString()} kg of intermediate but upstream only makes ${Math.round(
+              supplied
+            ).toLocaleString()} kg — short ${Math.round(
+              shortKg
+            ).toLocaleString()} kg. Increase upstream planned batches.`,
+          });
+        }
+      });
+
+      // B) Quarter-timing check on the final stage.
+      const finalStage = stages[stages.length - 1];
+      if (!finalStage || finalStage.plannedBatches <= 0) return;
+      const planned = finalStage.plannedBatches;
+      const perQ = Math.ceil(planned / 4);
+      const expected = [0, 1, 2, 3].map((q) =>
+        Math.max(0, Math.min(perQ, planned - q * perQ))
+      );
+      const scheduled = [0, 0, 0, 0];
+      schedule.batches.forEach((b) => {
+        if (b.stageId !== finalStage.id) return;
+        const q = quarterIn(weeks, b.startMs);
+        if (q) scheduled[q - 1] += 1;
+      });
+      for (let q = 0; q < 4; q++) {
+        const laterOverloaded = scheduled
+          .slice(q + 1)
+          .some((n, i) => n > expected[q + 1 + i]);
+        if (scheduled[q] < expected[q] && laterOverloaded) {
+          out.push({
+            key: `q-${a.id}-${q}`,
+            apiName: a.name,
+            apiColor: a.color,
+            stageLabel: `S${finalStage.stageNo} · ${finalStage.stageName}`,
+            severity: "warning",
+            message: `Q${q + 1} produced only ${scheduled[q]} of ${expected[q]} planned final batches — n-1 intermediate likely not released in time; batches slipped to a later quarter.`,
+          });
+        }
+      }
+    });
+    return out;
+  }, [apis, schedule, weeks]);
+
   // ─── Detail pivot (existing logic, kept for deep-dive) ────────────
   const pivot: PivotRow[] = useMemo(() => {
     const map = new Map<string, PivotRow>();
@@ -361,6 +456,78 @@ export default function DashboardTab() {
           tone={clashes === 0 ? "lime" : "pink"}
         />
       </div>
+
+      {/* ─── Intermediate (n-1) shortfall flags ──────────────────── */}
+      <Card className="overflow-hidden p-0">
+        <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+          <div>
+            <h3 className="text-sm font-bold uppercase tracking-wider text-white">
+              Intermediate (n-1) shortfall flags
+            </h3>
+            <p className="text-[11px] text-ink-400">
+              Risks where upstream intermediate may not support the planned API
+              batch count — by mass balance and by quarter timing.
+            </p>
+          </div>
+          <span
+            className={clsx(
+              "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold",
+              shortfalls.length === 0
+                ? "border-lime-300/30 bg-lime-300/10 text-lime-300"
+                : "border-amber-300/30 bg-amber-300/10 text-amber-300"
+            )}
+          >
+            {shortfalls.length === 0 ? (
+              <CheckCircle2 size={12} />
+            ) : (
+              <AlertTriangle size={12} />
+            )}
+            {shortfalls.length === 0
+              ? "All supplies sufficient"
+              : `${shortfalls.length} risk${shortfalls.length === 1 ? "" : "s"}`}
+          </span>
+        </div>
+        {shortfalls.length === 0 ? (
+          <div className="px-4 py-6 text-center text-[12px] text-ink-400">
+            No intermediate shortfalls detected. Every stage's upstream supplies
+            enough material, and final-stage batches are spread across quarters
+            as planned.
+          </div>
+        ) : (
+          <ul className="divide-y divide-white/5">
+            {shortfalls.map((f) => (
+              <li
+                key={f.key}
+                className="flex items-start gap-3 px-4 py-2.5 hover:bg-white/[0.02]"
+              >
+                <span
+                  className={clsx(
+                    "mt-0.5 shrink-0 rounded-md border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider",
+                    f.severity === "critical"
+                      ? "border-rose-300/40 bg-rose-300/10 text-rose-300"
+                      : "border-amber-300/40 bg-amber-300/10 text-amber-300"
+                  )}
+                >
+                  {f.severity}
+                </span>
+                <span
+                  className="mt-1.5 h-2 w-2 shrink-0 rounded-full"
+                  style={{ background: f.apiColor }}
+                />
+                <div className="min-w-0 flex-1">
+                  <span className="text-[12px] font-semibold text-white">
+                    {f.apiName}
+                  </span>
+                  <span className="ml-2 text-[11px] text-ink-400">
+                    {f.stageLabel}
+                  </span>
+                  <p className="mt-0.5 text-[11px] text-ink-300">{f.message}</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
 
       {/* ─── Production-over-time: two charts driven by one slicer ── */}
       <Card>

@@ -90,11 +90,11 @@ const CAMPAIGN_SWITCH_PENALTY_MS = 90 * 24 * 3600 * 1000;
  *      engine uses LIST SCHEDULING (book whichever ready batch starts
  *      earliest) instead of a fixed round-robin: a downstream batch is never
  *      placed before the upstream batches that supply it.
- *   3. Priority ordering: when two ready batches could start at the same
- *      time, ties break by `stage.schedulePriority` (lower = earlier) so the
- *      planner can make high-priority stages — e.g. cleanroom batches — grab
- *      the earliest contended reactor slots, then by API id + topological
- *      order. Stages without an explicit priority keep the legacy order.
+ *   3. Sequence ordering: when two ready batches could start at the same
+ *      time, ties break by `api.productionSequence` (lower = earlier) so the
+ *      planner runs API campaigns on a shared cleanroom in the user-defined
+ *      order, then by API id + topological order. APIs without an explicit
+ *      sequence keep the legacy id-alphabetical order.
  *   4. BCF cadence: same-stage consecutive batches respect
  *      start_n - start_(n-1) >= BCF (cross-reactor; tracked per stage in
  *      stageLastBatchStart).
@@ -287,11 +287,11 @@ export function runScheduler(
     apiTopoStages.set(a.id, ordered);
   });
 
-  // ─ Priority + predecessor lookups (for the per-round work-item sort) ──
+  // ─ Sequence + predecessor lookups (for the per-round work-item sort) ──
   // stageById: any stage by id. predStagesById: each stage's same-API
-  // predecessor stage objects (resolved from inputStageIds). priorityOf:
-  // the user-defined schedulePriority, or a sentinel that sorts last so
-  // unprioritised stages keep the legacy alphabetical/topological order.
+  // predecessor stage objects (resolved from inputStageIds). sequenceOf:
+  // the user-defined per-API production sequence (set in the APIs tab), or a
+  // sentinel that sorts last so unsequenced APIs keep the legacy id order.
   const stageById = new Map<string, StageMaster>();
   apis.forEach((a) => a.stages.forEach((s) => stageById.set(s.id, s)));
   const predStagesById = new Map<string, StageMaster[]>();
@@ -303,11 +303,12 @@ export function runScheduler(
       predStagesById.set(s.id, preds);
     })
   );
-  const NO_PRIORITY = Number.MAX_SAFE_INTEGER;
-  const priorityOf = (s: StageMaster): number =>
-    typeof s.schedulePriority === "number" && Number.isFinite(s.schedulePriority)
-      ? s.schedulePriority
-      : NO_PRIORITY;
+  const NO_SEQUENCE = Number.MAX_SAFE_INTEGER;
+  const sequenceOf = (api: API): number =>
+    typeof api.productionSequence === "number" &&
+    Number.isFinite(api.productionSequence)
+      ? api.productionSequence
+      : NO_SEQUENCE;
   const apiIndexById = new Map(apisInOrder.map((a, i) => [a.id, i]));
 
   // Per-stage APPROVED-output timeline: each stage's booked-batch analysisEnd
@@ -782,9 +783,9 @@ export function runScheduler(
   // (lower = earlier), then API order, then topological order, then id. This
   // is where the cleanroom Q-Plan priority and the legacy ordering apply.
   const aWins = (a: StageRT, b: StageRT): boolean => {
-    const pa = priorityOf(a.stage);
-    const pb = priorityOf(b.stage);
-    if (pa !== pb) return pa < pb;
+    const sa = sequenceOf(a.api);
+    const sb = sequenceOf(b.api);
+    if (sa !== sb) return sa < sb;
     const ia = apiIndexById.get(a.api.id) ?? 0;
     const ib = apiIndexById.get(b.api.id) ?? 0;
     if (ia !== ib) return ia < ib;
@@ -932,12 +933,16 @@ export function runScheduler(
       if (srt.api.id !== active.apiId || srt.stage.id !== active.stageId)
         return false;
       if (srt.booked >= srt.planned) return false;
-      // Quarter the active campaign's NEXT unbooked batch is assigned to.
-      const nextQ = Math.min(
-        3,
-        Math.floor(srt.booked / perQuarterLimitOf(srt))
-      );
-      return nextQ <= candQ;
+      // Earliest quarter the active campaign can still place a batch in, given
+      // the soft per-quarter cap (greedy fills the lowest open quarter first).
+      // If that quarter is the candidate's quarter or earlier, the active
+      // campaign still owes work here → keep it consolidated (penalise the
+      // switch). Once its current-quarter quota is met, the switch is free.
+      const aLimit = perQuarterLimitOf(srt);
+      const aBooked = stageQuarterlyBooked.get(srt.stage.id) ?? [0, 0, 0, 0];
+      let aNextQ = 0;
+      while (aNextQ < 3 && aBooked[aNextQ] >= aLimit) aNextQ++;
+      return aNextQ <= candQ;
     });
     return hasRemainingThisQuarter
       ? c.startMs + CAMPAIGN_SWITCH_PENALTY_MS

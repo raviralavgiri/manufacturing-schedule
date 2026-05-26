@@ -127,19 +127,6 @@ export interface StageMaster {
   pcoHours: number;
   plannedBatches: number;
   /**
-   * OPTIONAL — user-defined scheduling priority. LOWER number = scheduled
-   * EARLIER (grabs contended reactor slots first). Used today to let the
-   * planner reorder cleanroom (CL-reactor) stage batches from the Q-Plan
-   * tab's "Cleanroom Stage Priority" control.
-   *
-   * The scheduler sorts each round's work-items by this value (with a stable
-   * fallback to API id + topological order). Hard DAG constraints always
-   * win: a stage is never booked before its same-round same-API predecessor,
-   * regardless of priority. Undefined = no explicit priority (sorts after
-   * any stage that has one, preserving the legacy alphabetical order).
-   */
-  schedulePriority?: number;
-  /**
    * DAG predecessor list: ids of OTHER stages on the same API whose output
    * feeds this stage's input. Replaces the old "previous stageNo" linear
    * assumption with a real dependency graph.
@@ -257,6 +244,14 @@ export interface API {
    * cascade engine is graph-driven and ignores it. See `ApiTopology` above.
    */
   topology?: ApiTopology;
+  /**
+   * Production sequence order within the shared cleanroom / production block.
+   * LOWER number = scheduled EARLIER, so campaigns on a contended reactor run
+   * in this order (minimising PCOs by keeping each API to one consolidated
+   * campaign per quarter). Set per-API in the APIs tab. Undefined sorts after
+   * any API that has a value, then by API id (stable legacy order).
+   */
+  productionSequence?: number;
 }
 
 /**

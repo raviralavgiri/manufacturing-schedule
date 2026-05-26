@@ -12,15 +12,12 @@
 import { useMemo, useState } from "react";
 import {
   AlertTriangle,
-  ArrowDown,
   ArrowRight,
-  ArrowUp,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   Info,
   Lightbulb,
-  Sparkles,
   TrendingUp,
   Zap,
 } from "lucide-react";
@@ -150,50 +147,9 @@ export default function QuarterlyPlanTab() {
   const reactors    = useStore(s => s.reactors);
   const schedule    = useStore(s => s.schedule);
   const setApiWindow = useStore(s => s.setApiWindow);
-  const setStageSchedulePriorities = useStore(s => s.setStageSchedulePriorities);
 
   const [expandedSug, setExpandedSug] = useState<string | null>(null);
   const [appliedSugs, setAppliedSugs] = useState<Set<string>>(new Set());
-
-  // ── Cleanroom-stage priority ordering ─────────────────────────────────
-  // A stage counts as "cleanroom" if any reactor in its pool is CL-class.
-  // The list is sorted by the user-set schedulePriority (lowest first), then
-  // by API id + stage no for unset ones. Up/down rewrites the whole order.
-  const clReactorIds = useMemo(
-    () => new Set(reactors.filter(r => r.reactorClass === "CL").map(r => r.id)),
-    [reactors]
-  );
-  const cleanroomStages = useMemo(() => {
-    const list = apis.flatMap(a =>
-      a.stages
-        .filter(s => s.reactorPool.some(rid => clReactorIds.has(rid)))
-        .map(s => ({
-          id: s.id,
-          apiName: a.name,
-          apiId: a.id,
-          apiColor: a.color,
-          stageNo: s.stageNo,
-          stageName: s.stageName,
-          priority: s.schedulePriority,
-        }))
-    );
-    list.sort((x, y) => {
-      const px = x.priority ?? Number.MAX_SAFE_INTEGER;
-      const py = y.priority ?? Number.MAX_SAFE_INTEGER;
-      if (px !== py) return px - py;
-      if (x.apiId !== y.apiId) return x.apiId.localeCompare(y.apiId);
-      return x.stageNo - y.stageNo;
-    });
-    return list;
-  }, [apis, clReactorIds]);
-
-  function moveCleanroomStage(index: number, dir: -1 | 1) {
-    const ids = cleanroomStages.map(s => s.id);
-    const j = index + dir;
-    if (j < 0 || j >= ids.length) return;
-    [ids[index], ids[j]] = [ids[j], ids[index]];
-    setStageSchedulePriorities(ids);
-  }
 
   const analysis = useMemo(
     () => analyzeQuarterly(apis, reactors, schedule.batches, FY_START_MS),
@@ -459,92 +415,6 @@ export default function QuarterlyPlanTab() {
           </div>
         </div>
       )}
-
-      {/* ── Cleanroom stage priority ─────────────────────────────────── */}
-      <div className="overflow-hidden rounded-xl border border-white/8">
-        <div className="flex items-center justify-between border-b border-white/6 px-4 py-2.5">
-          <div className="flex items-center gap-2">
-            <Sparkles size={13} className="text-cyan-300" />
-            <p className="text-[11px] font-bold uppercase tracking-wider text-ink-400">
-              Cleanroom Stage Priority
-            </p>
-          </div>
-          <span className="text-[10px] text-ink-600">
-            {cleanroomStages.length} cleanroom stage{cleanroomStages.length !== 1 ? "s" : ""}
-          </span>
-        </div>
-
-        {cleanroomStages.length === 0 ? (
-          <div className="px-4 py-6 text-center text-[11px] text-ink-500">
-            No cleanroom stages found. A stage is treated as cleanroom when its
-            reactor pool includes a CL-class reactor (set the class on the
-            Master Equipment tab).
-          </div>
-        ) : (
-          <>
-            <ol className="divide-y divide-white/5">
-              {cleanroomStages.map((s, i) => (
-                <li
-                  key={s.id}
-                  className="flex items-center gap-3 px-4 py-2.5 hover:bg-white/[0.015]"
-                >
-                  <span className="w-6 shrink-0 text-center font-mono text-[12px] font-bold tabular-nums text-cyan-300">
-                    {i + 1}
-                  </span>
-                  <span
-                    className="h-2.5 w-2.5 shrink-0 rounded-full"
-                    style={{ background: s.apiColor }}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <span className="text-[12px] font-semibold text-ink-100">
-                      {s.apiName}
-                    </span>
-                    <span className="ml-2 text-[11px] text-ink-400">
-                      S{s.stageNo} · {s.stageName}
-                    </span>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => moveCleanroomStage(i, -1)}
-                      disabled={i === 0}
-                      title="Move up — schedule earlier"
-                      className={clsx(
-                        "rounded-md border p-1.5 transition",
-                        i === 0
-                          ? "border-white/5 text-ink-700"
-                          : "border-white/10 text-ink-300 hover:border-cyan-300/40 hover:bg-cyan-300/10 hover:text-cyan-200"
-                      )}
-                    >
-                      <ArrowUp size={13} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => moveCleanroomStage(i, 1)}
-                      disabled={i === cleanroomStages.length - 1}
-                      title="Move down — schedule later"
-                      className={clsx(
-                        "rounded-md border p-1.5 transition",
-                        i === cleanroomStages.length - 1
-                          ? "border-white/5 text-ink-700"
-                          : "border-white/10 text-ink-300 hover:border-cyan-300/40 hover:bg-cyan-300/10 hover:text-cyan-200"
-                      )}
-                    >
-                      <ArrowDown size={13} />
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ol>
-            <div className="border-t border-white/6 px-4 py-2 text-[10px] text-ink-600">
-              Higher in the list = scheduled first, so it claims contended
-              cleanroom reactors earlier each round. Stage dependencies always
-              win — a stage never starts before its predecessors. Reordering
-              recomputes the schedule immediately.
-            </div>
-          </>
-        )}
-      </div>
 
       {/* ── Suggestions ─────────────────────────────────────────────── */}
       <div className="rounded-xl border border-white/8">
