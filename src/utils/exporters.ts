@@ -198,13 +198,17 @@ function renderGanttSheet(
   // Vertically merge the corner across rows 1+2 so it covers both header rows.
   sheet.mergeCells(1, 1, 2, 1);
 
-  // ─ Row 2: per-week labels
+  // ─ Row 2: per-day date labels (rotated 90° so ~365 columns stay compact)
   const r2 = sheet.getRow(2);
   spec.weekLabels.forEach((lbl, i) => {
     const cell = r2.getCell(2 + i);
     cell.value = lbl;
-    cell.alignment = { horizontal: "center", vertical: "middle" };
-    cell.font = { color: { argb: "FF94A3B8" }, size: 9 };
+    cell.alignment = {
+      horizontal: "center",
+      vertical: "bottom",
+      textRotation: 90,
+    };
+    cell.font = { color: { argb: "FF94A3B8" }, size: 8 };
     cell.fill = {
       type: "pattern",
       pattern: "solid",
@@ -275,11 +279,13 @@ function renderGanttSheet(
   );
   sheet.getColumn(1).width = labelWidth;
   for (let i = 2; i <= totalCols; i++) {
-    // Wide enough for the "01 Apr 26" date-wise header without truncation.
-    sheet.getColumn(i).width = 9;
+    // Narrow day columns — the date sits in the rotated row-2 header, the
+    // cell colour band conveys the batch span.
+    sheet.getColumn(i).width = 3;
   }
   sheet.getRow(1).height = 22;
-  sheet.getRow(2).height = 18;
+  // Taller header row so the rotated "dd/MM/yy" date labels fit.
+  sheet.getRow(2).height = 52;
 }
 
 /**
@@ -352,9 +358,14 @@ export function buildGanttGridSheets(
   data: GlobalWorkbookData
 ): GanttGridSpec[] {
   const { apis, reactors, schedule, weeks } = data;
-  const weekMs = 7 * 24 * 3600 * 1000;
-  const totalWeeks = weeks.length;
+  // DAY-WISE grid: one column per calendar day across the whole plan window
+  // (≈365 columns). The `weeks`/`weekLabels` field names are kept for the spec
+  // shape, but each slot now represents a single day.
+  const dayMs = 24 * 3600 * 1000;
   const fyStartMs = weeks.length > 0 ? weeks[0].startMs : Date.now();
+  const planEndMs =
+    weeks.length > 0 ? weeks[weeks.length - 1].endMs : fyStartMs + 365 * dayMs;
+  const totalDays = Math.max(1, Math.ceil((planEndMs - fyStartMs) / dayMs));
 
   const apiColorById = new Map<string, string>();
   apis.forEach((a) => apiColorById.set(a.id, a.color));
@@ -363,21 +374,23 @@ export function buildGanttGridSheets(
     cells: GanttGridRow["weeks"],
     b: ScheduleResult["batches"][number]
   ) => {
-    const startWk = Math.max(0, Math.floor((b.startMs - fyStartMs) / weekMs));
-    const endWk = Math.min(
-      totalWeeks - 1,
-      Math.floor((b.endMs - 1 - fyStartMs) / weekMs)
+    const startDay = Math.max(0, Math.floor((b.startMs - fyStartMs) / dayMs));
+    const endDay = Math.min(
+      totalDays - 1,
+      Math.floor((b.endMs - 1 - fyStartMs) / dayMs)
     );
-    if (endWk < 0 || startWk > totalWeeks - 1) return;
+    if (endDay < 0 || startDay > totalDays - 1) return;
     const color = apiColorById.get(b.apiId) ?? b.apiColor ?? "#9ca3af";
     const text = batchCellText(b.batchId);
     const title = `${b.batchId} · ${b.apiName} · S${b.stageNo} · #${b.batchNo}`;
-    for (let i = startWk; i <= endWk; i++) {
-      cells[i] = { color, text, title };
+    for (let i = startDay; i <= endDay; i++) {
+      // Label only the first day of the span; the rest are coloured-only so the
+      // narrow day columns stay readable as a continuous bar.
+      cells[i] = { color, text: i === startDay ? text : "", title };
     }
   };
   const blankWeeks = (): GanttGridRow["weeks"] =>
-    new Array(totalWeeks).fill(null);
+    new Array(totalDays).fill(null);
 
   // By Reactor
   const reactorRows: GanttGridRow[] = reactors.map((r) => {
@@ -421,31 +434,34 @@ export function buildGanttGridSheets(
     };
   });
 
-  // Quarter bands + week labels — identical on every sheet.
+  // Per-day date helper.
+  const dayDate = (i: number) => new Date(fyStartMs + i * dayMs);
+
+  // Quarter bands across the day columns — split the window into 4 equal
+  // slices, labelled with the month range each spans.
   const quarterLabels: string[] = [];
   const quarterSpans: number[] = [];
-  if (weeks.length > 0) {
+  if (totalDays > 0) {
     const monthOf = (i: number) =>
-      weeks[i].start.toLocaleString("en-US", { month: "short" });
-    const sliceSize = Math.max(1, Math.ceil(weeks.length / 4));
+      dayDate(i).toLocaleString("en-US", { month: "short" });
+    const sliceSize = Math.max(1, Math.ceil(totalDays / 4));
     for (let q = 0; q < 4; q++) {
       const a = q * sliceSize;
-      const b = Math.min(weeks.length, a + sliceSize);
-      if (a >= weeks.length) break;
+      const b = Math.min(totalDays, a + sliceSize);
+      if (a >= totalDays) break;
       quarterSpans.push(b - a);
       quarterLabels.push(`Q${q + 1} · ${monthOf(a)}-${monthOf(b - 1)}`);
     }
   }
-  // Date-wise column header: each week column is labelled with the actual
-  // start date (incl. 2-digit year so weeks across the FY boundary stay
-  // distinct), e.g. "01 Apr 26".
-  const weekLabels = weeks.map((w) =>
-    w.start.toLocaleString("en-US", {
-      day: "2-digit",
-      month: "short",
-      year: "2-digit",
-    })
-  );
+  // Date-wise column header: one label per calendar day as "dd/MM/yy",
+  // e.g. 01/04/26, 02/04/26, … across all ~365 days.
+  const pad2 = (n: number) => String(n).padStart(2, "0");
+  const weekLabels = Array.from({ length: totalDays }, (_, i) => {
+    const d = dayDate(i);
+    return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${String(
+      d.getFullYear()
+    ).slice(-2)}`;
+  });
 
   const mk = (
     sheetName: string,

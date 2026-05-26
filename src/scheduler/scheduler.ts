@@ -319,6 +319,13 @@ export function runScheduler(
     a.stages.forEach((s) => stageBatchAnalysisEnds.set(s.id, []))
   );
 
+  // Per-stage placement counts per quarter [Q0..Q3] for the soft per-quarter
+  // cap (≈ planned/4 each). Incremented in commitBatch, read in recompute.
+  const stageQuarterlyBooked = new Map<string, number[]>();
+  apis.forEach((a) =>
+    a.stages.forEach((s) => stageQuarterlyBooked.set(s.id, [0, 0, 0, 0]))
+  );
+
   // BCF gate (cross-reactor): for each stage, the last booked batch's start.
   // The next batch of the same stage cannot start before
   // `stageLastBatchStart + bcfMs`, regardless of which reactor it lands on.
@@ -735,6 +742,15 @@ export function runScheduler(
     ends.splice(qi, 0, analysisEndMs);
     stageLastBatchStart.set(stage.id, startMs);
 
+    // Tally this placement into its quarter bucket (soft per-quarter cap).
+    const qLenC = (rt.apiEnd - rt.apiStart) / 4;
+    const qIdxC =
+      qLenC > 0
+        ? Math.max(0, Math.min(3, Math.floor((startMs - rt.apiStart) / qLenC)))
+        : 0;
+    const qArrC = stageQuarterlyBooked.get(stage.id);
+    if (qArrC) qArrC[qIdxC]++;
+
     const cleaningBeforeMs = cleaningKind === "none" ? 0 : rt.pcoMs;
     allBatches.push({
       batchId: `${stage.stageName.replace(/\s+/g, "")}#${String(batchNo).padStart(3, "0")}`,
@@ -783,33 +799,24 @@ export function runScheduler(
 
   // ─ Quarterly distribution (backward integration from API quantities) ───────
   // Each stage's planned batches are spread roughly evenly across the API's
-  // four quarters (≈ planned/4 per quarter) instead of being scheduled in one
-  // continuous run. This is what keeps every API "live" in a shared cleanroom
-  // every quarter rather than one API monopolising a quarter while the others
-  // wait. The mapping is purely by batch index → quarter, so it's deterministic
-  // and round-trips cleanly with the No. of Batches cascade.
+  // four quarters (≈ planned/4 per quarter) so every API stays "live" in a
+  // shared cleanroom every quarter instead of one API monopolising a quarter.
+  //
+  // This is enforced as a SOFT CAP, not a hard floor: a batch may start as
+  // early as the reactor frees (right after the previous batch's PROCESS end
+  // + PCO — analysis runs in parallel off-reactor and never gates reactor
+  // reuse). A batch is deferred to a later quarter ONLY when its quarter has
+  // already taken its ≈ planned/4 share. This keeps the reactor busy and never
+  // idles it at a quarter boundary when there is still capacity in the current
+  // quarter.
   //
   //   perQuarterLimit = ⌈ planned / 4 ⌉
-  //   target quarter of batch k (0-based) = ⌊ k / perQuarterLimit ⌋  (clamped 0..3)
-  //
-  // The quarter floor is applied via Math.max alongside the material/BCF gates,
-  // so it can only DELAY a batch into its quarter — never pull one earlier than
-  // its inputs allow.
   const perQuarterLimitOf = (rt: StageRT): number =>
     Math.max(1, Math.ceil(rt.planned / 4));
 
   const quarterLenOf = (rt: StageRT): number => {
     const span = rt.apiEnd - rt.apiStart;
     return span > 0 ? span / 4 : 0;
-  };
-
-  /** Earliest start imposed by the quarter the NEXT batch (index = booked)
-   *  is assigned to. Returns apiStart when the API window is degenerate. */
-  const quarterFloorOf = (rt: StageRT): number => {
-    const qLen = quarterLenOf(rt);
-    if (qLen <= 0) return rt.apiStart;
-    const targetQ = Math.min(3, Math.floor(rt.booked / perQuarterLimitOf(rt)));
-    return rt.apiStart + targetQ * qLen;
   };
 
   /** Quarter index (0..3) that a timestamp falls in within rt's API window. */
@@ -855,13 +862,27 @@ export function runScheduler(
       cand.set(rt.stage.id, null);
       return;
     }
-    const earliest = Math.max(
-      matTime + bufferMs,
-      rt.apiStart,
-      bcfGateOf(rt),
-      quarterFloorOf(rt)
-    );
-    cand.set(rt.stage.id, findBestSlot(rt, earliest));
+    let earliest = Math.max(matTime + bufferMs, rt.apiStart, bcfGateOf(rt));
+    let slot = findBestSlot(rt, earliest);
+    // Soft per-quarter cap. If the chosen slot lands in a quarter that has
+    // already taken its ≈ planned/4 share for this stage, defer to the start
+    // of the earliest later quarter that still has room. While the current
+    // quarter has capacity the batch starts as soon as the reactor frees, so
+    // the reactor is never idled at a quarter boundary.
+    const limit = perQuarterLimitOf(rt);
+    const qBooked = stageQuarterlyBooked.get(rt.stage.id) ?? [0, 0, 0, 0];
+    for (let g = 0; g < 4; g++) {
+      const q = quarterOfTime(rt, slot.startMs);
+      if (qBooked[q] < limit) break; // room in this quarter
+      let nq = q + 1;
+      while (nq < 4 && qBooked[nq] >= limit) nq++;
+      if (nq > 3) break; // no later capacity — allow placement anyway
+      const nqStart = rt.apiStart + nq * quarterLenOf(rt);
+      if (nqStart <= earliest) break; // can't push further — avoid spinning
+      earliest = nqStart;
+      slot = findBestSlot(rt, earliest);
+    }
+    cand.set(rt.stage.id, slot);
   };
 
   // Commit a placement, then invalidate exactly the stages whose earliest
@@ -970,12 +991,7 @@ export function runScheduler(
       }
       if (!fb) break;
       const matTime = materialReadyTime(fb, true) ?? fb.apiStart;
-      const earliest = Math.max(
-        matTime + bufferMs,
-        fb.apiStart,
-        bcfGateOf(fb),
-        quarterFloorOf(fb)
-      );
+      const earliest = Math.max(matTime + bufferMs, fb.apiStart, bcfGateOf(fb));
       place(fb, findBestSlot(fb, earliest));
       remainingBatches--;
       continue;
