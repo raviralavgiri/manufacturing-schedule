@@ -377,14 +377,24 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
       const subCVal = cellNum(row.getCell(21));    // col U
       const subChainLengths = [subA, subB].filter((n) => n > 0);
       if (subCVal !== null && !isNA(row.getCell(21))) subChainLengths.push(subCVal);
+      // Per-branch input (stoichiometric) factors. Branch A is the base (=1);
+      // f1 (branch B) col V, f2 (branch C) col W. Blank ⇒ 1.
+      const fB = cellNum(row.getCell(22)); // col V — branch B factor (f1)
+      const fC = cellNum(row.getCell(23)); // col W — branch C factor (f2)
+      const lens =
+        subChainLengths.length > 0 ? subChainLengths : [2, 2];
+      const subChainFactors = lens.map((_, i) =>
+        i === 0 ? 1 : i === 1 ? fB ?? 1 : i === 2 ? fC ?? 1 : 1
+      );
       // postMergeCount = mainStages - 1 (merge stage counts as 1 of mainStages)
       const postMerge = Math.max(0, mainStages - 1);
       topoSpec = {
         kind: "parallel",
-        subChainCount: subChainLengths.length,
-        subChainLengths: subChainLengths.length > 0 ? subChainLengths : [2, 2],
+        subChainCount: lens.length,
+        subChainLengths: lens,
         mergeStageName: "Merge",
         postMergeCount: postMerge,
+        subChainFactors,
       };
     } else {
       topology = "linear";

@@ -168,6 +168,17 @@ export interface StageMaster {
    */
   inputStageIds: string[];
   /**
+   * OPTIONAL — per-predecessor input multiplier (stoichiometric factor) used
+   * by the cascade for CONVERGENCE / parallel merges. The stage's own
+   * `inputKgPerBatch` is the BASE input (branch A). Each predecessor's demand
+   * is sized as:  thisStage.plannedBatches × inputKgPerBatch × factor(pred).
+   * Branch A's factor = 1; branch B = f1, branch C = f2, … set in the parallel
+   * stage-flow editor (or Excel import). A predecessor absent from this map
+   * uses factor 1 (back-compat: an equal split across inputs).
+   * Keyed by predecessor stageId.
+   */
+  inputFactorByStageId?: Record<string, number>;
+  /**
    * OPTIONAL — side-chain anchor policy. When present, this stage is the
    * FIRST stage of a side chain (a sub-stream that feeds back into the
    * main backbone) and its `outputDemand` is OVERRIDDEN during cascade to

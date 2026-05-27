@@ -34,6 +34,15 @@ export interface ParallelSpec {
   mergeStageName: string;
   /** Number of stages chained AFTER the merge. ≥ 0. */
   postMergeCount: number;
+  /**
+   * OPTIONAL — stoichiometric input factor per sub-chain, aligned with
+   * `subChainLengths` (index 0 = branch A, 1 = B, …). Branch A is the BASE
+   * (the merge stage's `inputKgPerBatch`) so its factor is always 1; B/C/…
+   * factors (f1, f2, …) scale the merge's input demand on that branch:
+   *   branch demand = merge.plannedBatches × inputKgPerBatch × factor.
+   * Missing/blank entries default to 1.
+   */
+  subChainFactors?: number[];
 }
 
 /**
@@ -172,10 +181,11 @@ export function applyTopologyPresetToApi(
         ...existing,
         stageNo,
         stageName: existing.stageName,
-        // inputStageIds / cascadePolicy are filled in below once all rows
-        // have a stable id.
+        // inputStageIds / cascadePolicy / inputFactorByStageId are filled in
+        // below once all rows have a stable id.
         inputStageIds: [],
         cascadePolicy: undefined,
+        inputFactorByStageId: undefined,
       };
     }
     return {
@@ -211,6 +221,7 @@ export function applyTopologyPresetToApi(
       // trailer). Filled in below once ids are stable.
       inputStageIds: [],
       cascadePolicy: undefined,
+      inputFactorByStageId: undefined,
     });
   }
 
@@ -226,6 +237,18 @@ export function applyTopologyPresetToApi(
     row.inputStageIds = pos.inputStageNos
       .map((n) => idByStageNo.get(n))
       .filter((id): id is string => typeof id === "string");
+    // Per-input stoichiometric factors (convergence/merge): store only the
+    // non-1 entries so a plain equal-split merge stays factor-free.
+    if (pos.inputFactors) {
+      const fmap: Record<string, number> = {};
+      pos.inputStageNos.forEach((n, i) => {
+        const id = idByStageNo.get(n);
+        const f = pos.inputFactors?.[i];
+        if (id && typeof f === "number" && f > 0 && f !== 1) fmap[id] = f;
+      });
+      row.inputFactorByStageId =
+        Object.keys(fmap).length > 0 ? fmap : undefined;
+    }
     if (pos.cascadePolicy) {
       const baseId = idByStageNo.get(pos.cascadePolicy.baseStageNo);
       if (baseId) {
@@ -264,6 +287,9 @@ interface ScaffoldPosition {
   defaultName: string;
   inputStageNos: number[];
   cascadePolicy?: { baseStageNo: number; factor: number };
+  /** Per-input stoichiometric factor, aligned with `inputStageNos`. Only set
+   *  for a convergence/merge stage; undefined elsewhere (⇒ all factors = 1). */
+  inputFactors?: number[];
 }
 
 function buildPositions(spec: TopologyPresetSpec): ScaffoldPosition[] {
@@ -309,10 +335,18 @@ function buildParallelPositions(spec: ParallelSpec): ScaffoldPosition[] {
   }
 
   // Merge stage at stageNo subSum + 1 — pulls from every sub-chain's last.
+  // Branch A (index 0) is the base input (factor 1); B/C/… use the spec's
+  // per-sub-chain factors (f1, f2, …), defaulting to 1.
   const mergeStageNo = subSum + 1;
+  const factors = lastStageNoOfChain.map((_, chainIdx) => {
+    if (chainIdx === 0) return 1; // branch A is the base
+    const f = spec.subChainFactors?.[chainIdx];
+    return typeof f === "number" && Number.isFinite(f) && f > 0 ? f : 1;
+  });
   positions.push({
     defaultName: spec.mergeStageName.trim() || "Merge",
     inputStageNos: lastStageNoOfChain.slice(),
+    inputFactors: factors,
   });
 
   // Post-merge: linear chain after the merge.

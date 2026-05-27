@@ -110,12 +110,19 @@ export function cascadePlannedBatches(api: API): API {
     // Add this stage's input demand to each predecessor's output demand,
     // BUT skip side-chain predecessors — their demand is set by the
     // factor cascade in pass 2, not by what flows back from the merge.
+    // CONVERGENCE factor: for a parallel merge, each branch consumes a
+    // different stoichiometric quantity. The base input (inputKgPerBatch) is
+    // branch A (factor 1); other branches use inputFactorByStageId[pred].
     const preds = Array.isArray(s.inputStageIds) ? s.inputStageIds : [];
+    const factorOf = (pid: string) => {
+      const f = s.inputFactorByStageId?.[pid];
+      return typeof f === "number" && f > 0 ? f : 1;
+    };
     for (const pid of preds) {
       if (sideChainStageIds.has(pid)) continue;
       outputDemandByStageId.set(
         pid,
-        (outputDemandByStageId.get(pid) ?? 0) + inputConsumed
+        (outputDemandByStageId.get(pid) ?? 0) + inputConsumed * factorOf(pid)
       );
     }
   }

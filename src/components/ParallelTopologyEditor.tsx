@@ -36,9 +36,15 @@ export default function ParallelTopologyEditor({
   const seedLengths = (initial?.subChainLengths ?? []).slice(0, initialCount);
   while (seedLengths.length < initialCount) seedLengths.push(3);
 
+  const seedFactors = (initial?.subChainFactors ?? []).slice(0, initialCount);
+  while (seedFactors.length < initialCount) seedFactors.push(1);
+  seedFactors[0] = 1; // branch A is always the base
+
   const [subChainCount, setSubChainCount] = useState(initialCount);
   const [subChainLengths, setSubChainLengths] =
     useState<number[]>(seedLengths);
+  const [subChainFactors, setSubChainFactors] =
+    useState<number[]>(seedFactors);
   const [mergeStageName, setMergeStageName] = useState(
     initial?.mergeStageName ?? "Merge"
   );
@@ -57,11 +63,21 @@ export default function ParallelTopologyEditor({
     const lens = subChainLengths.slice(0, next);
     while (lens.length < next) lens.push(3);
     setSubChainLengths(lens);
+    const facs = subChainFactors.slice(0, next);
+    while (facs.length < next) facs.push(1);
+    facs[0] = 1;
+    setSubChainFactors(facs);
   };
 
   const setLengthAt = (idx: number, v: number) => {
     setSubChainLengths((p) =>
       p.map((x, i) => (i === idx ? Math.max(1, Math.floor(v) || 1) : x))
+    );
+  };
+
+  const setFactorAt = (idx: number, v: number) => {
+    setSubChainFactors((p) =>
+      p.map((x, i) => (i === idx ? (Number.isFinite(v) && v > 0 ? v : 1) : x))
     );
   };
 
@@ -72,6 +88,9 @@ export default function ParallelTopologyEditor({
       subChainLengths: subChainLengths.map((x) => Math.max(1, Math.floor(x))),
       mergeStageName: mergeStageName.trim() || "Merge",
       postMergeCount: Math.max(0, Math.floor(postMergeCount)),
+      subChainFactors: subChainFactors.map((f, i) =>
+        i === 0 ? 1 : Number.isFinite(f) && f > 0 ? f : 1
+      ),
     });
   };
 
@@ -138,14 +157,15 @@ export default function ParallelTopologyEditor({
       </div>
 
       <div className="mt-3">
-        <Label>Sub-chain lengths</Label>
+        <Label>Sub-chain lengths &amp; input factors</Label>
         <div className="flex flex-wrap items-center gap-2">
           {subChainLengths.map((len, idx) => {
             const letter = String.fromCharCode(65 + idx);
+            const isBase = idx === 0;
             return (
               <div
                 key={idx}
-                className="flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1"
+                className="flex items-center gap-1.5 rounded-md border border-white/10 bg-white/5 px-2 py-1"
               >
                 <span className="font-mono text-[11px] font-bold text-violet-300">
                   {letter}
@@ -155,9 +175,38 @@ export default function ParallelTopologyEditor({
                   min={1}
                   value={len}
                   onChange={(e) => setLengthAt(idx, Number(e.target.value))}
-                  className="cell-yellow w-14 rounded px-1.5 py-0.5 text-right font-mono text-xs tabular-nums"
+                  className="cell-yellow w-12 rounded px-1.5 py-0.5 text-right font-mono text-xs tabular-nums"
+                  title={`Sub-chain ${letter} length (stages)`}
                 />
-                <span className="text-[10px] text-ink-400">stages</span>
+                <span className="text-[10px] text-ink-400">st</span>
+                <span className="mx-0.5 text-ink-600">·</span>
+                {isBase ? (
+                  <span
+                    className="rounded bg-cyan-300/10 px-1.5 py-0.5 font-mono text-[10px] font-bold text-cyan-200"
+                    title="Branch A is the base input — the merge stage's Input/Batch. Factor = 1."
+                  >
+                    ×1 base
+                  </span>
+                ) : (
+                  <span
+                    className="flex items-center gap-1"
+                    title={`Input factor f${idx} — branch ${letter} demand = base input × this`}
+                  >
+                    <span className="font-mono text-[10px] text-ink-300">
+                      ×f{idx}
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.1}
+                      value={subChainFactors[idx] ?? 1}
+                      onChange={(e) =>
+                        setFactorAt(idx, Number(e.target.value))
+                      }
+                      className="cell-yellow w-14 rounded px-1.5 py-0.5 text-right font-mono text-xs tabular-nums"
+                    />
+                  </span>
+                )}
               </div>
             );
           })}
@@ -166,9 +215,10 @@ export default function ParallelTopologyEditor({
 
       <p className="mt-3 flex items-start gap-1.5 text-[11px] text-ink-300">
         <Info size={11} className="mt-0.5 shrink-0 text-violet-300" />
-        Each sub-chain is a linear chain on its own. The merge stage pulls
-        from every sub-chain's last stage, and the post-merge tail is
-        another linear chain after the merge.
+        Each sub-chain is a linear chain on its own. The merge stage pulls from
+        every sub-chain's last stage. Branch A's quantity is the merge stage's
+        Input/Batch (set in Stages); branch B = A × f1, branch C = A × f2, …
+        which sizes each branch's batch count.
       </p>
 
       <div className="mt-4 flex items-center justify-end gap-2">
