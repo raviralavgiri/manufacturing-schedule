@@ -41,7 +41,7 @@ interface BookedSlot {
 }
 
 /** Maximum continuous campaign duration before a forced campaign cleaning. */
-const CAMPAIGN_MAX_MS = 30 * 24 * 3600 * 1000;
+const CAMPAIGN_MAX_MS = 34 * 24 * 3600 * 1000;
 
 /**
  * PCO-minimisation: how far into the future we push a candidate batch when
