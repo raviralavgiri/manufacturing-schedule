@@ -281,8 +281,14 @@ export default function BatchesTab() {
                 </Th>
                 <Th
                   align="right"
+                  title="Existing on-hand stock (kg) for this stage, set in the Stages → Equipment & Flow tab. Subtracted from Required before sizing batches."
+                >
+                  Existing Stock (kg)
+                </Th>
+                <Th
+                  align="right"
                   locked
-                  title="Planned batches = ⌈ Required ÷ Output/Batch ⌉."
+                  title="Planned batches = ⌈ (Required − Existing Stock) ÷ Output/Batch ⌉."
                 >
                   Planned
                 </Th>
@@ -391,6 +397,16 @@ export default function BatchesTab() {
                       </span>
                     </td>
 
+                    {/* Existing Stock */}
+                    <td
+                      className="px-3 py-2.5 text-right font-mono tabular-nums text-ink-300"
+                      title="Existing on-hand stock (kg). Edit in the Stages → Equipment & Flow tab."
+                    >
+                      {r.existingStockKg && r.existingStockKg > 0
+                        ? Math.round(r.existingStockKg).toLocaleString()
+                        : "—"}
+                    </td>
+
                     {/* Planned */}
                     <td className="px-3 py-2.5 text-right font-mono font-semibold tabular-nums text-ink-200">
                       <span className="inline-flex items-center gap-1">
@@ -426,7 +442,7 @@ export default function BatchesTab() {
               {rows.length === 0 && (
                 <tr>
                   <td
-                    colSpan={7}
+                    colSpan={8}
                     className="py-12 text-center text-sm text-ink-300"
                   >
                     {anyFilterActive

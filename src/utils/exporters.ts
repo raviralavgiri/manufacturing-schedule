@@ -891,6 +891,7 @@ function renderNoBatchesSheet(sheet: any, apis: API[]): void {
     "Stage",
     "Stage Name",
     "Required (kg)",
+    "Existing Stock (kg)",
     "Planned",
     "Actual Output (kg)",
     "Input Consumed (kg)",
@@ -930,11 +931,16 @@ function renderNoBatchesSheet(sheet: any, apis: API[]): void {
             );
         const actualOutput = s.batchSizeKg * s.plannedBatches;
         const inputConsumed = inputPerBatchOf(s) * s.plannedBatches;
+        const existingStock =
+          typeof s.existingStockKg === "number" && s.existingStockKg > 0
+            ? s.existingStockKg
+            : 0;
         rows.push([
           api.name,
           `S${s.stageNo}`,
           s.stageName,
           Math.round(demand),
+          Math.round(existingStock),
           s.plannedBatches,
           Math.round(actualOutput),
           Math.round(inputConsumed),
