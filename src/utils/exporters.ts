@@ -529,6 +529,10 @@ interface ApiTopoCells {
   mainStages: number;
   sideChains: { merge: number; factor: number; length: number }[];
   parallelSubLengths: number[];
+  /** Per-sub-chain input factors aligned with parallelSubLengths (A = 1). */
+  parallelFactors: number[];
+  /** Fork shape, when topology === fork. */
+  fork?: { shared: number; branches: number; perBranch: number };
 }
 
 /**
@@ -545,9 +549,12 @@ function reconstructTopologyCells(api: API): ApiTopoCells {
     mainStages: total,
     sideChains: [],
     parallelSubLengths: [],
+    parallelFactors: [],
   };
   const stageNoById = new Map<string, number>();
   stages.forEach((s) => stageNoById.set(s.id, s.stageNo));
+  const idByStageNo = new Map<number, string>();
+  stages.forEach((s) => idByStageNo.set(s.stageNo, s.id));
 
   if (api.topology === "side_chains") {
     const anchors = stages
@@ -577,6 +584,7 @@ function reconstructTopologyCells(api: API): ApiTopoCells {
       mainStages: mainBackboneLength,
       sideChains,
       parallelSubLengths: [],
+      parallelFactors: [],
     };
   }
 
@@ -603,12 +611,58 @@ function reconstructTopologyCells(api: API): ApiTopoCells {
     }
     const postMergeCount = total - subSum - 1;
     if (postMergeCount < 0 || subLengths.length > 3) return linearFallback;
+    // Per-branch input factors: branch A (first) = 1; others come from the
+    // merge stage's inputFactorByStageId (keyed by each branch's last stage).
+    const parallelFactors = lastNos.map((no, i) => {
+      if (i === 0) return 1;
+      const id = idByStageNo.get(no);
+      const f = id ? merge.inputFactorByStageId?.[id] : undefined;
+      return typeof f === "number" && f > 0 ? f : 1;
+    });
     return {
       topology: "Parallel",
       mainStages: postMergeCount + 1,
       sideChains: [],
       parallelSubLengths: subLengths,
+      parallelFactors,
     };
+  }
+
+  if (api.topology === "fork") {
+    // Fork: the shared preamble's last stage has >1 successors; each branch is
+    // a linear chain of equal length ending in its own sink.
+    const succCount = new Map<number, number>();
+    stages.forEach((s) =>
+      (s.inputStageIds ?? []).forEach((pid) => {
+        const n = stageNoById.get(pid);
+        if (n) succCount.set(n, (succCount.get(n) ?? 0) + 1);
+      })
+    );
+    let splitNo = 0;
+    let branchesCount = 0;
+    for (const [no, c] of succCount) {
+      if (c > branchesCount) {
+        branchesCount = c;
+        splitNo = no;
+      }
+    }
+    if (splitNo >= 1 && branchesCount >= 2) {
+      const tail = total - splitNo;
+      if (tail % branchesCount === 0) {
+        const perBranch = tail / branchesCount;
+        if (perBranch >= 1) {
+          return {
+            topology: "Fork/ Diverge",
+            mainStages: total,
+            sideChains: [],
+            parallelSubLengths: [],
+            parallelFactors: [],
+            fork: { shared: splitNo, branches: branchesCount, perBranch },
+          };
+        }
+      }
+    }
+    return linearFallback;
   }
 
   return linearFallback;
@@ -621,28 +675,35 @@ function renderApiSheet(sheet: any, apis: API[]): void {
   // Headers live in rows 4–5; the importer skips rows ≤ 5 and reads from row 6.
   sheet.getCell(4, 2).value = "API list — re-importable (data from row 6)";
   sheet.getCell(4, 2).font = { bold: true, color: { argb: "FFE5E7EB" } };
+  // Column layout MUST mirror the importer (see excelImport.ts).
   const subLabels: [number, string][] = [
     [2, "Sl.No"],
     [3, "Name"],
-    [4, "Target kg"],
-    [5, "Start"],
-    [6, "End"],
-    [7, "Topology"],
-    [8, "Total Stages"],
-    [9, "Main Stages"],
-    [10, "SC1 merge"],
-    [11, "SC1 factor"],
-    [12, "SC1 len"],
-    [13, "SC2 merge"],
-    [14, "SC2 factor"],
-    [15, "SC2 len"],
-    [16, "SC3 merge"],
-    [17, "SC3 factor"],
-    [18, "SC3 len"],
-    [19, "Par subA"],
-    [20, "Par subB"],
-    [21, "Par subC"],
-    [25, "Planned batches"],
+    [4, "Sequence"],
+    [5, "Block"],
+    [6, "Target kg"],
+    [7, "Start"],
+    [8, "End"],
+    [9, "Stage flow"],
+    [10, "Total Stages"],
+    [11, "Main Stages"],
+    [12, "SC1 merge"],
+    [13, "SC1 factor"],
+    [14, "SC1 len"],
+    [15, "SC2 merge"],
+    [16, "SC2 factor"],
+    [17, "SC2 len"],
+    [18, "SC3 merge"],
+    [19, "SC3 factor"],
+    [20, "SC3 len"],
+    [21, "Par subA"],
+    [22, "Par subB"],
+    [23, "Par subC"],
+    [24, "f1"],
+    [25, "f2"],
+    [26, "Shared preamble"],
+    [27, "Branches"],
+    [28, "Stages/branch"],
   ];
   subLabels.forEach(([col, lbl]) => {
     const cell = sheet.getRow(5).getCell(col);
@@ -655,50 +716,67 @@ function renderApiSheet(sheet: any, apis: API[]): void {
     const topo = reconstructTopologyCells(api);
     row.getCell(2).value = idx + 1;
     row.getCell(3).value = api.name;
-    row.getCell(4).value = api.targetKg;
-    row.getCell(5).value = new Date(api.window.startMs);
-    row.getCell(5).numFmt = "yyyy-mm-dd";
-    row.getCell(6).value = new Date(api.window.endMs);
-    row.getCell(6).numFmt = "yyyy-mm-dd";
-    row.getCell(7).value = topo.topology;
-    row.getCell(8).value = api.stages.length;
-    row.getCell(9).value = topo.mainStages;
+    if (typeof api.productionSequence === "number")
+      row.getCell(4).value = api.productionSequence;
+    if (api.block) row.getCell(5).value = api.block;
+    row.getCell(6).value = api.targetKg;
+    row.getCell(7).value = new Date(api.window.startMs);
+    row.getCell(7).numFmt = "yyyy-mm-dd";
+    row.getCell(8).value = new Date(api.window.endMs);
+    row.getCell(8).numFmt = "yyyy-mm-dd";
+    row.getCell(9).value = topo.topology;
+    row.getCell(10).value = api.stages.length;
+    row.getCell(11).value = topo.mainStages;
+    // Side chains: L/M/N · O/P/Q · R/S/T
     topo.sideChains.slice(0, 3).forEach((sc, i) => {
-      const base = 10 + i * 3; // J/M/P
+      const base = 12 + i * 3;
       row.getCell(base).value = sc.merge;
       row.getCell(base + 1).value = sc.factor;
       row.getCell(base + 2).value = sc.length;
     });
+    // Parallel: sub lengths U/V/W, factors f1=X f2=Y (branch A is base, omitted)
     topo.parallelSubLengths.slice(0, 3).forEach((len, i) => {
-      row.getCell(19 + i).value = len; // S/T/U
+      row.getCell(21 + i).value = len;
     });
+    topo.parallelFactors.slice(1, 3).forEach((f, i) => {
+      if (f !== 1) row.getCell(24 + i).value = f; // X=f1, Y=f2
+    });
+    // Fork: Z/AA/AB
+    if (topo.fork) {
+      row.getCell(26).value = topo.fork.shared;
+      row.getCell(27).value = topo.fork.branches;
+      row.getCell(28).value = topo.fork.perBranch;
+    }
   });
 
   sheet.getColumn(3).width = 26;
-  sheet.getColumn(5).width = 12;
-  sheet.getColumn(6).width = 12;
-  sheet.getColumn(7).width = 14;
+  sheet.getColumn(5).width = 10;
+  sheet.getColumn(7).width = 12;
+  sheet.getColumn(8).width = 12;
+  sheet.getColumn(9).width = 14;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function renderStagesSheet(sheet: any, apis: API[]): void {
   // Headers rows 1–2; data from row 3.
+  // Column layout MUST mirror the importer (see excelImport.ts).
   const cols: [number, string][] = [
     [1, "API"],
     [2, "Stage"],
-    [3, "Input/Batch"],
-    [4, "Output/Batch"],
-    [5, "BCF (h)"],
-    [6, "BCT (h)"],
-    [7, "Analysis (h)"],
-    [8, "PCO (h)"],
-    [9, "Nos"],
-    [10, "Main"],
-    [11, "P1"],
-    [12, "P2"],
-    [13, "P3"],
-    [14, "P4"],
-    [15, "Process (h)"],
+    [3, "FIRST BATCH START"],
+    [4, "EXISTING STOCK(KG)"],
+    [5, "Input/Batch"],
+    [6, "Output/Batch"],
+    [7, "BCF (h)"],
+    [8, "BCT (h)"],
+    [9, "Analysis (h)"],
+    [10, "PCO (h)"],
+    [11, "Nos"],
+    [12, "Main"],
+    [13, "P1"],
+    [14, "P2"],
+    [15, "P3"],
+    [16, "P4"],
   ];
   cols.forEach(([col, lbl]) => {
     const cell = sheet.getRow(2).getCell(col);
@@ -729,20 +807,25 @@ function renderStagesSheet(sheet: any, apis: API[]): void {
             row.getCell(2).value = s.stageName; // Stage on every row of stage
             if (pi === 0) {
               // Stage-level params captured by importer on the first row only.
-              row.getCell(3).value = s.inputKgPerBatch;
-              row.getCell(4).value = s.batchSizeKg;
-              row.getCell(5).value = s.bcfHours;
-              row.getCell(6).value = s.bctHours;
-              row.getCell(7).value = s.analysisHours;
-              row.getCell(8).value = s.pcoHours;
-              row.getCell(9).value = s.reactorPool.length;
-              row.getCell(15).value = s.processHours;
+              if (typeof s.firstBatchStartMs === "number") {
+                row.getCell(3).value = new Date(s.firstBatchStartMs);
+                row.getCell(3).numFmt = "yyyy-mm-dd";
+              }
+              if (typeof s.existingStockKg === "number" && s.existingStockKg > 0)
+                row.getCell(4).value = s.existingStockKg;
+              row.getCell(5).value = s.inputKgPerBatch;
+              row.getCell(6).value = s.batchSizeKg;
+              row.getCell(7).value = s.bcfHours;
+              row.getCell(8).value = s.bctHours;
+              row.getCell(9).value = s.analysisHours;
+              row.getCell(10).value = s.pcoHours;
+              row.getCell(11).value = s.reactorPool.length;
             }
             if (reactorId) {
-              row.getCell(10).value = reactorId;
+              row.getCell(12).value = reactorId;
               const subs = s.reactorSubstitutes?.[reactorId] ?? [];
               subs.slice(0, 4).forEach((sub, si) => {
-                row.getCell(11 + si).value = sub;
+                row.getCell(13 + si).value = sub;
               });
             }
           });
@@ -751,7 +834,8 @@ function renderStagesSheet(sheet: any, apis: API[]): void {
 
   sheet.getColumn(1).width = 22;
   sheet.getColumn(2).width = 20;
-  for (let c = 3; c <= 15; c++) sheet.getColumn(c).width = 12;
+  sheet.getColumn(3).width = 16;
+  for (let c = 4; c <= 16; c++) sheet.getColumn(c).width = 12;
   sheet.views = [{ state: "frozen", ySplit: 2 }];
 }
 
