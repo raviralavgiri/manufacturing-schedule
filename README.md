@@ -14,6 +14,7 @@ A modern, glassmorphic React webapp that replaces an Excel-based pharmaceutical 
   - [Cascade planning](#3-cascade-planning)
   - [Topology presets](#4-topology-presets)
   - [The scheduling algorithm](#5-the-scheduling-algorithm)
+  - [Quarterly distribution vs ASAP](#5a-quarterly-distribution-vs-asap--api-stages-vs-intermediates)
   - [Reactor selection — gap-packing](#6-reactor-selection--gap-packing)
   - [PCO and campaign cleaning](#7-pco-and-campaign-cleaning)
   - [FY vs Overflow classification](#8-fy-vs-overflow-classification)
@@ -127,7 +128,8 @@ export interface Reactor {
 
 - `bctHours` is the full reactor slot — from when the reactor is claimed to when it's released.
 - `processHours` is the active production time within that slot. The leading `bctHours − processHours` is a wait period (e.g. waiting for a temperature ramp on a shared utility).
-- `bcfHours` is the minimum gap between consecutive batch *starts* at the same stage. For a bottleneck reactor `bcfHours ≈ bctHours`; for downstream equipment that can start before the previous batch fully exits, `bcfHours < bctHours`.
+- `bcfHours` is the **start-to-start interval** between consecutive batches of the same stage: batch *n* may start one BCF after batch *n−1* (`start_n = start_(n-1) + BCF`). The scheduler treats this as the primary cadence and always tries to place the next batch exactly one BCF later. For a bottleneck reactor `bcfHours ≈ bctHours`; when `bcfHours < bctHours` a single reactor can't keep up, so the pool runs consecutive batches on parallel reactors to hold the cadence.
+- `analysisHours` is **off-reactor** QC: it runs in parallel after the cycle, frees the reactor for the next batch immediately, and only delays the *downstream* stage. It is **not** added to BCF.
 
 **Why `batchSizeKg` and `inputKgPerBatch` are separate:** reactions aren't 100% yield. A crystallisation step may consume 120 kg input to produce 100 kg output (`batchSizeKg = 100, inputKgPerBatch = 120`). The cascade uses `inputKgPerBatch` to propagate demand backwards through the DAG.
 
@@ -225,10 +227,33 @@ flowchart TD
 | Middle: **API in priority order** | P1 → … → P5 | High-priority APIs grab the earliest free reactor slots in each round. |
 | Inner: **stage in DAG topo order** | topological order respects `inputStageIds` | Ensures predecessors are booked before successors within each round. |
 
-#### The two hard constraints
+#### The hard constraints
 
 1. **No reactor clash** — each reactor's `[start, cycleEnd]` windows are non-overlapping. Each new booking is forced to start `≥ reactor.lastCycleEnd`.
-2. **DAG stage ordering** — stage S's batch B can only start after batch B's analysis-end on every predecessor of S (+ 4-hour transfer buffer).
+2. **DAG material gate** — to start batch K of stage S, **every** predecessor must have accumulated enough *approved* output (cumulative ≥ K × `inputKgPerBatch`). "Approved" = the predecessor batch's analysis (QC) window has ended (+ 4-hour transfer buffer). One large upstream batch can feed several downstream batches.
+3. **BCF cadence** — consecutive batches of the *same* stage are spaced by Batch Charging Frequency: `start_n = start_(n-1) + BCF`. This is the primary spacing rule and the scheduler **always tries to place the next batch exactly one BCF after the previous start** (it only slips later when a reactor is busy, the material gate is not yet satisfied, or a cleaning gap intervenes). When `BCF < BCT` a single reactor cannot keep the cadence, so the scheduler routes the next batch onto another free reactor in the pool to preserve the BCF rhythm.
+
+> **BCF, BCT, and analysis are independent.** BCF is the *start-to-start* interval. BCT is how long the reactor is *locked*. `analysisHours` is **off-reactor** QC — it never locks the reactor and never gates BCF; it only delays the *downstream* stage's material gate. Setting `BCF = BCT + analysis` by mistake injects artificial idle gaps between batches; keep BCF at the true charging interval.
+
+---
+
+### 5a. Quarterly distribution vs ASAP — API stages vs intermediates
+
+Not every stage is scheduled the same way. The engine classifies each stage as a **sink (API / final) stage** — one with no downstream successors in the DAG — or an **intermediate (IM) stage**, and applies a different placement policy:
+
+| Stage type | Placement policy | Why |
+| --- | --- | --- |
+| **API / sink** | **Quarterly soft-cap.** Planned batches are spread roughly evenly (≈ ⌈planned / 4⌉ per quarter) across the API's four plan-window quarters. A batch is deferred to a later quarter *only* when its quarter has already taken its share — otherwise it starts as soon as the reactor frees. | Keeps every API "live" in the shared cleanroom every quarter instead of one API monopolising a quarter. Final-product output is what the plan commits to per quarter. |
+| **Intermediate (IM)** | **As fast as possible**, then **auto right-aligned.** No quarterly cap. Each IM stage is automatically anchored as close to its downstream API stage as the BCF cadence allows, so its last batch's analysis finishes *just in time* to feed the API stage's first batch. | A quarterly cap on an intermediate would only create artificial idle gaps on intermediate reactors. Packing IM batches against their consumer minimises work-in-progress hold time. |
+
+The right-align anchor for an IM stage back-propagates from its successor:
+
+```
+IM last-batch start  = successor first-batch start − BCT(IM) − analysis(IM)
+IM first-batch start = IM last-batch start − (planned − 1) × BCF(IM)
+```
+
+This runs as a fixed-point pre-pass (`rightAlignStart` map in `scheduler.ts`): seed every API sink stage from its window end, then propagate the anchor upstream through every IM predecessor until stable. Right-aligned stages also opt out of the quarterly cap so it never scatters their packed batches back into earlier quarters.
 
 ---
 
