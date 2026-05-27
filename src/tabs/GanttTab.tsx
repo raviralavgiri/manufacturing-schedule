@@ -9,6 +9,7 @@ import {
   FlaskConical,
   Filter,
   Activity,
+  Tags,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
@@ -17,6 +18,7 @@ import MultiSelectPopover, {
   ClearFiltersButton,
   type Option as MsOption,
 } from "../components/MultiSelectPopover";
+import { buildStageKindMap } from "../utils/stageKind";
 import { computeWeeks, fmtDateTime } from "../utils/dates";
 import type { BatchScheduleEntry, Reactor } from "../types";
 
@@ -106,8 +108,15 @@ export default function GanttTab() {
   const [apiFilter, setApiFilter] = useState<Set<string>>(new Set());
   const [stageFilter, setStageFilter] = useState<Set<string>>(new Set());
   const [reactorFilter, setReactorFilter] = useState<Set<string>>(new Set());
+  const [typeFilter, setTypeFilter] = useState<Set<string>>(new Set());
   const anyFilterActive =
-    apiFilter.size > 0 || stageFilter.size > 0 || reactorFilter.size > 0;
+    apiFilter.size > 0 ||
+    stageFilter.size > 0 ||
+    reactorFilter.size > 0 ||
+    typeFilter.size > 0;
+
+  // stageId → IM/API classification (smart-defaulted).
+  const stageKindById = useMemo(() => buildStageKindMap(apisRaw), [apisRaw]);
 
   // Apply filters to the source batch list once
   const filteredBatches = useMemo(() => {
@@ -120,9 +129,22 @@ export default function GanttTab() {
         !b.reactorIds.some((rid) => reactorFilter.has(rid))
       )
         return false;
+      if (
+        typeFilter.size > 0 &&
+        !typeFilter.has(stageKindById.get(b.stageId) ?? "")
+      )
+        return false;
       return true;
     });
-  }, [schedule.batches, apiFilter, stageFilter, reactorFilter, anyFilterActive]);
+  }, [
+    schedule.batches,
+    apiFilter,
+    stageFilter,
+    reactorFilter,
+    typeFilter,
+    stageKindById,
+    anyFilterActive,
+  ]);
 
   // Build filter option lists
   const apiOptions: MsOption[] = useMemo(
@@ -163,6 +185,14 @@ export default function GanttTab() {
         secondary: undefined,
       })),
     [reactors]
+  );
+
+  const typeOptions: MsOption[] = useMemo(
+    () => [
+      { value: "IM", label: "IM · Intermediate" },
+      { value: "API", label: "API · Final product" },
+    ],
+    []
   );
 
   // Group batches by the active mode. In by-reactor mode each batch appears
@@ -427,12 +457,22 @@ export default function GanttTab() {
           onChange={setReactorFilter}
           width={260}
         />
+        <MultiSelectPopover
+          label="Type"
+          icon={<Tags size={12} />}
+          options={typeOptions}
+          selected={typeFilter}
+          onChange={setTypeFilter}
+          width={220}
+          searchable={false}
+        />
         <ClearFiltersButton
           active={anyFilterActive}
           onClear={() => {
             setApiFilter(new Set());
             setStageFilter(new Set());
             setReactorFilter(new Set());
+            setTypeFilter(new Set());
           }}
         />
         {anyFilterActive && (

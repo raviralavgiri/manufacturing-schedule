@@ -2,6 +2,7 @@ import { toPng } from "html-to-image";
 import type { API, Reactor, ScheduleResult, StageMaster } from "../types";
 import type { WeekBucket } from "./dates";
 import { fmtDateTime } from "./dates";
+import { buildStageKindMap } from "./stageKind";
 
 /** Trigger a CSV download given headers + rows. */
 export function downloadCsv(
@@ -820,12 +821,15 @@ function renderScheduleSheet(
   const nameOf = (id: string) =>
     reactors.find((x) => x.id === id)?.name ?? id;
 
+  const stageKindById = buildStageKindMap(apis);
+
   const headers = [
     "Batch ID",
     "API ID",
     "API Name",
     "Stage No",
     "Stage Name",
+    "Type",
     "Batch #",
     "Reactor Pool",
     "Start",
@@ -857,6 +861,7 @@ function renderScheduleSheet(
       b.apiName,
       b.stageNo,
       b.stageName,
+      stageKindById.get(b.stageId) ?? "",
       b.batchNo,
       reactorPoolCell,
       fmtDateTime(b.startMs),

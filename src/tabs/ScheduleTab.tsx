@@ -7,6 +7,7 @@ import {
   FlaskConical,
   Layers,
   Beaker,
+  Tags,
   X,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -16,6 +17,7 @@ import MultiSelectPopover, {
   ClearFiltersButton,
   type Option as MsOption,
 } from "../components/MultiSelectPopover";
+import { buildStageKindMap } from "../utils/stageKind";
 import { fmtDate, fmtDateTime } from "../utils/dates";
 
 const ROW_H = 40;
@@ -51,16 +53,20 @@ export default function ScheduleTab() {
     );
     return m;
   }, [apisRaw]);
+  // stageId → IM/API classification (smart-defaulted).
+  const stageKindById = useMemo(() => buildStageKindMap(apisRaw), [apisRaw]);
   const [q, setQ] = useState("");
   // Multi-select filters — empty Set means "all" (no filter), matching the
   // Gantt tab's MultiSelectPopover convention.
   const [apiFilter, setApiFilter] = useState<Set<string>>(new Set());
   const [reactorFilter, setReactorFilter] = useState<Set<string>>(new Set());
   const [stageFilter, setStageFilter] = useState<Set<string>>(new Set());
+  const [typeFilter, setTypeFilter] = useState<Set<string>>(new Set());
   const anyFilterActive =
     apiFilter.size > 0 ||
     reactorFilter.size > 0 ||
     stageFilter.size > 0 ||
+    typeFilter.size > 0 ||
     q.trim() !== "";
 
   const filtered = useMemo(() => {
@@ -72,6 +78,11 @@ export default function ScheduleTab() {
       )
         return false;
       if (stageFilter.size > 0 && !stageFilter.has(b.stageId)) return false;
+      if (
+        typeFilter.size > 0 &&
+        !typeFilter.has(stageKindById.get(b.stageId) ?? "")
+      )
+        return false;
       if (q) {
         const lower = q.toLowerCase();
         if (
@@ -84,7 +95,23 @@ export default function ScheduleTab() {
       }
       return true;
     });
-  }, [schedule.batches, q, apiFilter, reactorFilter, stageFilter]);
+  }, [
+    schedule.batches,
+    q,
+    apiFilter,
+    reactorFilter,
+    stageFilter,
+    typeFilter,
+    stageKindById,
+  ]);
+
+  const typeOptions: MsOption[] = useMemo(
+    () => [
+      { value: "IM", label: "IM · Intermediate" },
+      { value: "API", label: "API · Final product" },
+    ],
+    []
+  );
 
   // Filter option lists (multi-select popovers).
   const apiOptions: MsOption[] = useMemo(
@@ -289,12 +316,22 @@ export default function ScheduleTab() {
             onChange={setReactorFilter}
             width={260}
           />
+          <MultiSelectPopover
+            label="Type"
+            icon={<Tags size={12} />}
+            options={typeOptions}
+            selected={typeFilter}
+            onChange={setTypeFilter}
+            width={220}
+            searchable={false}
+          />
           <ClearFiltersButton
             active={anyFilterActive}
             onClear={() => {
               setApiFilter(new Set());
               setStageFilter(new Set());
               setReactorFilter(new Set());
+              setTypeFilter(new Set());
               setQ("");
             }}
           />
@@ -367,8 +404,31 @@ export default function ScheduleTab() {
                     />
                     {b.apiName}
                   </span>
-                  <span className="text-ink-200 truncate">
-                    S{b.stageNo} · {b.stageName}
+                  <span className="flex items-center gap-1.5 text-ink-200 truncate">
+                    {(() => {
+                      const kind = stageKindById.get(b.stageId);
+                      if (!kind) return null;
+                      return (
+                        <span
+                          className={clsx(
+                            "shrink-0 rounded px-1 py-px text-[9px] font-bold",
+                            kind === "API"
+                              ? "bg-lime-300/15 text-lime-300"
+                              : "bg-cyan-300/15 text-cyan-300"
+                          )}
+                          title={
+                            kind === "API"
+                              ? "Final API / product stage"
+                              : "Intermediate stage"
+                          }
+                        >
+                          {kind}
+                        </span>
+                      );
+                    })()}
+                    <span className="truncate">
+                      S{b.stageNo} · {b.stageName}
+                    </span>
                   </span>
                   <span className="font-mono text-ink-300">{b.batchNo}</span>
                   {(() => {

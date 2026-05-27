@@ -144,6 +144,15 @@ export interface StageMaster {
    */
   existingStockKg?: number;
   /**
+   * OPTIONAL — classification of this stage as an intermediate ("IM") or the
+   * final API/product stage ("API"). Used purely for filtering/labelling
+   * (Schedule + Gantt); it does NOT affect scheduling or the cascade. When
+   * undefined the effective kind is derived smartly: the API's sink (final,
+   * no-successor) stage ⇒ "API", every other stage ⇒ "IM". The user can
+   * override per stage in Stages → Equipment & Flow.
+   */
+  stageKind?: "IM" | "API";
+  /**
    * DAG predecessor list: ids of OTHER stages on the same API whose output
    * feeds this stage's input. Replaces the old "previous stageNo" linear
    * assumption with a real dependency graph.

@@ -20,6 +20,7 @@ import ReactorSubstitutesEditor from "../components/ReactorSubstitutesEditor";
 import StageInputsEditor from "../components/StageInputsEditor";
 import type { ApiTopology, StageMaster } from "../types";
 import { fmtIsoDate, parseIsoDate } from "../utils/dates";
+import { effectiveStageKind } from "../utils/stageKind";
 import { Share2 } from "lucide-react";
 
 type SubTab = "parameters" | "equipment";
@@ -34,6 +35,7 @@ export default function StagesTab() {
   const setStageInputs = useStore((s) => s.setStageInputs);
   const setStageFirstBatchStart = useStore((s) => s.setStageFirstBatchStart);
   const setStageExistingStock = useStore((s) => s.setStageExistingStock);
+  const setStageKind = useStore((s) => s.setStageKind);
   const removeStage = useStore((s) => s.removeStage);
   const recentlyAddedStageId = useStore((s) => s.recentlyAddedStageId);
   const clearRecentlyAdded = useStore((s) => s.clearRecentlyAdded);
@@ -232,6 +234,7 @@ export default function StagesTab() {
           setStageInputs={setStageInputs}
           setStageFirstBatchStart={setStageFirstBatchStart}
           setStageExistingStock={setStageExistingStock}
+          setStageKind={setStageKind}
         />
       )}
     </div>
@@ -518,6 +521,7 @@ function EquipmentFlowTab({
   setStageInputs,
   setStageFirstBatchStart,
   setStageExistingStock,
+  setStageKind,
 }: {
   rows: RowType[];
   reactors: ReturnType<typeof useStore<any>>;
@@ -528,6 +532,7 @@ function EquipmentFlowTab({
   setStageInputs: (id: string, ids: string[]) => void;
   setStageFirstBatchStart: (id: string, ms: number | undefined) => void;
   setStageExistingStock: (id: string, kg: number) => void;
+  setStageKind: (id: string, kind: "IM" | "API") => void;
 }) {
   return (
     <>
@@ -551,6 +556,12 @@ function EquipmentFlowTab({
                 <Th>API</Th>
                 <Th>Stage</Th>
                 <Th yellow>Stage Name</Th>
+                <Th
+                  yellow
+                  title="Classify this stage as an Intermediate (IM) or the final API/product stage (API). Used for filtering the Schedule and Gantt. Defaults smartly: the final stage = API, the rest = IM."
+                >
+                  Type
+                </Th>
                 <Th
                   yellow
                   title="Reactors in the pool for this stage. The scheduler picks any free reactor from this list."
@@ -643,6 +654,13 @@ function EquipmentFlowTab({
                       </div>
                     </td>
                     <td className="px-3 py-2 text-left">
+                      <StageKindToggle
+                        value={effectiveStageKind(r, r.isSink)}
+                        explicit={r.stageKind === "IM" || r.stageKind === "API"}
+                        onChange={(k) => setStageKind(r.id, k)}
+                      />
+                    </td>
+                    <td className="px-3 py-2 text-left">
                       <ReactorPoolEditor
                         value={r.reactorPool}
                         reactors={reactors}
@@ -692,7 +710,7 @@ function EquipmentFlowTab({
               })}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-sm text-ink-300">
+                  <td colSpan={9} className="py-12 text-center text-sm text-ink-300">
                     No stages match. Click{" "}
                     <span className="font-bold text-cyan-300">+ Add Stage</span>{" "}
                     above to create one.
@@ -829,6 +847,51 @@ function StageDateCell({
           <X size={11} />
         </button>
       )}
+    </div>
+  );
+}
+
+/** IM / API segmented toggle. `explicit` dims the control slightly when the
+ *  value is the smart default (not yet user-set) — purely cosmetic. */
+function StageKindToggle({
+  value,
+  explicit,
+  onChange,
+}: {
+  value: "IM" | "API";
+  explicit: boolean;
+  onChange: (kind: "IM" | "API") => void;
+}) {
+  return (
+    <div
+      className="inline-flex overflow-hidden rounded-md border border-white/10 bg-white/5 text-[10px] font-bold"
+      title={
+        explicit
+          ? "Stage type (set manually)"
+          : "Stage type (smart default — click to override)"
+      }
+    >
+      {(["IM", "API"] as const).map((k) => {
+        const active = value === k;
+        return (
+          <button
+            key={k}
+            type="button"
+            onClick={() => onChange(k)}
+            className={clsx(
+              "px-2 py-1 transition",
+              active
+                ? k === "API"
+                  ? "bg-lime-300/20 text-lime-200"
+                  : "bg-cyan-300/20 text-cyan-200"
+                : "text-ink-400 hover:text-white",
+              active && !explicit && "italic opacity-90"
+            )}
+          >
+            {k}
+          </button>
+        );
+      })}
     </div>
   );
 }

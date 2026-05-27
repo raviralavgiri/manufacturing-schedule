@@ -145,6 +145,8 @@ interface AppState {
   setStageFirstBatchStart: (stageId: string, ms: number | undefined) => void;
   /** Per-stage existing on-hand stock (kg); recascades planned batches. */
   setStageExistingStock: (stageId: string, kg: number) => void;
+  /** Per-stage IM/API classification (filtering/labelling only). */
+  setStageKind: (stageId: string, kind: "IM" | "API") => void;
   addStage: (input: NewStageInput) => string;
   removeStage: (stageId: string) => void;
 
@@ -582,6 +584,20 @@ export const useStore = create<AppState>((set, get) => ({
       return { ...p, apis };
     });
     scheduleRecompute(set, get, true);
+  },
+
+  setStageKind: (stageId, kind) => {
+    mutateActive(set, get, (p) => {
+      const apis = p.apis.map((a) => {
+        if (!a.stages.some((s) => s.id === stageId)) return a;
+        const stages = a.stages.map((s) =>
+          s.id === stageId ? { ...s, stageKind: kind } : s
+        );
+        return { ...a, stages };
+      });
+      return { ...p, apis };
+    });
+    // Classification only — no cascade or schedule recompute needed.
   },
 
   addStage: (input) => {
