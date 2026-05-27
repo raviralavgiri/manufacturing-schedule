@@ -141,6 +141,10 @@ interface AppState {
    * locked to `[]` regardless of input.
    */
   setStageInputs: (stageId: string, ids: string[]) => void;
+  /** Per-stage first-batch start date (ms); pass undefined to clear → default. */
+  setStageFirstBatchStart: (stageId: string, ms: number | undefined) => void;
+  /** Per-stage existing on-hand stock (kg); recascades planned batches. */
+  setStageExistingStock: (stageId: string, kg: number) => void;
   addStage: (input: NewStageInput) => string;
   removeStage: (stageId: string) => void;
 
@@ -152,6 +156,8 @@ interface AppState {
    * LOWER number = campaign scheduled earlier. Triggers a recompute.
    */
   setApiProductionSequence: (apiId: string, sequence: number) => void;
+  /** Production block / cleanroom where this API's final stage runs. */
+  setApiBlock: (apiId: string, block: string) => void;
   /** Set ONE api's plan window (per-API window replaces the old global). */
   setApiWindow: (apiId: string, startMs: number, endMs: number) => void;
   setApiStageCount: (apiId: string, count: number) => void;
@@ -545,6 +551,39 @@ export const useStore = create<AppState>((set, get) => ({
     scheduleRecompute(set, get, true);
   },
 
+  setStageFirstBatchStart: (stageId, ms) => {
+    const value =
+      typeof ms === "number" && Number.isFinite(ms) ? ms : undefined;
+    mutateActive(set, get, (p) => {
+      const apis = p.apis.map((a) => {
+        if (!a.stages.some((s) => s.id === stageId)) return a;
+        const stages = a.stages.map((s) =>
+          s.id === stageId ? { ...s, firstBatchStartMs: value } : s
+        );
+        return { ...a, stages };
+      });
+      return { ...p, apis };
+    });
+    // No cascade — only affects WHEN the stage starts, not HOW MANY batches.
+    scheduleRecompute(set, get, true);
+  },
+
+  setStageExistingStock: (stageId, kg) => {
+    const value = Number.isFinite(kg) ? Math.max(0, kg) : 0;
+    mutateActive(set, get, (p) => {
+      const apis = p.apis.map((a) => {
+        if (!a.stages.some((s) => s.id === stageId)) return a;
+        const stages = a.stages.map((s) =>
+          s.id === stageId ? { ...s, existingStockKg: value } : s
+        );
+        // Existing stock reduces net demand → re-cascade planned batches.
+        return cascadePlannedBatches({ ...a, stages });
+      });
+      return { ...p, apis };
+    });
+    scheduleRecompute(set, get, true);
+  },
+
   addStage: (input) => {
     let newId = "";
     mutateActive(set, get, (p) => {
@@ -708,6 +747,17 @@ export const useStore = create<AppState>((set, get) => ({
       return { ...p, apis };
     });
     scheduleRecompute(set, get, true);
+  },
+
+  setApiBlock: (apiId, block) => {
+    const trimmed = block.trim();
+    mutateActive(set, get, (p) => {
+      const apis = p.apis.map((a) =>
+        a.id === apiId ? { ...a, block: trimmed || undefined } : a
+      );
+      return { ...p, apis };
+    });
+    // Block is informational metadata — no schedule recompute needed.
   },
 
   setApiWindow: (apiId, startMs, endMs) => {

@@ -9,6 +9,7 @@ import {
   GitBranch,
   GitMerge,
   Workflow,
+  X,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
@@ -18,6 +19,7 @@ import ReactorPoolEditor from "../components/ReactorPoolEditor";
 import ReactorSubstitutesEditor from "../components/ReactorSubstitutesEditor";
 import StageInputsEditor from "../components/StageInputsEditor";
 import type { ApiTopology, StageMaster } from "../types";
+import { fmtIsoDate, parseIsoDate } from "../utils/dates";
 import { Share2 } from "lucide-react";
 
 type SubTab = "parameters" | "equipment";
@@ -30,6 +32,8 @@ export default function StagesTab() {
   const setStageReactorPool = useStore((s) => s.setStageReactorPool);
   const setStageReactorSubstitutes = useStore((s) => s.setStageReactorSubstitutes);
   const setStageInputs = useStore((s) => s.setStageInputs);
+  const setStageFirstBatchStart = useStore((s) => s.setStageFirstBatchStart);
+  const setStageExistingStock = useStore((s) => s.setStageExistingStock);
   const removeStage = useStore((s) => s.removeStage);
   const recentlyAddedStageId = useStore((s) => s.recentlyAddedStageId);
   const clearRecentlyAdded = useStore((s) => s.clearRecentlyAdded);
@@ -226,6 +230,8 @@ export default function StagesTab() {
           setStageReactorPool={setStageReactorPool}
           setStageReactorSubstitutes={setStageReactorSubstitutes}
           setStageInputs={setStageInputs}
+          setStageFirstBatchStart={setStageFirstBatchStart}
+          setStageExistingStock={setStageExistingStock}
         />
       )}
     </div>
@@ -510,6 +516,8 @@ function EquipmentFlowTab({
   setStageReactorPool,
   setStageReactorSubstitutes,
   setStageInputs,
+  setStageFirstBatchStart,
+  setStageExistingStock,
 }: {
   rows: RowType[];
   reactors: ReturnType<typeof useStore<any>>;
@@ -518,6 +526,8 @@ function EquipmentFlowTab({
   setStageReactorPool: (id: string, pool: string[]) => void;
   setStageReactorSubstitutes: (id: string, subs: Record<string, string[]>) => void;
   setStageInputs: (id: string, ids: string[]) => void;
+  setStageFirstBatchStart: (id: string, ms: number | undefined) => void;
+  setStageExistingStock: (id: string, kg: number) => void;
 }) {
   return (
     <>
@@ -558,6 +568,19 @@ function EquipmentFlowTab({
                   title="DAG predecessors — stages whose output feeds this stage's input. Default = the immediate previous stage. Multi-select to model convergence (S3+S7→S8) or sub-streams."
                 >
                   Inputs From
+                </Th>
+                <Th
+                  yellow
+                  title="Optional date for this stage's FIRST batch. Blank = scheduler default (API window start). The material gate still applies — a stage never runs before its inputs are released."
+                >
+                  First Batch Start
+                </Th>
+                <Th
+                  align="right"
+                  yellow
+                  title="Existing on-hand stock (kg) of this stage's output. Subtracted from demand before sizing batches: required = demand − existing stock."
+                >
+                  Existing Stock (kg)
                 </Th>
               </tr>
             </thead>
@@ -651,12 +674,25 @@ function EquipmentFlowTab({
                         />
                       )}
                     </td>
+                    <td className="px-3 py-2 text-left">
+                      <StageDateCell
+                        value={r.firstBatchStartMs}
+                        onChange={(ms) => setStageFirstBatchStart(r.id, ms)}
+                      />
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <EditableNumCell
+                        value={r.existingStockKg ?? 0}
+                        allowZero
+                        onChange={(v) => setStageExistingStock(r.id, v)}
+                      />
+                    </td>
                   </tr>
                 );
               })}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center text-sm text-ink-300">
+                  <td colSpan={8} className="py-12 text-center text-sm text-ink-300">
                     No stages match. Click{" "}
                     <span className="font-bold text-cyan-300">+ Add Stage</span>{" "}
                     above to create one.
@@ -752,6 +788,48 @@ function EditableNumCell({
       }}
       className="cell-yellow w-24 rounded-md px-2 py-1 text-right font-mono text-sm tabular-nums transition"
     />
+  );
+}
+
+/** Optional per-stage date picker. Empty value clears the override (= default).
+ *  A small "×" appears when a date is set so the user can revert to default. */
+function StageDateCell({
+  value,
+  onChange,
+}: {
+  value: number | undefined;
+  onChange: (ms: number | undefined) => void;
+}) {
+  const iso =
+    typeof value === "number" && Number.isFinite(value) ? fmtIsoDate(value) : "";
+  return (
+    <div className="flex items-center gap-1">
+      <input
+        type="date"
+        value={iso}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (!v) {
+            onChange(undefined);
+            return;
+          }
+          const ms = parseIsoDate(v);
+          onChange(Number.isFinite(ms) ? ms : undefined);
+        }}
+        className="cell-yellow w-[140px] rounded-md px-2 py-1 font-mono text-xs transition"
+        title={iso ? `First batch: ${iso}` : "Default (API window start)"}
+      />
+      {iso && (
+        <button
+          type="button"
+          onClick={() => onChange(undefined)}
+          className="rounded p-0.5 text-ink-400 hover:text-rose-300"
+          title="Clear — use default start"
+        >
+          <X size={11} />
+        </button>
+      )}
+    </div>
   );
 }
 

@@ -127,6 +127,23 @@ export interface StageMaster {
   pcoHours: number;
   plannedBatches: number;
   /**
+   * OPTIONAL — explicit start date (ms) for this stage's FIRST batch. When set,
+   * the scheduler uses it as the earliest start for the stage's first batch
+   * (still subject to the material gate — a stage can't run before its inputs
+   * are released). When blank/undefined the scheduler falls back to the API
+   * window start (default behaviour).
+   */
+  firstBatchStartMs?: number;
+  /**
+   * OPTIONAL — existing on-hand stock (kg) of THIS stage's output already
+   * available before the campaign. The cascade subtracts it from this stage's
+   * gross demand before sizing batches:
+   *   required (net) = demand − existingStock   (clamped ≥ 0)
+   *   plannedBatches = ⌈ required ÷ outputPerBatch ⌉
+   * Blank/undefined ⇒ treated as 0 (no pre-existing stock).
+   */
+  existingStockKg?: number;
+  /**
    * DAG predecessor list: ids of OTHER stages on the same API whose output
    * feeds this stage's input. Replaces the old "previous stageNo" linear
    * assumption with a real dependency graph.
@@ -252,6 +269,13 @@ export interface API {
    * any API that has a value, then by API id (stable legacy order).
    */
   productionSequence?: number;
+  /**
+   * OPTIONAL — production block / cleanroom in which this API's FINAL stage is
+   * processed (free-text, e.g. "Block-A", "CR-2"). Captures where the API is
+   * made; `productionSequence` orders APIs within a block. Informational — it
+   * does not by itself constrain reactor selection.
+   */
+  block?: string;
 }
 
 /**

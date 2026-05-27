@@ -842,9 +842,13 @@ function renderScheduleSheet(
     const bookedNames = b.reactorIds.map(nameOf).join(" + ") || "—";
     const poolIds = stagePoolById.get(b.stageId) ?? [];
     const poolNames = poolIds.map(nameOf).join(", ");
-    // Format: "Booked · Pool: R101, R102" — mirrors the on-screen column
+    // Train model: the booked reactors ARE the whole pool, so we show just the
+    // booked train. Only when a SUBSTITUTE was used (a booked reactor not in
+    // the configured pool) do we append the configured pool for reference.
+    const poolSet = new Set(poolIds);
+    const isSubstituted = b.reactorIds.some((id) => !poolSet.has(id));
     const reactorPoolCell =
-      poolNames && poolNames !== bookedNames
+      isSubstituted && poolNames
         ? `${bookedNames} · Pool: ${poolNames}`
         : bookedNames;
     return [

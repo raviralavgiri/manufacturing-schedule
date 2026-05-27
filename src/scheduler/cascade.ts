@@ -101,8 +101,10 @@ export function cascadePlannedBatches(api: API): API {
     const outputPerBatch = Math.max(1, s.batchSizeKg);
     const inputPerBatch = effectiveInputPerBatch(s);
     const demand = outputDemandByStageId.get(sid) ?? 0;
+    // Subtract any existing on-hand stock: only the SHORTFALL must be produced.
+    const netDemand = Math.max(0, demand - existingStockOf(s));
     const planned =
-      demand <= 0 ? 0 : Math.max(1, Math.ceil(demand / outputPerBatch));
+      netDemand <= 0 ? 0 : Math.max(1, Math.ceil(netDemand / outputPerBatch));
     plannedById.set(sid, planned);
     const inputConsumed = inputPerBatch * planned;
     // Add this stage's input demand to each predecessor's output demand,
@@ -155,16 +157,18 @@ export function cascadePlannedBatches(api: API): API {
         totalInput += Math.max(1, pred.batchSizeKg) * predPlanned;
       }
       // For continuations, the relevant per-batch divisor is inputPerBatch.
+      const netInput = Math.max(0, totalInput - existingStockOf(s));
       const planned =
-        totalInput <= 0
+        netInput <= 0
           ? 0
-          : Math.max(1, Math.ceil(totalInput / inputPerBatch));
+          : Math.max(1, Math.ceil(netInput / inputPerBatch));
       plannedById.set(sid, planned);
       continue;
     }
 
+    const netDemand = Math.max(0, demand - existingStockOf(s));
     const planned =
-      demand <= 0 ? 0 : Math.max(1, Math.ceil(demand / outputPerBatch));
+      netDemand <= 0 ? 0 : Math.max(1, Math.ceil(netDemand / outputPerBatch));
     plannedById.set(sid, planned);
   }
 
@@ -236,10 +240,11 @@ function cascadeLinear(api: API): API {
     const s = sorted[i];
     const outputPerBatch = Math.max(1, s.batchSizeKg);
     const inputPerBatch = effectiveInputPerBatch(s);
+    const netDemand = Math.max(0, outputDemandKg - existingStockOf(s));
     const planned =
-      outputDemandKg <= 0
+      netDemand <= 0
         ? 0
-        : Math.max(1, Math.ceil(outputDemandKg / outputPerBatch));
+        : Math.max(1, Math.ceil(netDemand / outputPerBatch));
     updatedStages[i] = { ...s, plannedBatches: planned };
     outputDemandKg = inputPerBatch * planned;
   }
@@ -249,6 +254,13 @@ function cascadeLinear(api: API): API {
   const updatedById = new Map(updatedStages.map((s) => [s.id, s]));
   const stages = api.stages.map((s) => updatedById.get(s.id) ?? s);
   return { ...api, stages, projectionKg };
+}
+
+/** Existing on-hand stock (kg) of this stage's output; 0 when unset/invalid. */
+function existingStockOf(s: StageMaster): number {
+  return typeof s.existingStockKg === "number" && s.existingStockKg > 0
+    ? s.existingStockKg
+    : 0;
 }
 
 /** inputKgPerBatch with the legacy "fall back to batchSizeKg if missing/zero" rule. */

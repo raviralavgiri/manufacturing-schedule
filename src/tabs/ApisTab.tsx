@@ -38,6 +38,7 @@ export default function ApisTab() {
   const setApiName = useStore((s) => s.setApiName);
   const setApiTargetOutput = useStore((s) => s.setApiTargetOutput);
   const setApiProductionSequence = useStore((s) => s.setApiProductionSequence);
+  const setApiBlock = useStore((s) => s.setApiBlock);
   const setApiWindow = useStore((s) => s.setApiWindow);
   const setApiStageCount = useStore((s) => s.setApiStageCount);
   const applyTopologyPreset = useStore((s) => s.applyTopologyPreset);
@@ -177,6 +178,12 @@ export default function ApisTab() {
                 >
                   Seq
                 </Th>
+                <Th
+                  yellow
+                  title="Production block / cleanroom where this API's final (product) stage is processed. Groups + sequences API campaigns within a block."
+                >
+                  Block
+                </Th>
                 <Th yellow>Plan Window</Th>
                 <Th align="right" yellow>
                   Stages
@@ -234,6 +241,13 @@ export default function ApisTab() {
                           onChange={(v) =>
                             setApiProductionSequence(api.id, v)
                           }
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <EditableTextCell
+                          value={api.block ?? ""}
+                          onCommit={(v) => setApiBlock(api.id, v)}
+                          placeholder="—"
                         />
                       </td>
                       <td className="px-3 py-2">
@@ -324,7 +338,7 @@ export default function ApisTab() {
                       {isExpanded && currentTopology !== "linear" && (
                         <tr className="border-t border-white/5">
                           <td
-                            colSpan={7}
+                            colSpan={8}
                             className="bg-ink-900/40 px-3 py-3"
                           >
                             {currentTopology === "parallel" && (
@@ -400,7 +414,7 @@ export default function ApisTab() {
               {filteredApis.length === 0 && (
                 <tr>
                   <td
-                    colSpan={7}
+                    colSpan={8}
                     className="py-12 text-center text-sm text-ink-300"
                   >
                     No APIs match. Click{" "}

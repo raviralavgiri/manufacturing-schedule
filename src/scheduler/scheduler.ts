@@ -577,6 +577,9 @@ export function runScheduler(
     trainPositions: string[][];
     apiStart: number;
     apiEnd: number;
+    /** Earliest start floor for this stage = stage.firstBatchStartMs when set,
+     *  else apiStart. Quarter boundaries still use apiStart/apiEnd. */
+    firstStartMs: number;
   }
 
   const bufferMs = hoursToMs(INTER_STAGE_BUFFER_HOURS);
@@ -633,6 +636,11 @@ export function runScheduler(
         trainPositions,
         apiStart,
         apiEnd,
+        firstStartMs:
+          typeof stage.firstBatchStartMs === "number" &&
+          Number.isFinite(stage.firstBatchStartMs)
+            ? stage.firstBatchStartMs
+            : apiStart,
       });
     });
   }
@@ -652,10 +660,10 @@ export function runScheduler(
   //     supply m batches — avoids a deadlock on a cascade-rounding shortfall.
   const materialReadyTime = (rt: StageRT, fallback: boolean): number | null => {
     const preds = predStagesById.get(rt.stage.id) ?? [];
-    if (preds.length === 0) return rt.apiStart;
+    if (preds.length === 0) return rt.firstStartMs;
     const K = rt.booked + 1;
     const required = K * rt.inputPerBatch;
-    let matTime = rt.apiStart;
+    let matTime = rt.firstStartMs;
     for (const P of preds) {
       const outPer =
         typeof P.batchSizeKg === "number" && P.batchSizeKg > 0
@@ -877,7 +885,7 @@ export function runScheduler(
       cand.set(rt.stage.id, null);
       return;
     }
-    let earliest = Math.max(matTime + bufferMs, rt.apiStart, bcfGateOf(rt));
+    let earliest = Math.max(matTime + bufferMs, rt.firstStartMs, bcfGateOf(rt));
     let slot = findBestSlot(rt, earliest);
     // Soft per-quarter cap. If the chosen slot lands in a quarter that has
     // already taken its ≈ planned/4 share for this stage, defer to the start
@@ -1010,8 +1018,12 @@ export function runScheduler(
         if (fb === null || aWins(rt, fb)) fb = rt;
       }
       if (!fb) break;
-      const matTime = materialReadyTime(fb, true) ?? fb.apiStart;
-      const earliest = Math.max(matTime + bufferMs, fb.apiStart, bcfGateOf(fb));
+      const matTime = materialReadyTime(fb, true) ?? fb.firstStartMs;
+      const earliest = Math.max(
+        matTime + bufferMs,
+        fb.firstStartMs,
+        bcfGateOf(fb)
+      );
       place(fb, findBestSlot(fb, earliest));
       remainingBatches--;
       continue;
