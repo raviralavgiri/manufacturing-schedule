@@ -1,16 +1,17 @@
 /**
  * Excel import parser for the standard three-sheet template:
- *   "API"              — API list with topology spec (data from row 6, cols B–Y)
- *                        B(2)=Sl.No  C(3)=Name  D(4)=TargetKg  E(5)=Start  F(6)=End
- *                        G(7)=Topology  H(8)=TotalStages  I(9)=MainStages
- *                        Side chains:  J/K/L  M/N/O  P/Q/R  (merge / factor / length)
- *                        Parallel:     S/T/U sub-chain lengths, V/W/X merge & factors
- *                        Y(25)=PlannedBatches (optional override; cascade still runs)
- *   "Stages"           — Per-stage operational params (data from row 3, cols A–N)
- *                        A=API  B=Stage  C=Input/Batch  D=Output/Batch
- *                        E=BCF  F=BCT  G=Analysis  H=PCO
- *                        I=Nos  J=Main  K–N=Substitutes P1–P4
- *                        O(15)=ProcessHours (optional; falls back to BCT)
+ *   "API"              — API list with topology spec (data from row 6, cols B–AB)
+ *                        B(2)=Sl.No  C(3)=Name  D(4)=Sequence  E(5)=Block
+ *                        F(6)=TargetKg  G(7)=Start  H(8)=End  I(9)=StageFlow
+ *                        J(10)=TotalStages  K(11)=MainStages
+ *                        Side chains:  L/M/N  O/P/Q  R/S/T  (merge / factor / length)
+ *                        Parallel:     U/V/W sub-chain lengths, X=f1 Y=f2 (branch
+ *                                      B = A×f1, C = A×f2)
+ *                        Fork:         Z=shared preamble  AA=branches  AB=stages/branch
+ *   "Stages"           — Per-stage operational params (data from row 3, cols A–P)
+ *                        A=API  B=Stage  C=FirstBatchStart  D=ExistingStock(kg)
+ *                        E=Input/Batch  F=Output/Batch  G=BCF  H=BCT
+ *                        I=Analysis  J=PCO  K=Nos  L=Main  M–P=Substitutes P1–P4
  *                        Stage numbers are assigned by encounter order per API,
  *                        so names like "DT1", "DT2C", "AX7" work without regex.
  *   "Master Equipment" — Reactor registry (data from row 3, cols A–I)
@@ -131,6 +132,10 @@ interface ParsedStageData {
   pcoHours: number;
   reactorPool: string[];
   reactorSubstitutes: Record<string, string[]>;
+  /** Optional per-stage first-batch start date (ms) — col C. */
+  firstBatchStartMs: number | null;
+  /** Optional existing on-hand stock (kg) — col D. */
+  existingStockKg: number | null;
 }
 
 // ─── Main parse function ──────────────────────────────────────────────────────
@@ -258,36 +263,41 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
       stageDataByApi.set(apiKey, stageMap);
     }
 
-    // First row for this stage: capture stage-level params
+    // First row for this stage: capture stage-level params.
+    // Column layout (1-based): A=API B=Stage C=FirstBatchStart D=ExistingStock
+    //   E=Input/Batch F=Output/Batch G=BCF H=BCT I=Analysis J=PCO K=Nos
+    //   L=Main M=P1 N=P2 O=P3 P=P4. (No process-hours column — defaults to BCT.)
     if (!stageMap.has(carryStageNo)) {
-      const bct = cellNum(row.getCell(6)) ?? 120;        // col F: BCT
+      const bct = cellNum(row.getCell(8)) ?? 120;        // col H: BCT
       stageMap.set(carryStageNo, {
         stageName: carryStageStr,
-        inputKgPerBatch: cellNum(row.getCell(3)) ?? 100, // col C
-        batchSizeKg: cellNum(row.getCell(4)) ?? 100,     // col D
-        bcfHours: cellNum(row.getCell(5)) ?? 120,        // col E
+        firstBatchStartMs: cellDate(row.getCell(3)),     // col C (optional)
+        existingStockKg: cellNum(row.getCell(4)),        // col D (optional)
+        inputKgPerBatch: cellNum(row.getCell(5)) ?? 100, // col E
+        batchSizeKg: cellNum(row.getCell(6)) ?? 100,     // col F
+        bcfHours: cellNum(row.getCell(7)) ?? 120,        // col G
         bctHours: bct,
-        processHours: cellNum(row.getCell(15)) ?? bct,   // col O (optional; defaults to bct)
-        analysisHours: cellNum(row.getCell(7)) ?? 0,     // col G
-        pcoHours: cellNum(row.getCell(8)) ?? 8,          // col H
+        processHours: bct,                                // no column; = BCT
+        analysisHours: cellNum(row.getCell(9)) ?? 0,     // col I
+        pcoHours: cellNum(row.getCell(10)) ?? 8,         // col J
         reactorPool: [],
         reactorSubstitutes: {},
       });
     }
 
-    // Reactor row: col J = Main reactor ID; cols K–N = substitutes P1–P4
-    const mainReactor = normalizeReactorId(cellStr(row.getCell(10)));
-    if (!mainReactor || isNA(row.getCell(10))) return;
+    // Reactor row: col L = Main reactor ID; cols M–P = substitutes P1–P4
+    const mainReactor = normalizeReactorId(cellStr(row.getCell(12)));
+    if (!mainReactor || isNA(row.getCell(12))) return;
 
     const data = stageMap.get(carryStageNo)!;
     if (!data.reactorPool.includes(mainReactor)) {
       data.reactorPool.push(mainReactor);
     }
     const subs = [
-      row.getCell(11), // P1
-      row.getCell(12), // P2
-      row.getCell(13), // P3
-      row.getCell(14), // P4
+      row.getCell(13), // P1
+      row.getCell(14), // P2
+      row.getCell(15), // P3
+      row.getCell(16), // P4
     ]
       .map((c) => {
         if (isNA(c)) return null;
@@ -301,15 +311,15 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
 
   // ── 3. API sheet → build API objects ───────────────────────────────────────
   //
-  // Headers: row 4 (group labels) + row 5 (sub-labels). Data starts at row 6.
+  // Headers: rows 1–4 (group labels) + row 5 (sub-labels). Data starts row 6.
   // Col layout (1-based):
-  //   B(2)=Sl.No  C(3)=Name  D(4)=TargetKg  E(5)=Start  F(6)=End
-  //   G(7)=Topology  H(8)=TotalStages  I(9)=MainStages
-  //   Side-chain: J(10)=SC1merge  K(11)=SC1factor  L(12)=SC1length
-  //               M(13)=SC2merge  N(14)=SC2factor  O(15)=SC2length
-  //               P(16)=SC3merge  Q(17)=SC3factor  R(18)=SC3length
-  //   Parallel:   S(19)=chainA  T(20)=chainB  U(21)=chainC
-  //               V(22)=mergeStageNo  W(23)=f1  X(24)=f2
+  //   B(2)=Sl.No  C(3)=Name  D(4)=Sequence  E(5)=Block  F(6)=TargetKg
+  //   G(7)=Start  H(8)=End  I(9)=StageFlow  J(10)=TotalStages  K(11)=MainStages
+  //   Side-chain: L(12)=SC1merge  M(13)=SC1factor  N(14)=SC1length
+  //               O(15)=SC2merge  P(16)=SC2factor  Q(17)=SC2length
+  //               R(18)=SC3merge  S(19)=SC3factor  T(20)=SC3length
+  //   Parallel:   U(21)=subA  V(22)=subB  W(23)=subC  X(24)=f1  Y(25)=f2
+  //   Fork:       Z(26)=sharedPreamble  AA(27)=branches  AB(28)=stagesPerBranch
 
   const rawApis: API[] = [];
 
@@ -319,12 +329,14 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
     const name = cellStr(row.getCell(3)); // col C
     if (!name) return;
 
-    const targetKg = cellNum(row.getCell(4)) ?? 0;
-    const startMs = cellDate(row.getCell(5)) ?? FY_START_MS;
-    const endMs = cellDate(row.getCell(6)) ?? FY_END_MS;
-    const topoStr = (cellStr(row.getCell(7)) ?? "Linear").toLowerCase();
-    const mainStages = Math.max(1, cellNum(row.getCell(9)) ?? 1); // col I
-    const plannedBatchesOverride = cellNum(row.getCell(25)) ?? null; // col Y
+    const sequence = cellNum(row.getCell(4)); // col D (optional)
+    const block = cellStr(row.getCell(5)); // col E (optional)
+    const targetKg = cellNum(row.getCell(6)) ?? 0; // col F
+    const startMs = cellDate(row.getCell(7)) ?? FY_START_MS; // col G
+    const endMs = cellDate(row.getCell(8)) ?? FY_END_MS; // col H
+    const topoStr = (cellStr(row.getCell(9)) ?? "Linear").toLowerCase(); // col I
+    const mainStages = Math.max(1, cellNum(row.getCell(11)) ?? 1); // col K
+    const plannedBatchesOverride = null; // no API-level override column
 
     // Look up Stages sheet data now (normalised key) so it's available to both
     // the linear-length calculation and the per-stage overlay below.
@@ -341,25 +353,25 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
         factor: number;
         length: number;
       }> = [];
-      // SC1: J K L
-      if (!isNA(row.getCell(10))) {
-        const m = cellNum(row.getCell(10));
-        const f = cellNum(row.getCell(11));
-        const l = cellNum(row.getCell(12)) ?? 1;
+      // SC1: L(12) M(13) N(14)
+      if (!isNA(row.getCell(12))) {
+        const m = cellNum(row.getCell(12));
+        const f = cellNum(row.getCell(13));
+        const l = cellNum(row.getCell(14)) ?? 1;
         if (m !== null && f !== null) sideChains.push({ mergesIntoStageNo: m, factor: f, length: l });
       }
-      // SC2: M N O
-      if (!isNA(row.getCell(13))) {
-        const m = cellNum(row.getCell(13));
-        const f = cellNum(row.getCell(14));
-        const l = cellNum(row.getCell(15)) ?? 1;
+      // SC2: O(15) P(16) Q(17)
+      if (!isNA(row.getCell(15))) {
+        const m = cellNum(row.getCell(15));
+        const f = cellNum(row.getCell(16));
+        const l = cellNum(row.getCell(17)) ?? 1;
         if (m !== null && f !== null) sideChains.push({ mergesIntoStageNo: m, factor: f, length: l });
       }
-      // SC3: P Q R
-      if (!isNA(row.getCell(16))) {
-        const m = cellNum(row.getCell(16));
-        const f = cellNum(row.getCell(17));
-        const l = cellNum(row.getCell(18)) ?? 1;
+      // SC3: R(18) S(19) T(20)
+      if (!isNA(row.getCell(18))) {
+        const m = cellNum(row.getCell(18));
+        const f = cellNum(row.getCell(19));
+        const l = cellNum(row.getCell(20)) ?? 1;
         if (m !== null && f !== null) sideChains.push({ mergesIntoStageNo: m, factor: f, length: l });
       }
       topoSpec = {
@@ -372,15 +384,15 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
       };
     } else if (topoStr.includes("parallel")) {
       topology = "parallel";
-      const subA = cellNum(row.getCell(19)) ?? 0; // col S
-      const subB = cellNum(row.getCell(20)) ?? 0; // col T
-      const subCVal = cellNum(row.getCell(21));    // col U
+      const subA = cellNum(row.getCell(21)) ?? 0; // col U
+      const subB = cellNum(row.getCell(22)) ?? 0; // col V
+      const subCVal = cellNum(row.getCell(23));    // col W
       const subChainLengths = [subA, subB].filter((n) => n > 0);
-      if (subCVal !== null && !isNA(row.getCell(21))) subChainLengths.push(subCVal);
+      if (subCVal !== null && !isNA(row.getCell(23))) subChainLengths.push(subCVal);
       // Per-branch input (stoichiometric) factors. Branch A is the base (=1);
-      // f1 (branch B) col V, f2 (branch C) col W. Blank ⇒ 1.
-      const fB = cellNum(row.getCell(22)); // col V — branch B factor (f1)
-      const fC = cellNum(row.getCell(23)); // col W — branch C factor (f2)
+      // f1 (branch B) col X, f2 (branch C) col Y. Blank ⇒ 1.
+      const fB = cellNum(row.getCell(24)); // col X — branch B factor (f1)
+      const fC = cellNum(row.getCell(25)); // col Y — branch C factor (f2)
       const lens =
         subChainLengths.length > 0 ? subChainLengths : [2, 2];
       const subChainFactors = lens.map((_, i) =>
@@ -395,6 +407,18 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
         mergeStageName: "Merge",
         postMergeCount: postMerge,
         subChainFactors,
+      };
+    } else if (topoStr.includes("fork") || topoStr.includes("diverge")) {
+      topology = "fork";
+      // Fork columns: Z(26)=shared preamble, AA(27)=branches, AB(28)=stages/branch.
+      const shared = Math.max(1, cellNum(row.getCell(26)) ?? 1);
+      const branches = Math.max(2, cellNum(row.getCell(27)) ?? 2);
+      const perBranch = Math.max(1, cellNum(row.getCell(28)) ?? 1);
+      topoSpec = {
+        kind: "fork",
+        sharedStages: shared,
+        branches,
+        stagesPerBranch: perBranch,
       };
     } else {
       topology = "linear";
@@ -430,6 +454,10 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
       topology,
       stages: [],
       window: { startMs, endMs },
+      ...(sequence !== null && Number.isFinite(sequence)
+        ? { productionSequence: Math.max(0, Math.round(sequence)) }
+        : {}),
+      ...(block ? { block } : {}),
     };
 
     // Scaffold stages with correct DAG wiring via topology preset
@@ -452,6 +480,12 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
         reactorPool: data.reactorPool.slice(),
         ...(Object.keys(data.reactorSubstitutes).length > 0
           ? { reactorSubstitutes: { ...data.reactorSubstitutes } }
+          : {}),
+        ...(data.firstBatchStartMs !== null
+          ? { firstBatchStartMs: data.firstBatchStartMs }
+          : {}),
+        ...(data.existingStockKg !== null && data.existingStockKg > 0
+          ? { existingStockKg: data.existingStockKg }
           : {}),
       };
     });
