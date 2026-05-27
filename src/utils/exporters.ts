@@ -1041,13 +1041,14 @@ function renderNoBatchesSheet(sheet: any, apis: API[]): void {
 }
 
 /**
- * Build and download the combined "global" workbook (input sheets + schedule
- * + Gantt grids) as a single .xlsx.
+ * Assemble the combined "global" workbook (input sheets + schedule + Gantt
+ * grids). Pure — does no DOM/download, so it's unit-testable (round-trip).
+ * Returns the ExcelJS Workbook.
  */
-export async function downloadGlobalWorkbookAsXls(
-  filename: string,
+export async function buildGlobalWorkbook(
   data: GlobalWorkbookData
-): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<any> {
   const ExcelJS = (await import("exceljs")).default;
   const wb = new ExcelJS.Workbook();
   wb.creator = "Pharma Planner";
@@ -1078,6 +1079,18 @@ export async function downloadGlobalWorkbookAsXls(
     renderGanttSheet(sheet, spec);
   });
 
+  return wb;
+}
+
+/**
+ * Build and download the combined "global" workbook (input sheets + schedule
+ * + Gantt grids) as a single .xlsx.
+ */
+export async function downloadGlobalWorkbookAsXls(
+  filename: string,
+  data: GlobalWorkbookData
+): Promise<void> {
+  const wb = await buildGlobalWorkbook(data);
   const buf = await wb.xlsx.writeBuffer();
   const blob = new Blob([buf], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
