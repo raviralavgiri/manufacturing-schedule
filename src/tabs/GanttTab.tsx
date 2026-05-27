@@ -19,6 +19,10 @@ import MultiSelectPopover, {
   type Option as MsOption,
 } from "../components/MultiSelectPopover";
 import { buildStageKindMap } from "../utils/stageKind";
+import {
+  buildReactorBlockMap,
+  makeApiBlockComparator,
+} from "../utils/apiOrder";
 import { computeWeeks, fmtDateTime } from "../utils/dates";
 import type { BatchScheduleEntry, Reactor } from "../types";
 
@@ -29,11 +33,13 @@ export default function GanttTab() {
   const reactors = useStore((s) => s.reactors);
   const schedule = useStore((s) => s.schedule);
 
-  // Stable id-alphabetical row ordering (priority sort dropped).
-  const apis = useMemo(
-    () => [...apisRaw].sort((a, b) => a.id.localeCompare(b.id)),
-    [apisRaw]
-  );
+  // DAG row ordering: group by production block (A→Z, natural sort), then A→Z
+  // by API name. Block comes from api.block, falling back to the production
+  // block of the API's final-stage reactor (Equipment tab).
+  const apis = useMemo(() => {
+    const reactorBlockById = buildReactorBlockMap(reactors);
+    return [...apisRaw].sort(makeApiBlockComparator(reactorBlockById));
+  }, [apisRaw, reactors]);
 
   // Live lookup: apiId → current color. Bars consult this instead of the
   // possibly-stale apiColor baked into the schedule when it was last computed.
