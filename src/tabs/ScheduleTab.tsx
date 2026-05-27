@@ -267,8 +267,7 @@ export default function ScheduleTab() {
         </div>
       )}
 
-      <Card className="!p-3 relative z-10">
-        <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/5 bg-white/[0.02] p-2">
           <span className="ml-1 inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-ink-400">
             <Filter size={12} /> Filter
           </span>
@@ -339,8 +338,7 @@ export default function ScheduleTab() {
             Showing {filtered.length.toLocaleString()} /{" "}
             {schedule.batches.length.toLocaleString()}
           </span>
-        </div>
-      </Card>
+      </div>
 
       <Card className="overflow-hidden p-0">
         <div
