@@ -267,7 +267,7 @@ export default function ScheduleTab() {
         </div>
       )}
 
-      <Card className="!p-3">
+      <Card className="!p-3 relative z-10">
         <div className="flex flex-wrap items-center gap-2">
           <span className="ml-1 inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-ink-400">
             <Filter size={12} /> Filter
