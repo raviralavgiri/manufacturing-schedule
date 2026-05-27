@@ -497,9 +497,15 @@ export default function GanttTab() {
         <div className="max-h-[72vh] overflow-auto">
         <div className="flex" style={{ width: 200 + totalWeeks * pxPerWeek }}>
           {/* Left labels column — frozen on horizontal scroll */}
-          <div className="sticky left-0 z-20 w-[200px] shrink-0 border-r border-white/10 bg-ink-900">
+          <div
+            className="sticky left-0 z-20 w-[200px] shrink-0 border-r border-white/10"
+            style={{ background: "var(--bg-glass)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)" }}
+          >
             {/* Header spacer — frozen on BOTH axes (corner) */}
-            <div className="sticky top-0 z-30 h-[60px] border-b border-white/10 bg-ink-900" />
+            <div
+              className="sticky top-0 z-30 h-[60px] border-b border-white/10"
+              style={{ background: "var(--bg-glass-strong)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)" }}
+            />
             {/* Rows */}
             {mode === "by-stage" &&
               apis.map((a) => {

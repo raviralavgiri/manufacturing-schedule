@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, X, Check, Search } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -31,6 +32,9 @@ interface Props {
 /**
  * Multi-select popover used as a filter button.
  *
+ * The dropdown is rendered via a React Portal at document.body so it always
+ * floats above every stacking context (glass cards, sticky headers, etc.).
+ *
  * Convention: an EMPTY `selected` set is rendered as "All N", meaning no
  * filter is applied. As soon as the user clicks a single option, the set
  * starts holding values and acts as a filter.
@@ -46,18 +50,47 @@ export default function MultiSelectPopover({
 }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState<{ top: number; right: number }>({
+    top: 0,
+    right: 0,
+  });
+
+  /** Open: snapshot button position, then show portal. */
+  const handleToggle = () => {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setCoords({
+        top: rect.bottom + 4,
+        right: window.innerWidth - rect.right,
+      });
+    }
+    setOpen(true);
+  };
 
   useEffect(() => {
     if (!open) return;
     setQuery("");
-    const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+
+    const onDown = (e: MouseEvent) => {
+      const inTrigger = triggerRef.current?.contains(e.target as Node);
+      const inPopover = popoverRef.current?.contains(e.target as Node);
+      if (!inTrigger && !inPopover) setOpen(false);
     };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
+    // Close on any scroll so the fixed popover doesn't drift away from its button.
+    const onScroll = () => setOpen(false);
+
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("scroll", onScroll, true);
+    };
   }, [open]);
 
   const isAllMode = selected.size === 0;
@@ -86,15 +119,12 @@ export default function MultiSelectPopover({
 
   const toggle = (value: string) => {
     const next = new Set(selected);
-    // First click on "All N" mode = select everything except this one (i.e. user wants to filter OUT this one)
-    // Better UX: first click = select ONLY this one (filter to just this).
     if (isAllMode) {
       onChange(new Set([value]));
       return;
     }
     if (next.has(value)) next.delete(value);
     else next.add(value);
-    // If they just deselected the last one, treat as "all" (clear the filter)
     if (next.size === 0) {
       onChange(new Set());
       return;
@@ -106,38 +136,12 @@ export default function MultiSelectPopover({
     ? `All ${options.length}`
     : `${selected.size} of ${options.length}`;
 
-  return (
-    <div ref={ref} className="relative inline-block">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className={clsx(
-          "inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold transition",
-          isAllMode
-            ? "border-white/10 bg-white/5 text-ink-200 hover:bg-white/10"
-            : "border-cyan-300/40 bg-cyan-300/10 text-cyan-200 hover:bg-cyan-300/20"
-        )}
-        title={`${label} filter — ${buttonLabel}`}
-      >
-        {icon}
-        <span>{label}</span>
-        <span
-          className={clsx(
-            "rounded px-1.5 py-0.5 font-mono text-[10px] tabular-nums",
-            isAllMode
-              ? "bg-white/5 text-ink-300"
-              : "bg-cyan-300/20 text-cyan-100"
-          )}
-        >
-          {buttonLabel}
-        </span>
-        <ChevronDown size={11} className="opacity-60" />
-      </button>
-
-      {open && (
+  const popover = open
+    ? createPortal(
         <div
-          className="popover-surface absolute right-0 top-full z-50 mt-1 overflow-hidden rounded-xl shadow-2xl shadow-black/60 ring-1 ring-cyan-300/20"
-          style={{ width }}
+          ref={popoverRef}
+          className="popover-surface fixed overflow-hidden rounded-xl shadow-2xl shadow-black/60 ring-1 ring-cyan-300/20"
+          style={{ top: coords.top, right: coords.right, width, zIndex: 9999 }}
         >
           <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
             <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">
@@ -153,9 +157,7 @@ export default function MultiSelectPopover({
                 All
               </button>
               <button
-                onClick={() =>
-                  onChange(new Set(options.map((o) => o.value)))
-                }
+                onClick={() => onChange(new Set(options.map((o) => o.value)))}
                 type="button"
                 className="rounded-md bg-white/5 px-2 py-0.5 text-[10px] font-semibold text-ink-200 hover:bg-white/10"
               >
@@ -165,7 +167,7 @@ export default function MultiSelectPopover({
                 onClick={() => onChange(new Set([options[0]?.value]))}
                 type="button"
                 className="rounded-md bg-white/5 px-2 py-0.5 text-[10px] font-semibold text-ink-200 hover:bg-white/10"
-                title="Clear all picks"
+                title="Select only first option"
               >
                 None
               </button>
@@ -246,9 +248,39 @@ export default function MultiSelectPopover({
               </div>
             )}
           </div>
-        </div>
-      )}
-    </div>
+        </div>,
+        document.body
+      )
+    : null;
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={handleToggle}
+        className={clsx(
+          "inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold transition",
+          isAllMode
+            ? "border-white/10 bg-white/5 text-ink-200 hover:bg-white/10"
+            : "border-cyan-300/40 bg-cyan-300/10 text-cyan-200 hover:bg-cyan-300/20"
+        )}
+        title={`${label} filter — ${buttonLabel}`}
+      >
+        {icon}
+        <span>{label}</span>
+        <span
+          className={clsx(
+            "rounded px-1.5 py-0.5 font-mono text-[10px] tabular-nums",
+            isAllMode ? "bg-white/5 text-ink-300" : "bg-cyan-300/20 text-cyan-100"
+          )}
+        >
+          {buttonLabel}
+        </span>
+        <ChevronDown size={11} className="opacity-60" />
+      </button>
+      {popover}
+    </>
   );
 }
 
@@ -265,7 +297,7 @@ export function ClearFiltersButton({
     <button
       onClick={onClear}
       className="inline-flex items-center gap-1 rounded-lg border border-rose-300/30 bg-rose-400/10 px-2.5 py-2 text-xs font-semibold text-rose-300 transition hover:bg-rose-400/20"
-      title="Reset all Gantt filters"
+      title="Reset all filters"
     >
       <X size={11} /> Clear
     </button>
