@@ -369,6 +369,78 @@ export function runScheduler(
       }
     }
   }
+
+  // Step 4: Auto-right-align ALL IM (non-sink) stages, even when no stage has
+  // explicit `rightAlign: true`.  IM stages must be packed as close to the
+  // downstream API stage as possible so that:
+  //   • Intermediate reactors are never artificially idled by a quarterly cap.
+  //   • Analysis gaps are absorbed — the IM last-batch analysis must finish
+  //     just in time for the API first batch to start.
+  //
+  // Algorithm:
+  //   a) Seed a working anchor map from any existing rightAlignStart entries
+  //      plus a freshly-computed anchor for every API sink stage (whether or
+  //      not it carries `rightAlign: true`).
+  //   b) Propagate backwards to every IM predecessor to a fixed point, mirroring
+  //      the existing Step 3 logic.
+  //   c) Write the resulting anchors into rightAlignStart so downstream code
+  //      (perQuarterLimitOf, the ASAP probing loop) treats them as right-aligned.
+  {
+    // (a) Seed: copy existing anchors, then add API sink stage anchors.
+    const imSeed = new Map<string, number>(rightAlignStart);
+    for (const api of apisInOrder) {
+      const aEnd = apiEndMs(api);
+      const aStart = apiStartMs(api);
+      for (const s of api.stages) {
+        if (imSeed.has(s.id) || s.plannedBatches <= 0) continue;
+        const isSink = (raSuccessors.get(s.id)?.length ?? 0) === 0;
+        if (!isSink) continue;
+        const bctMs = hoursToMs(
+          typeof s.bctHours === "number" && s.bctHours > 0 ? s.bctHours : s.bcfHours
+        );
+        const bcfMs = hoursToMs(s.bcfHours);
+        const derived = aEnd - bctMs - (s.plannedBatches - 1) * bcfMs;
+        imSeed.set(s.id, Math.max(aStart, derived));
+      }
+    }
+
+    // (b) Back-propagate to IM predecessors (iterate to fixed point).
+    let imChanged = true;
+    while (imChanged) {
+      imChanged = false;
+      for (const api of apisInOrder) {
+        const aStart = apiStartMs(api);
+        for (const s of api.stages) {
+          if (s.plannedBatches <= 0) continue;
+          const isSink = (raSuccessors.get(s.id)?.length ?? 0) === 0;
+          if (isSink) continue; // API sink stages were seeded above; skip here
+          const succs = raSuccessors.get(s.id) ?? [];
+          let minSuccFirst = Infinity;
+          for (const sid of succs) {
+            const sf = imSeed.get(sid);
+            if (sf !== undefined && sf < minSuccFirst) minSuccFirst = sf;
+          }
+          if (!Number.isFinite(minSuccFirst)) continue;
+          const bctMs = hoursToMs(
+            typeof s.bctHours === "number" && s.bctHours > 0 ? s.bctHours : s.bcfHours
+          );
+          const bcfMs = hoursToMs(s.bcfHours);
+          const analysisMs = hoursToMs(s.analysisHours);
+          const lastStart = minSuccFirst - bctMs - analysisMs;
+          const derived = lastStart - (s.plannedBatches - 1) * bcfMs;
+          const anchor = Math.max(aStart, derived);
+          const prev = imSeed.get(s.id);
+          if (prev === undefined || Math.abs(anchor - prev) > 1) {
+            imSeed.set(s.id, anchor);
+            // (c) Commit to rightAlignStart so perQuarterLimitOf sees it.
+            rightAlignStart.set(s.id, anchor);
+            imChanged = true;
+          }
+        }
+      }
+    }
+  }
+
   const NO_SEQUENCE = Number.MAX_SAFE_INTEGER;
   const sequenceOf = (api: API): number =>
     typeof api.productionSequence === "number" &&
@@ -912,6 +984,13 @@ export function runScheduler(
     // window — disabling the quarterly soft-cap prevents it from scattering
     // their batches back into earlier quarters, which would undo the alignment.
     if (rightAlignStart.has(rt.stage.id)) return rt.planned;
+    // IM (non-sink) stages: schedule ASAP to maximise throughput and feed API
+    // stages as early as possible. A quarterly cap would only create artificial
+    // idle gaps on intermediate reactors.
+    const isSink = (raSuccessors.get(rt.stage.id)?.length ?? 0) === 0;
+    if (!isSink) return rt.planned;
+    // Final API (sink) stages only: apply the quarterly soft-cap so batches are
+    // distributed roughly evenly across the four planning quarters.
     return Math.max(1, Math.ceil(rt.planned / 4));
   };
 
