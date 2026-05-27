@@ -299,6 +299,76 @@ export function runScheduler(
       predStagesById.set(s.id, preds);
     })
   );
+
+  // ─ Right-align pre-pass ──────────────────────────────────────────────────
+  // Stages with `rightAlign: true` pack their batches toward the API window
+  // end instead of scheduling forward from the window start:
+  //   firstStartMs = apiEnd − bctMs − (planned − 1) × bcfMs
+  // This anchor then back-propagates automatically to every upstream
+  // predecessor so their last batch completes analysis exactly when the
+  // downstream stage's first batch needs it. The quarterly soft-cap is
+  // disabled for all right-aligned stages (explicit + inherited) so it never
+  // redistributes batches to earlier quarters, undoing the right-alignment.
+
+  const rightAlignStart = new Map<string, number>(); // stageId → firstStartMs
+
+  // Step 1: Compute firstStartMs for explicitly right-aligned stages.
+  for (const api of apisInOrder) {
+    const aEnd = apiEndMs(api);
+    const aStart = apiStartMs(api);
+    for (const s of api.stages) {
+      if (!s.rightAlign || s.plannedBatches <= 0) continue;
+      const bctMs = hoursToMs(
+        typeof s.bctHours === "number" && s.bctHours > 0 ? s.bctHours : s.bcfHours
+      );
+      const bcfMs = hoursToMs(s.bcfHours);
+      const derived = aEnd - bctMs - (s.plannedBatches - 1) * bcfMs;
+      rightAlignStart.set(s.id, Math.max(aStart, derived));
+    }
+  }
+
+  // Step 2: Build a successor map for back-propagation.
+  const raSuccessors = new Map<string, string[]>();
+  for (const api of apisInOrder)
+    for (const s of api.stages) raSuccessors.set(s.id, []);
+  for (const api of apisInOrder)
+    for (const s of api.stages)
+      for (const pid of (Array.isArray(s.inputStageIds) ? s.inputStageIds : []))
+        raSuccessors.get(pid)?.push(s.id);
+
+  // Step 3: Back-propagate to upstream predecessors (iterate to fixed point).
+  // A predecessor's LAST batch must complete analysis before its downstream
+  // right-aligned first batch starts, so:
+  //   lastBatchStart = downstreamFirstStart − bct(pred) − analysis(pred)
+  //   firstStartMs   = lastBatchStart − (planned − 1) × bcf(pred)
+  {
+    let raChanged = true;
+    while (raChanged) {
+      raChanged = false;
+      for (const api of apisInOrder) {
+        const aStart = apiStartMs(api);
+        for (const s of api.stages) {
+          if (rightAlignStart.has(s.id) || s.plannedBatches <= 0) continue;
+          const succs = raSuccessors.get(s.id) ?? [];
+          let minSuccFirst = Infinity;
+          for (const sid of succs) {
+            const sf = rightAlignStart.get(sid);
+            if (sf !== undefined && sf < minSuccFirst) minSuccFirst = sf;
+          }
+          if (!Number.isFinite(minSuccFirst)) continue;
+          const bctMs = hoursToMs(
+            typeof s.bctHours === "number" && s.bctHours > 0 ? s.bctHours : s.bcfHours
+          );
+          const bcfMs = hoursToMs(s.bcfHours);
+          const analysisMs = hoursToMs(s.analysisHours);
+          const lastStart = minSuccFirst - bctMs - analysisMs;
+          const derived = lastStart - (s.plannedBatches - 1) * bcfMs;
+          rightAlignStart.set(s.id, Math.max(aStart, derived));
+          raChanged = true;
+        }
+      }
+    }
+  }
   const NO_SEQUENCE = Number.MAX_SAFE_INTEGER;
   const sequenceOf = (api: API): number =>
     typeof api.productionSequence === "number" &&
@@ -636,11 +706,14 @@ export function runScheduler(
         trainPositions,
         apiStart,
         apiEnd,
-        firstStartMs:
-          typeof stage.firstBatchStartMs === "number" &&
-          Number.isFinite(stage.firstBatchStartMs)
+        firstStartMs: (() => {
+          const ras = rightAlignStart.get(stage.id);
+          if (ras !== undefined) return ras;
+          return typeof stage.firstBatchStartMs === "number" &&
+            Number.isFinite(stage.firstBatchStartMs)
             ? stage.firstBatchStartMs
-            : apiStart,
+            : apiStart;
+        })(),
       });
     });
   }
@@ -834,8 +907,13 @@ export function runScheduler(
   // quarter.
   //
   //   perQuarterLimit = ⌈ planned / 4 ⌉
-  const perQuarterLimitOf = (rt: StageRT): number =>
-    Math.max(1, Math.ceil(rt.planned / 4));
+  const perQuarterLimitOf = (rt: StageRT): number => {
+    // Right-aligned stages (explicit or back-propagated) pack into a condensed
+    // window — disabling the quarterly soft-cap prevents it from scattering
+    // their batches back into earlier quarters, which would undo the alignment.
+    if (rightAlignStart.has(rt.stage.id)) return rt.planned;
+    return Math.max(1, Math.ceil(rt.planned / 4));
+  };
 
   const quarterLenOf = (rt: StageRT): number => {
     const span = rt.apiEnd - rt.apiStart;
