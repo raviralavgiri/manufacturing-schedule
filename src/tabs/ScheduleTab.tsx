@@ -401,27 +401,22 @@ export default function ScheduleTab() {
                     }
                     return (
                       <span
-                        className="flex items-center gap-1.5 truncate font-mono text-[11px] text-violet-200"
+                        className="flex items-center gap-1.5 truncate font-mono text-[11px] text-cyan-300"
                         title={tooltip}
                       >
-                        <span className="shrink-0 font-semibold text-cyan-300">
+                        {/* Train model: the booked reactors ARE the whole pool,
+                            so we show just the booked train (no redundant pool
+                            list). The configured pool stays in the tooltip. */}
+                        <span className="truncate font-semibold">
                           {bookedNames.join(" + ") || "—"}
                         </span>
                         {isSubstituted && (
                           <span
                             className="shrink-0 rounded-full border border-amber-300/40 bg-amber-300/10 px-1.5 py-px text-[9px] font-bold uppercase tracking-wider text-amber-300"
-                            title="Substituted: this reactor is not in the stage's configured pool — the scheduler picked a like-for-like spare because the configured reactors were all busy."
+                            title="Substituted: one or more reactors are not in the stage's configured pool — the scheduler picked a like-for-like spare because a configured reactor was busy."
                           >
                             sub
                           </span>
-                        )}
-                        {poolNames.length > 0 && (
-                          <>
-                            <span className="shrink-0 text-ink-500">·</span>
-                            <span className="truncate">
-                              {poolNames.join(", ")}
-                            </span>
-                          </>
                         )}
                       </span>
                     );
