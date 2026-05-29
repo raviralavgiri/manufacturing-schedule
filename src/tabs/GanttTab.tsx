@@ -833,9 +833,9 @@ export default function GanttTab() {
                           0,
                           cycleWidth - waitWidth
                         );
-                        // Cleaning gap rendered BEFORE the bar — yellow for
-                        // PCO, green for the 30-day campaign cleaning.
-                        // `cleaningBeforeMs` lives on each batch; the tail
+                        // Cleaning gap rendered BEFORE the bar — dark red for
+                        // PCO, dark teal for the 30-day campaign cleaning.
+                        // `cleaningBeforeMs` lives on each batch; the block
                         // visually fills the gap from this batch's predecessor
                         // on its train to this batch's start.
                         const cleaningHrs =
@@ -847,9 +847,9 @@ export default function GanttTab() {
                         const cleanType = b.cleaningType ?? "none";
                         const cleanColor =
                           cleanType === "campaign"
-                            ? "#a3e635" // lime-400
+                            ? "#0d9488" // teal-600 — campaign cleaning
                             : cleanType === "pco"
-                            ? "#fbbf24" // amber-400
+                            ? "#dc2626" // red-600 — PCO
                             : null;
                         if (startWk >= totalWeeks) return null;
                         const barH = rowH - 6;
@@ -876,11 +876,11 @@ export default function GanttTab() {
                                   style={{
                                     width: cleaningWidth,
                                     height: barH,
-                                    background: `linear-gradient(90deg, ${cleanColor}22, ${cleanColor}55)`,
-                                    border: `1px dashed ${cleanColor}80`,
+                                    background: `repeating-linear-gradient(135deg, ${cleanColor}cc 0 4px, ${cleanColor}55 4px 8px)`,
+                                    border: `1px solid ${cleanColor}`,
                                     borderRight: "none",
                                   }}
-                                  className="rounded-l-sm opacity-70"
+                                  className="rounded-l-sm"
                                   title={
                                     cleanType === "campaign"
                                       ? `Campaign cleaning · ${cleaningHrs.toFixed(1)}h`

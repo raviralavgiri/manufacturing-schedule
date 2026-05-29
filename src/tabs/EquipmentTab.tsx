@@ -1,11 +1,10 @@
 import { useMemo } from "react";
 import { useStore } from "../store";
 import { Card, SectionHeader } from "../components/Primitives";
-import { computeWeeks, type WeekBucket } from "../utils/dates";
+import { computeWeeks } from "../utils/dates";
 import { useChartTheme } from "../utils/chartTheme";
 import {
   ResponsiveContainer,
-  LineChart,
   Line,
   XAxis,
   YAxis,
@@ -79,61 +78,44 @@ export default function EquipmentTab() {
         subtitle={`Reactor occupancy across 52 weeks. ${utilByReactor.length} reactors · avg util ${avgUtil.toFixed(1)}%`}
       />
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* Heatmap */}
-        <Card className="lg:col-span-2 overflow-hidden p-0">
-          <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-            <h3 className="text-sm font-bold uppercase tracking-wider text-white">
-              Occupancy Heatmap · Reactor × Week
-            </h3>
-            <div className="flex items-center gap-2 text-[10px] text-ink-300">
-              <HeatLegend />
-            </div>
-          </div>
-          <div className="overflow-auto p-3">
-            <Heatmap util={utilByReactor} weeks={weeks} />
-          </div>
-        </Card>
-
-        {/* Util bars */}
-        <Card className="p-0">
-          <div className="border-b border-white/10 px-4 py-3">
-            <h3 className="text-sm font-bold uppercase tracking-wider text-white">
-              Per-Reactor Utilization
-            </h3>
-          </div>
-          <div className="space-y-1.5 p-4">
-            {utilByReactor.map((r) => (
-              <div key={r.id} className="space-y-0.5">
-                <div className="flex items-center justify-between text-[11px]">
-                  <span
-                    className="flex items-center gap-1.5 font-mono font-semibold text-white truncate"
-                    title={r.name === r.id ? r.id : `${r.name} (id: ${r.id})`}
-                  >
-                    <span className="truncate">{r.name}</span>
-                    <span className="text-[9px] uppercase text-ink-400">
-                      {r.cls}
-                    </span>
+      {/* Per-Reactor Utilization */}
+      <Card className="p-0">
+        <div className="border-b border-white/10 px-4 py-3">
+          <h3 className="text-sm font-bold uppercase tracking-wider text-white">
+            Per-Reactor Utilization
+          </h3>
+        </div>
+        <div className="grid grid-cols-1 gap-x-6 gap-y-1.5 p-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {utilByReactor.map((r) => (
+            <div key={r.id} className="space-y-0.5">
+              <div className="flex items-center justify-between text-[11px]">
+                <span
+                  className="flex items-center gap-1.5 font-mono font-semibold text-white truncate"
+                  title={r.name === r.id ? r.id : `${r.name} (id: ${r.id})`}
+                >
+                  <span className="truncate">{r.name}</span>
+                  <span className="text-[9px] uppercase text-ink-400">
+                    {r.cls}
                   </span>
-                  <span className="font-mono font-bold tabular-nums text-cyan-300">
-                    {r.util.toFixed(1)}%
-                  </span>
-                </div>
-                <div className="relative h-2 overflow-hidden rounded-full bg-white/5">
-                  <div
-                    style={{ width: `${r.util}%` }}
-                    className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-cyan-400 via-violet-400 to-pink-400 shadow-[0_0_8px_rgba(0,240,255,0.5)]"
-                  />
-                </div>
-                <div className="flex justify-between text-[9px] text-ink-400">
-                  <span>{r.batchCount} batches</span>
-                  <span>{Math.round(r.busyHours)}h busy</span>
-                </div>
+                </span>
+                <span className="font-mono font-bold tabular-nums text-cyan-300">
+                  {r.util.toFixed(1)}%
+                </span>
               </div>
-            ))}
-          </div>
-        </Card>
-      </div>
+              <div className="relative h-2 overflow-hidden rounded-full bg-white/5">
+                <div
+                  style={{ width: `${r.util}%` }}
+                  className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-cyan-400 via-violet-400 to-pink-400 shadow-[0_0_8px_rgba(0,240,255,0.5)]"
+                />
+              </div>
+              <div className="flex justify-between text-[9px] text-ink-400">
+                <span>{r.batchCount} batches</span>
+                <span>{Math.round(r.busyHours)}h busy</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
 
       {/* Weekly trend */}
       <Card>
@@ -196,104 +178,3 @@ export default function EquipmentTab() {
   );
 }
 
-function Heatmap({
-  util,
-  weeks,
-}: {
-  util: { id: string; name: string; cls: string; weekHours: number[] }[];
-  weeks: WeekBucket[];
-}) {
-  const cellW = 16;
-  const cellH = 18;
-  return (
-    <div className="inline-block">
-      {/* Top header (weeks) */}
-      <div className="flex">
-        <div style={{ width: 90 }} />
-        {weeks.map((w, i) => (
-          <div
-            key={i}
-            style={{ width: cellW }}
-            className={clsxLite(
-              "shrink-0 text-center font-mono",
-              i % 4 === 0 ? "text-[8px] text-ink-300" : "text-transparent"
-            )}
-          >
-            {i % 4 === 0 ? w.label.split(" ")[0] : "·"}
-          </div>
-        ))}
-      </div>
-      {util.map((r) => {
-        const maxHrs = Math.max(...r.weekHours, 1);
-        const totalCap = HOURS_PER_WEEK; // weekly cap
-        return (
-          <div key={r.id} className="flex items-center">
-            <div
-              style={{ width: 90 }}
-              className="shrink-0 truncate py-0.5 pr-2 text-right font-mono text-[10px] font-semibold text-white"
-              title={r.name === r.id ? r.id : `${r.name} (id: ${r.id})`}
-            >
-              {r.name}
-            </div>
-            {r.weekHours.map((h, i) => {
-              const pct = Math.min(h / totalCap, 1);
-              const bg = heatColor(pct);
-              return (
-                <div
-                  key={i}
-                  style={{
-                    width: cellW - 1,
-                    height: cellH,
-                    margin: "1px 0.5px",
-                    background: bg,
-                    boxShadow:
-                      pct > 0.6
-                        ? `inset 0 0 4px rgba(255,255,255,0.25)`
-                        : undefined,
-                  }}
-                  className="rounded-[3px] transition hover:scale-110 hover:ring-1 hover:ring-white"
-                  title={`${r.name === r.id ? r.id : `${r.name} (id: ${r.id})`} · ${weeks[i]?.label ?? ""}: ${h.toFixed(1)} hrs (${(pct * 100).toFixed(0)}%) · max=${maxHrs.toFixed(0)}h`}
-                />
-              );
-            })}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function HeatLegend() {
-  const stops = [0, 0.25, 0.5, 0.75, 1];
-  return (
-    <div className="flex items-center gap-1">
-      <span>idle</span>
-      <div className="flex">
-        {stops.map((s, i) => (
-          <span
-            key={i}
-            className="h-3 w-5 rounded-sm border border-white/5"
-            style={{ background: heatColor(s) }}
-          />
-        ))}
-      </div>
-      <span>full</span>
-    </div>
-  );
-}
-
-function heatColor(pct: number): string {
-  // 0 -> dark navy, 0.5 -> violet, 1 -> hot pink/cyan
-  if (pct <= 0.001) return "rgba(255,255,255,0.04)";
-  const r = Math.round(20 + pct * 230);
-  const g = Math.round(30 + pct * 70);
-  const b = Math.round(80 + (1 - pct) * 140);
-  // mix in some cyan->violet->pink hue
-  if (pct > 0.66) return `rgba(244, 114, 182, ${0.35 + pct * 0.6})`;
-  if (pct > 0.33) return `rgba(167, 139, 250, ${0.3 + pct * 0.55})`;
-  return `rgba(0, 240, 255, ${0.18 + pct * 0.6})`;
-}
-
-function clsxLite(...args: (string | false | undefined | null)[]): string {
-  return args.filter(Boolean).join(" ");
-}
