@@ -135,6 +135,16 @@ export interface StageMaster {
    */
   firstBatchStartMs?: number;
   /**
+   * OPTIONAL — right-align this stage's campaign to the API plan-window end.
+   * When true the scheduler derives firstStartMs as:
+   *   apiEnd − bctMs − (plannedBatches − 1) × bcfMs
+   * so all batches pack toward the window close rather than starting as early
+   * as possible. Upstream predecessors automatically inherit the anchor and
+   * shift right too, freeing earlier equipment time for other products.
+   * Mutually exclusive with firstBatchStartMs (rightAlign takes priority).
+   */
+  rightAlign?: boolean;
+  /**
    * OPTIONAL — existing on-hand stock (kg) of THIS stage's output already
    * available before the campaign. The cascade subtracts it from this stage's
    * gross demand before sizing batches:

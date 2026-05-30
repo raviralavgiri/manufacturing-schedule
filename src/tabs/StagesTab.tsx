@@ -34,6 +34,7 @@ export default function StagesTab() {
   const setStageReactorSubstitutes = useStore((s) => s.setStageReactorSubstitutes);
   const setStageInputs = useStore((s) => s.setStageInputs);
   const setStageFirstBatchStart = useStore((s) => s.setStageFirstBatchStart);
+  const setStageRightAlign = useStore((s) => s.setStageRightAlign);
   const setStageExistingStock = useStore((s) => s.setStageExistingStock);
   const setStageKind = useStore((s) => s.setStageKind);
   const removeStage = useStore((s) => s.removeStage);
@@ -233,6 +234,7 @@ export default function StagesTab() {
           setStageReactorSubstitutes={setStageReactorSubstitutes}
           setStageInputs={setStageInputs}
           setStageFirstBatchStart={setStageFirstBatchStart}
+          setStageRightAlign={setStageRightAlign}
           setStageExistingStock={setStageExistingStock}
           setStageKind={setStageKind}
         />
@@ -520,6 +522,7 @@ function EquipmentFlowTab({
   setStageReactorSubstitutes,
   setStageInputs,
   setStageFirstBatchStart,
+  setStageRightAlign,
   setStageExistingStock,
   setStageKind,
 }: {
@@ -531,6 +534,7 @@ function EquipmentFlowTab({
   setStageReactorSubstitutes: (id: string, subs: Record<string, string[]>) => void;
   setStageInputs: (id: string, ids: string[]) => void;
   setStageFirstBatchStart: (id: string, ms: number | undefined) => void;
+  setStageRightAlign: (id: string, on: boolean) => void;
   setStageExistingStock: (id: string, kg: number) => void;
   setStageKind: (id: string, kind: "IM" | "API") => void;
 }) {
@@ -585,6 +589,12 @@ function EquipmentFlowTab({
                   title="Optional date for this stage's FIRST batch. Blank = scheduler default (API window start). The material gate still applies — a stage never runs before its inputs are released."
                 >
                   First Batch Start
+                </Th>
+                <Th
+                  yellow
+                  title="Right-align: pack all batches toward the API window END instead of scheduling forward from the window start. Derived first-batch start = windowEnd − BCT − (planned−1)×BCF. Upstream predecessors inherit the anchor automatically."
+                >
+                  Right-align ↤
                 </Th>
                 <Th
                   align="right"
@@ -698,6 +708,12 @@ function EquipmentFlowTab({
                         onChange={(ms) => setStageFirstBatchStart(r.id, ms)}
                       />
                     </td>
+                    <td className="px-3 py-2 text-center">
+                      <RightAlignToggle
+                        value={!!r.rightAlign}
+                        onChange={(on) => setStageRightAlign(r.id, on)}
+                      />
+                    </td>
                     <td className="px-3 py-2 text-right">
                       <EditableNumCell
                         value={r.existingStockKg ?? 0}
@@ -710,7 +726,7 @@ function EquipmentFlowTab({
               })}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-sm text-ink-300">
+                  <td colSpan={10} className="py-12 text-center text-sm text-ink-300">
                     No stages match. Click{" "}
                     <span className="font-bold text-cyan-300">+ Add Stage</span>{" "}
                     above to create one.
@@ -726,12 +742,18 @@ function EquipmentFlowTab({
         <span className="mr-1 font-bold">
           <Pencil size={12} className="inline" /> Editable here:
         </span>
-        Reactor Pool, Optional Substitutes, Inputs From.{" "}
+        Reactor Pool, Optional Substitutes, Inputs From, First Batch Start, Right-align.{" "}
         <span className="mt-1 block text-amber-300/80">
           <GitBranch size={11} className="mr-0.5 inline" />{" "}
           <span className="font-mono">Inputs from</span> = DAG predecessor stages whose output feeds this stage.
           Default is the immediate previous stage. Pick multiple for convergence (S3+S7→S8)
           or a sub-stream (S2 ← {"{"}S1, S2i{"}"}).
+        </span>
+        <span className="mt-1 block text-amber-300/80">
+          <span className="font-mono">Right-align ↤</span> — enable on the <em>final</em> stage of a campaign to
+          back-integrate all batches toward the window end:{" "}
+          <span className="font-mono">firstStart = windowEnd − BCT − (planned−1)×BCF</span>.
+          Upstream stages inherit the anchor automatically. Frees early equipment time for other products.
         </span>
       </div>
     </>
@@ -940,6 +962,40 @@ function TopologyIndicator({ topology }: { topology: ApiTopology }) {
 function formatFactor(f: number): string {
   if (!Number.isFinite(f)) return "?";
   return Number.isInteger(f) ? `${f}` : f.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function RightAlignToggle({
+  value,
+  onChange,
+}: {
+  value: boolean;
+  onChange: (on: boolean) => void;
+}) {
+  return (
+    <label
+      className="inline-flex cursor-pointer items-center gap-1.5"
+      title={
+        value
+          ? "Right-align ON — batches pack toward window end; upstream stages inherit this anchor"
+          : "Right-align OFF — batches schedule forward from window start (default)"
+      }
+    >
+      <input
+        type="checkbox"
+        checked={value}
+        onChange={(e) => onChange(e.target.checked)}
+        className="h-3.5 w-3.5 accent-cyan-400"
+      />
+      <span
+        className={clsx(
+          "font-mono text-[10px] font-bold transition",
+          value ? "text-cyan-300" : "text-ink-500"
+        )}
+      >
+        {value ? "on" : "—"}
+      </span>
+    </label>
+  );
 }
 
 function topologyBreakdown(apis: { topology?: ApiTopology }[]): string {

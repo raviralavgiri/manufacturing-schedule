@@ -143,6 +143,8 @@ interface AppState {
   setStageInputs: (stageId: string, ids: string[]) => void;
   /** Per-stage first-batch start date (ms); pass undefined to clear → default. */
   setStageFirstBatchStart: (stageId: string, ms: number | undefined) => void;
+  /** Right-align this stage's campaign to the API window end (back-integrates from window close). */
+  setStageRightAlign: (stageId: string, on: boolean) => void;
   /** Per-stage existing on-hand stock (kg); recascades planned batches. */
   setStageExistingStock: (stageId: string, kg: number) => void;
   /** Per-stage IM/API classification (filtering/labelling only). */
@@ -567,6 +569,20 @@ export const useStore = create<AppState>((set, get) => ({
       return { ...p, apis };
     });
     // No cascade — only affects WHEN the stage starts, not HOW MANY batches.
+    scheduleRecompute(set, get, true);
+  },
+
+  setStageRightAlign: (stageId, on) => {
+    mutateActive(set, get, (p) => {
+      const apis = p.apis.map((a) => {
+        if (!a.stages.some((s) => s.id === stageId)) return a;
+        const stages = a.stages.map((s) =>
+          s.id === stageId ? { ...s, rightAlign: on || undefined } : s
+        );
+        return { ...a, stages };
+      });
+      return { ...p, apis };
+    });
     scheduleRecompute(set, get, true);
   },
 

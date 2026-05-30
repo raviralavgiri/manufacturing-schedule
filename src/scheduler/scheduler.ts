@@ -41,7 +41,7 @@ interface BookedSlot {
 }
 
 /** Maximum continuous campaign duration before a forced campaign cleaning. */
-const CAMPAIGN_MAX_MS = 30 * 24 * 3600 * 1000;
+const CAMPAIGN_MAX_MS = 34 * 24 * 3600 * 1000;
 
 /**
  * PCO-minimisation: how far into the future we push a candidate batch when
@@ -299,6 +299,96 @@ export function runScheduler(
       predStagesById.set(s.id, preds);
     })
   );
+
+  // ─ Right-align pre-pass ──────────────────────────────────────────────────
+  // DEFAULT behaviour: every API's batches pack back-to-back at BCF anchored to
+  // the API window END (no quarter-boundary gaps) — BCF cadence alone provides
+  // the quarterly spread. The sink (final) stage anchors at:
+  //   firstStartMs = apiEnd − bctMs − (planned − 1) × bcfMs
+  // and that anchor back-propagates to every upstream predecessor so their last
+  // batch completes analysis exactly when the downstream stage's first batch
+  // needs it. The quarterly soft-cap is disabled for all right-aligned stages
+  // (which is now essentially all of them) so it never re-injects gaps.
+  //
+  // Opt-outs: a stage with an explicit `firstBatchStartMs` stays pinned
+  // (left-aligned from that point) unless it ALSO carries an explicit
+  // `rightAlign` flag, which always wins.
+
+  const rightAlignStart = new Map<string, number>(); // stageId → firstStartMs
+
+  const hasFirstBatchPin = (s: StageMaster): boolean =>
+    typeof s.firstBatchStartMs === "number" &&
+    Number.isFinite(s.firstBatchStartMs);
+
+  // Step 1: Seed each API's sink stage(s) — and any explicitly `rightAlign`
+  // stage — with the window-end anchor. A sink is a stage no other stage in
+  // the API consumes. Non-sink stages are handled by back-propagation (Step 3).
+  for (const api of apisInOrder) {
+    const aEnd = apiEndMs(api);
+    const aStart = apiStartMs(api);
+    const consumed = new Set<string>();
+    api.stages.forEach((s) =>
+      (Array.isArray(s.inputStageIds) ? s.inputStageIds : []).forEach((id) =>
+        consumed.add(id)
+      )
+    );
+    for (const s of api.stages) {
+      if (s.plannedBatches <= 0) continue;
+      const isSink = !consumed.has(s.id);
+      if (!s.rightAlign && !isSink) continue; // back-prop handles interior stages
+      if (hasFirstBatchPin(s) && !s.rightAlign) continue; // user-pinned start wins
+      const bctMs = hoursToMs(
+        typeof s.bctHours === "number" && s.bctHours > 0 ? s.bctHours : s.bcfHours
+      );
+      const bcfMs = hoursToMs(s.bcfHours);
+      const derived = aEnd - bctMs - (s.plannedBatches - 1) * bcfMs;
+      rightAlignStart.set(s.id, Math.max(aStart, derived));
+    }
+  }
+
+  // Step 2: Build a successor map for back-propagation.
+  const raSuccessors = new Map<string, string[]>();
+  for (const api of apisInOrder)
+    for (const s of api.stages) raSuccessors.set(s.id, []);
+  for (const api of apisInOrder)
+    for (const s of api.stages)
+      for (const pid of (Array.isArray(s.inputStageIds) ? s.inputStageIds : []))
+        raSuccessors.get(pid)?.push(s.id);
+
+  // Step 3: Back-propagate to upstream predecessors (iterate to fixed point).
+  // A predecessor's LAST batch must complete analysis before its downstream
+  // right-aligned first batch starts, so:
+  //   lastBatchStart = downstreamFirstStart − bct(pred) − analysis(pred)
+  //   firstStartMs   = lastBatchStart − (planned − 1) × bcf(pred)
+  {
+    let raChanged = true;
+    while (raChanged) {
+      raChanged = false;
+      for (const api of apisInOrder) {
+        const aStart = apiStartMs(api);
+        for (const s of api.stages) {
+          if (rightAlignStart.has(s.id) || s.plannedBatches <= 0) continue;
+          if (hasFirstBatchPin(s)) continue; // keep pinned start; don't right-align
+          const succs = raSuccessors.get(s.id) ?? [];
+          let minSuccFirst = Infinity;
+          for (const sid of succs) {
+            const sf = rightAlignStart.get(sid);
+            if (sf !== undefined && sf < minSuccFirst) minSuccFirst = sf;
+          }
+          if (!Number.isFinite(minSuccFirst)) continue;
+          const bctMs = hoursToMs(
+            typeof s.bctHours === "number" && s.bctHours > 0 ? s.bctHours : s.bcfHours
+          );
+          const bcfMs = hoursToMs(s.bcfHours);
+          const analysisMs = hoursToMs(s.analysisHours);
+          const lastStart = minSuccFirst - bctMs - analysisMs;
+          const derived = lastStart - (s.plannedBatches - 1) * bcfMs;
+          rightAlignStart.set(s.id, Math.max(aStart, derived));
+          raChanged = true;
+        }
+      }
+    }
+  }
   const NO_SEQUENCE = Number.MAX_SAFE_INTEGER;
   const sequenceOf = (api: API): number =>
     typeof api.productionSequence === "number" &&
@@ -636,11 +726,14 @@ export function runScheduler(
         trainPositions,
         apiStart,
         apiEnd,
-        firstStartMs:
-          typeof stage.firstBatchStartMs === "number" &&
-          Number.isFinite(stage.firstBatchStartMs)
+        firstStartMs: (() => {
+          const ras = rightAlignStart.get(stage.id);
+          if (ras !== undefined) return ras;
+          return typeof stage.firstBatchStartMs === "number" &&
+            Number.isFinite(stage.firstBatchStartMs)
             ? stage.firstBatchStartMs
-            : apiStart,
+            : apiStart;
+        })(),
       });
     });
   }
@@ -834,8 +927,13 @@ export function runScheduler(
   // quarter.
   //
   //   perQuarterLimit = ⌈ planned / 4 ⌉
-  const perQuarterLimitOf = (rt: StageRT): number =>
-    Math.max(1, Math.ceil(rt.planned / 4));
+  const perQuarterLimitOf = (rt: StageRT): number => {
+    // Right-aligned stages (explicit or back-propagated) pack into a condensed
+    // window — disabling the quarterly soft-cap prevents it from scattering
+    // their batches back into earlier quarters, which would undo the alignment.
+    if (rightAlignStart.has(rt.stage.id)) return rt.planned;
+    return Math.max(1, Math.ceil(rt.planned / 4));
+  };
 
   const quarterLenOf = (rt: StageRT): number => {
     const span = rt.apiEnd - rt.apiStart;
