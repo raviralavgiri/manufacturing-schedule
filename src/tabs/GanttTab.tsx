@@ -10,6 +10,7 @@ import {
   Filter,
   Activity,
   Tags,
+  AlertTriangle,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
@@ -102,6 +103,44 @@ export default function GanttTab() {
     });
     return m;
   }, [apisRaw]);
+
+  // Per-API production stats: span (first batch start → last analysis end) and
+  // max capacity (sink stage planned batches × batchSizeKg).
+  const apiStats = useMemo(() => {
+    const map = new Map<
+      string,
+      { spanDays: number; maxKg: number; plannedKg: number }
+    >();
+    apisRaw.forEach((a) => {
+      // Production span — across ALL stages of this API
+      const apiBatches = schedule.batches.filter((b) => b.apiId === a.id);
+      if (apiBatches.length === 0) {
+        map.set(a.id, { spanDays: 0, maxKg: 0, plannedKg: 0 });
+        return;
+      }
+      const firstStart = Math.min(...apiBatches.map((b) => b.startMs));
+      const lastEnd = Math.max(...apiBatches.map((b) => b.analysisEndMs ?? b.startMs));
+      const spanDays = (lastEnd - firstStart) / (1000 * 60 * 60 * 24);
+
+      // Max capacity — sink stages only
+      const consumed = new Set<string>();
+      a.stages.forEach((s) =>
+        (s.inputStageIds ?? []).forEach((id) => consumed.add(id))
+      );
+      const sinks = a.stages.filter((s) => !consumed.has(s.id));
+      const maxKg = sinks.reduce(
+        (sum, s) => sum + (s.plannedBatches ?? 0) * (s.batchSizeKg ?? 0),
+        0
+      );
+      const plannedKg = sinks.reduce(
+        (sum, s) => sum + (s.plannedBatches ?? 0) * (s.batchSizeKg ?? 0),
+        0
+      );
+
+      map.set(a.id, { spanDays, maxKg, plannedKg });
+    });
+    return map;
+  }, [apisRaw, schedule.batches]);
 
   const [pxPerWeek, setPxPerWeek] = useState(64); // default = "Quarter view": ~13 weeks visible per ~830px
   const [mode, setMode] = useState<Mode>("by-stage");
@@ -499,7 +538,7 @@ export default function GanttTab() {
           {/* Left labels column — frozen on horizontal scroll */}
           <div className="sticky left-0 z-20 w-[200px] shrink-0 border-r border-white/15 bg-ink-900">
             {/* Header spacer — frozen on BOTH axes (corner) */}
-            <div className="sticky top-0 z-30 h-[60px] border-b border-white/10 bg-ink-900" />
+            <div className="sticky top-0 z-30 h-[60px] border-b border-white/10 bg-ink-900/90 backdrop-blur-md" />
             {/* Rows */}
             {mode === "by-stage" &&
               apis.map((a) => {
@@ -519,12 +558,18 @@ export default function GanttTab() {
                         0
                     )
                   : a.stages;
+                const stats = apiStats.get(a.id);
+                const warnSpan = (stats?.spanDays ?? 0) > 90;
                 return (
                   <div key={a.id}>
                     <button
                       onClick={() => toggleApi(a.id)}
                       className="flex w-full items-center gap-1.5 border-b border-white/5 bg-white/[0.02] px-3 py-1.5 text-left text-xs font-bold text-white hover:bg-white/[0.05]"
-                      title={`${a.name} (id: ${a.id})`}
+                      title={
+                        stats
+                          ? `${a.name} · Span: ${Math.round(stats.spanDays)}d · Capacity: ${stats.maxKg.toLocaleString()} kg${warnSpan ? " ⚠ Production > 3 months" : ""}`
+                          : a.name
+                      }
                     >
                       {isCollapsed ? (
                         <ChevronRight size={12} className="shrink-0 text-ink-400" />
@@ -539,6 +584,15 @@ export default function GanttTab() {
                         }}
                       />
                       <span className="truncate">{a.name}</span>
+                      {warnSpan && (
+                        <span
+                          className="ml-1 inline-flex items-center gap-0.5 rounded px-1 py-0 text-[9px] font-semibold text-amber-300"
+                          title={`Production spans ${Math.round(stats!.spanDays)} days (> 90 days)`}
+                        >
+                          <AlertTriangle size={9} className="shrink-0" />
+                          {Math.round(stats!.spanDays)}d
+                        </span>
+                      )}
                       <span className="ml-auto font-mono text-[10px] text-ink-400">
                         {visibleStages.length}st
                       </span>
@@ -565,12 +619,18 @@ export default function GanttTab() {
                   (grouped.get(a.id)?.length ?? 0) === 0
                 )
                   return null;
+                const stats = apiStats.get(a.id);
+                const warnSpan = (stats?.spanDays ?? 0) > 90;
                 return (
                   <div
                     key={a.id}
                     style={{ height: rowH }}
                     className="flex items-center gap-2 border-b border-white/5 px-3 text-xs font-bold text-white"
-                    title={`${a.name} (id: ${a.id})`}
+                    title={
+                      stats
+                        ? `${a.name} · Span: ${Math.round(stats.spanDays)}d · Capacity: ${stats.maxKg.toLocaleString()} kg${warnSpan ? " ⚠ Production > 3 months" : ""}`
+                        : a.name
+                    }
                   >
                     <span
                       className="h-2.5 w-2.5 shrink-0 rounded-full"
@@ -580,6 +640,15 @@ export default function GanttTab() {
                       }}
                     />
                     <span className="truncate">{a.name}</span>
+                    {warnSpan && (
+                      <span
+                        className="inline-flex items-center gap-0.5 rounded px-1 py-0 text-[9px] font-semibold text-amber-300"
+                        title={`Production spans ${Math.round(stats!.spanDays)} days (> 90 days)`}
+                      >
+                        <AlertTriangle size={9} className="shrink-0" />
+                        {Math.round(stats!.spanDays)}d
+                      </span>
+                    )}
                     {sinkLabelByApiId.get(a.id) && (
                       <span
                         className="ml-auto shrink-0 truncate text-[9px] font-normal text-ink-400"

@@ -391,6 +391,37 @@ export function runScheduler(
       : NO_SEQUENCE;
   const apiIndexById = new Map(apisInOrder.map((a, i) => [a.id, i]));
 
+  // Step 1b — Quarterly-aware start for un-pinned sink stages that are NOT
+  // explicitly right-aligned. Instead of defaulting to apiStart (which may
+  // be years in the past for a multi-year window), place the first batch so
+  // the last ⌈planned/cap⌉ quarters of the API window hold all batches:
+  //   cap           = ⌈planned / 4⌉  (same as the quarterly soft-cap)
+  //   quartersNeeded = ⌈planned / cap⌉ ≤ 4
+  //   firstStartMs   = max(apiStart, apiEnd − quartersNeeded × quarterLen)
+  // Non-sink stages (fed by predecessor output) are left for the material
+  // gate to determine their actual start time.
+  const sinkQuarterlyStart = new Map<string, number>();
+  for (const api of apisInOrder) {
+    const aEnd = apiEndMs(api);
+    const aStart = apiStartMs(api);
+    const qLen = Math.max(1, (aEnd - aStart) / 4);
+    const consumed = new Set<string>();
+    api.stages.forEach((s) =>
+      (Array.isArray(s.inputStageIds) ? s.inputStageIds : []).forEach((id) =>
+        consumed.add(id)
+      )
+    );
+    for (const s of api.stages) {
+      if (s.plannedBatches <= 0) continue;
+      if (s.rightAlign || rightAlignStart.has(s.id)) continue; // explicit RA handles these
+      if (hasFirstBatchPin(s)) continue; // user-pinned start wins
+      if (consumed.has(s.id)) continue; // non-sink — material gate sets start
+      const cap = Math.max(1, Math.ceil(s.plannedBatches / 4));
+      const quartersNeeded = Math.ceil(s.plannedBatches / cap);
+      sinkQuarterlyStart.set(s.id, Math.max(aStart, aEnd - quartersNeeded * qLen));
+    }
+  }
+
   // Per-stage APPROVED-output timeline: each stage's booked-batch analysisEnd
   // (= QC-done) times, kept SORTED ascending. The material gate reads the
   // m-th element to learn when cumulative approved output crosses a threshold
@@ -723,6 +754,8 @@ export function runScheduler(
         firstStartMs: (() => {
           const ras = rightAlignStart.get(stage.id);
           if (ras !== undefined) return ras;
+          const sqs = sinkQuarterlyStart.get(stage.id);
+          if (sqs !== undefined) return sqs;
           return typeof stage.firstBatchStartMs === "number" &&
             Number.isFinite(stage.firstBatchStartMs)
             ? stage.firstBatchStartMs
