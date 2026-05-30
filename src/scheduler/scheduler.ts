@@ -301,23 +301,42 @@ export function runScheduler(
   );
 
   // ─ Right-align pre-pass ──────────────────────────────────────────────────
-  // Stages with `rightAlign: true` pack their batches toward the API window
-  // end instead of scheduling forward from the window start:
+  // DEFAULT behaviour: every API's batches pack back-to-back at BCF anchored to
+  // the API window END (no quarter-boundary gaps) — BCF cadence alone provides
+  // the quarterly spread. The sink (final) stage anchors at:
   //   firstStartMs = apiEnd − bctMs − (planned − 1) × bcfMs
-  // This anchor then back-propagates automatically to every upstream
-  // predecessor so their last batch completes analysis exactly when the
-  // downstream stage's first batch needs it. The quarterly soft-cap is
-  // disabled for all right-aligned stages (explicit + inherited) so it never
-  // redistributes batches to earlier quarters, undoing the right-alignment.
+  // and that anchor back-propagates to every upstream predecessor so their last
+  // batch completes analysis exactly when the downstream stage's first batch
+  // needs it. The quarterly soft-cap is disabled for all right-aligned stages
+  // (which is now essentially all of them) so it never re-injects gaps.
+  //
+  // Opt-outs: a stage with an explicit `firstBatchStartMs` stays pinned
+  // (left-aligned from that point) unless it ALSO carries an explicit
+  // `rightAlign` flag, which always wins.
 
   const rightAlignStart = new Map<string, number>(); // stageId → firstStartMs
 
-  // Step 1: Compute firstStartMs for explicitly right-aligned stages.
+  const hasFirstBatchPin = (s: StageMaster): boolean =>
+    typeof s.firstBatchStartMs === "number" &&
+    Number.isFinite(s.firstBatchStartMs);
+
+  // Step 1: Seed each API's sink stage(s) — and any explicitly `rightAlign`
+  // stage — with the window-end anchor. A sink is a stage no other stage in
+  // the API consumes. Non-sink stages are handled by back-propagation (Step 3).
   for (const api of apisInOrder) {
     const aEnd = apiEndMs(api);
     const aStart = apiStartMs(api);
+    const consumed = new Set<string>();
+    api.stages.forEach((s) =>
+      (Array.isArray(s.inputStageIds) ? s.inputStageIds : []).forEach((id) =>
+        consumed.add(id)
+      )
+    );
     for (const s of api.stages) {
-      if (!s.rightAlign || s.plannedBatches <= 0) continue;
+      if (s.plannedBatches <= 0) continue;
+      const isSink = !consumed.has(s.id);
+      if (!s.rightAlign && !isSink) continue; // back-prop handles interior stages
+      if (hasFirstBatchPin(s) && !s.rightAlign) continue; // user-pinned start wins
       const bctMs = hoursToMs(
         typeof s.bctHours === "number" && s.bctHours > 0 ? s.bctHours : s.bcfHours
       );
@@ -349,6 +368,7 @@ export function runScheduler(
         const aStart = apiStartMs(api);
         for (const s of api.stages) {
           if (rightAlignStart.has(s.id) || s.plannedBatches <= 0) continue;
+          if (hasFirstBatchPin(s)) continue; // keep pinned start; don't right-align
           const succs = raSuccessors.get(s.id) ?? [];
           let minSuccFirst = Infinity;
           for (const sid of succs) {
