@@ -33,7 +33,7 @@ interface BookedSlot {
   campaignStartMs: number;
   /**
    * Earliest start for the NEXT same-campaign batch at the same stage on
-   * this reactor. Equals startMs + bcfMs (BCF = Batch Charging Frequency).
+   * this reactor. Equals startMs + cycleMs (reactor-free time).
    * Cross-campaign slots use cycleEndMs + pcoMs instead (PCO path).
    * Stored here so checkPredecessor doesn't need to recompute it.
    */
@@ -301,14 +301,14 @@ export function runScheduler(
   );
 
   // ─ Right-align pre-pass ──────────────────────────────────────────────────
-  // DEFAULT behaviour: every API's batches pack back-to-back at BCF anchored to
-  // the API window END (no quarter-boundary gaps) — BCF cadence alone provides
-  // the quarterly spread. The sink (final) stage anchors at:
-  //   firstStartMs = apiEnd − bctMs − (planned − 1) × bcfMs
-  // and that anchor back-propagates to every upstream predecessor so their last
-  // batch completes analysis exactly when the downstream stage's first batch
+  // DEFAULT behaviour: every API's sink stage(s) anchor back-to-back at the
+  // API window END — batches are packed with cycle-time (bctMs) spacing so
+  // analysis runs concurrently with the next batch and leaves no idle gaps:
+  //   firstStartMs = apiEnd − bctMs − (planned − 1) × bctMs  (back-to-back)
+  // That anchor back-propagates automatically to every upstream predecessor so
+  // their last batch completes analysis exactly when the downstream first batch
   // needs it. The quarterly soft-cap is disabled for all right-aligned stages
-  // (which is now essentially all of them) so it never re-injects gaps.
+  // (which is now essentially all of them) so it never re-injects quarter gaps.
   //
   // Opt-outs: a stage with an explicit `firstBatchStartMs` stays pinned
   // (left-aligned from that point) unless it ALSO carries an explicit
@@ -340,8 +340,7 @@ export function runScheduler(
       const bctMs = hoursToMs(
         typeof s.bctHours === "number" && s.bctHours > 0 ? s.bctHours : s.bcfHours
       );
-      const bcfMs = hoursToMs(s.bcfHours);
-      const derived = aEnd - bctMs - (s.plannedBatches - 1) * bcfMs;
+      const derived = aEnd - bctMs - (s.plannedBatches - 1) * bctMs;
       rightAlignStart.set(s.id, Math.max(aStart, derived));
     }
   }
@@ -379,10 +378,9 @@ export function runScheduler(
           const bctMs = hoursToMs(
             typeof s.bctHours === "number" && s.bctHours > 0 ? s.bctHours : s.bcfHours
           );
-          const bcfMs = hoursToMs(s.bcfHours);
           const analysisMs = hoursToMs(s.analysisHours);
           const lastStart = minSuccFirst - bctMs - analysisMs;
-          const derived = lastStart - (s.plannedBatches - 1) * bcfMs;
+          const derived = lastStart - (s.plannedBatches - 1) * bctMs;
           rightAlignStart.set(s.id, Math.max(aStart, derived));
           raChanged = true;
         }
@@ -413,11 +411,11 @@ export function runScheduler(
     a.stages.forEach((s) => stageQuarterlyBooked.set(s.id, [0, 0, 0, 0]))
   );
 
-  // BCF gate (cross-reactor): for each stage, the last booked batch's start.
+  // Cycle gate (cross-reactor): for each stage, the last booked batch's start.
   // The next batch of the same stage cannot start before
-  // `stageLastBatchStart + bcfMs`, regardless of which reactor it lands on.
-  // Tracked by stageId so we don't depend on reactor choice. -Infinity means
-  // no batch booked yet for this stage.
+  // `stageLastBatchStart + cycleMs` (reactor occupancy), regardless of which
+  // reactor it lands on. Analysis runs off-reactor and never blocks the next
+  // charge. -Infinity means no batch booked yet for this stage.
   const stageLastBatchStart = new Map<string, number>();
 
   /**
@@ -839,7 +837,7 @@ export function runScheduler(
         startMs,
         endMs: analysisEndMs,
         cycleEndMs,
-        nextSameCampaignStartMs: startMs + rt.bcfMs,
+        nextSameCampaignStartMs: startMs + rt.cycleMs,
         apiId: api.id,
         stageId: stage.id,
         pcoMs: rt.pcoMs,
@@ -910,7 +908,7 @@ export function runScheduler(
 
   const bcfGateOf = (rt: StageRT): number => {
     const prev = stageLastBatchStart.get(rt.stage.id);
-    return prev !== undefined ? prev + rt.bcfMs : -Infinity;
+    return prev !== undefined ? prev + rt.cycleMs : -Infinity;
   };
 
   // ─ Quarterly distribution (backward integration from API quantities) ───────
