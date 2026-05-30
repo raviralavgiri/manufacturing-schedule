@@ -320,23 +320,19 @@ export function runScheduler(
     typeof s.firstBatchStartMs === "number" &&
     Number.isFinite(s.firstBatchStartMs);
 
-  // Step 1: Seed each API's sink stage(s) — and any explicitly `rightAlign`
-  // stage — with the window-end anchor. A sink is a stage no other stage in
-  // the API consumes. Non-sink stages are handled by back-propagation (Step 3).
+  // Step 1: Seed explicitly `rightAlign: true` stages with the window-end
+  // anchor. Sink stages that are NOT explicitly right-aligned are left to the
+  // main scheduling loop (forward from apiStart) so they receive the quarterly
+  // soft-cap distribution (4-6 batches per quarter) instead of being packed at
+  // the window end. Non-sink, non-rightAlign stages are handled by
+  // back-propagation (Step 3) once their downstream anchor is known.
   for (const api of apisInOrder) {
     const aEnd = apiEndMs(api);
     const aStart = apiStartMs(api);
-    const consumed = new Set<string>();
-    api.stages.forEach((s) =>
-      (Array.isArray(s.inputStageIds) ? s.inputStageIds : []).forEach((id) =>
-        consumed.add(id)
-      )
-    );
     for (const s of api.stages) {
       if (s.plannedBatches <= 0) continue;
-      const isSink = !consumed.has(s.id);
-      if (!s.rightAlign && !isSink) continue; // back-prop handles interior stages
-      if (hasFirstBatchPin(s) && !s.rightAlign) continue; // user-pinned start wins
+      if (!s.rightAlign) continue; // only explicit rightAlign; sinks use quarterly spread
+      if (hasFirstBatchPin(s)) continue; // user-pinned start wins
       const bctMs = hoursToMs(
         typeof s.bctHours === "number" && s.bctHours > 0 ? s.bctHours : s.bcfHours
       );

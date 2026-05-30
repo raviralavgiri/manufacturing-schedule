@@ -497,9 +497,9 @@ export default function GanttTab() {
         <div className="max-h-[72vh] overflow-auto">
         <div className="flex" style={{ width: 200 + totalWeeks * pxPerWeek }}>
           {/* Left labels column — frozen on horizontal scroll */}
-          <div className="sticky left-0 z-20 w-[200px] shrink-0 border-r border-white/10 bg-ink-950">
+          <div className="sticky left-0 z-20 w-[200px] shrink-0 border-r border-white/15 bg-ink-900">
             {/* Header spacer — frozen on BOTH axes (corner) */}
-            <div className="sticky top-0 z-30 h-[60px] border-b border-white/10 bg-ink-950" />
+            <div className="sticky top-0 z-30 h-[60px] border-b border-white/10 bg-ink-900" />
             {/* Rows */}
             {mode === "by-stage" &&
               apis.map((a) => {
@@ -548,7 +548,7 @@ export default function GanttTab() {
                         <div
                           key={s.id}
                           style={{ height: rowH }}
-                          className="flex items-center border-b border-white/5 px-4 text-[11px] text-ink-200"
+                          className="flex items-center border-b border-white/5 bg-white/[0.03] px-4 text-[11px] text-ink-200"
                         >
                           <span className="text-ink-400">S{s.stageNo}</span>
                           <span className="ml-2 truncate">{s.stageName}</span>
