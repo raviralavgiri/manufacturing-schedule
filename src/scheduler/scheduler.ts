@@ -33,7 +33,8 @@ interface BookedSlot {
   campaignStartMs: number;
   /**
    * Earliest start for the NEXT same-campaign batch at the same stage on
-   * this reactor. Equals startMs + cycleMs (reactor-free time).
+   * this reactor. Equals startMs + BCF (may be before cycleEndMs when
+   * BCF < BCT — same-campaign batches then overlap on the reactor).
    * Cross-campaign slots use cycleEndMs + pcoMs instead (PCO path).
    * Stored here so checkPredecessor doesn't need to recompute it.
    */
@@ -340,7 +341,8 @@ export function runScheduler(
       const bctMs = hoursToMs(
         typeof s.bctHours === "number" && s.bctHours > 0 ? s.bctHours : s.bcfHours
       );
-      const derived = aEnd - bctMs - (s.plannedBatches - 1) * bctMs;
+      const derived =
+        aEnd - bctMs - (s.plannedBatches - 1) * hoursToMs(s.bcfHours);
       rightAlignStart.set(s.id, Math.max(aStart, derived));
     }
   }
@@ -380,7 +382,8 @@ export function runScheduler(
           );
           const analysisMs = hoursToMs(s.analysisHours);
           const lastStart = minSuccFirst - bctMs - analysisMs;
-          const derived = lastStart - (s.plannedBatches - 1) * bctMs;
+          const derived =
+            lastStart - (s.plannedBatches - 1) * hoursToMs(s.bcfHours);
           rightAlignStart.set(s.id, Math.max(aStart, derived));
           raChanged = true;
         }
@@ -413,9 +416,8 @@ export function runScheduler(
 
   // Cycle gate (cross-reactor): for each stage, the last booked batch's start.
   // The next batch of the same stage cannot start before
-  // `stageLastBatchStart + cycleMs` (reactor occupancy), regardless of which
-  // reactor it lands on. Analysis runs off-reactor and never blocks the next
-  // charge. -Infinity means no batch booked yet for this stage.
+  // `stageLastBatchStart + BCF`, regardless of which reactor it lands on.
+  // Analysis runs off-reactor and never blocks the next charge. -Infinity means no batch booked yet for this stage.
   const stageLastBatchStart = new Map<string, number>();
 
   /**
@@ -466,11 +468,10 @@ export function runScheduler(
       };
     }
     // Same campaign, within 30-day cap.
-    // Next start = max(BCF interval from previous start, reactor free time).
-    // The BCF constraint enforces the "start₁ + BCF = start₂" rule.
+    // Next start = previous start + BCF ("start₁ + BCF = start₂").
     return {
       kind: "none",
-      earliestStart: Math.max(t, pred.nextSameCampaignStartMs, pred.cycleEndMs),
+      earliestStart: Math.max(t, pred.nextSameCampaignStartMs),
     };
   }
 
@@ -492,20 +493,37 @@ export function runScheduler(
     const slots = reactorBookings.get(rid)!;
     const maintWins = reactorMaintWindows.get(rid) ?? [];
     let advance = t;
+    // True when a batch of the SAME campaign is still running on R at t —
+    // the new batch then simply continues that campaign (no cleaning).
+    let overlapsSameCampaign = false;
 
+    // Same-campaign batches are charged every BCF and may overlap on the
+    // reactor (BCF < BCT); they only need start spacing >= BCF. Any other
+    // campaign needs the reactor free, plus PCO before a later slot.
+    // Slots can overlap, so scan all of them (no early break).
     for (const slot of slots) {
       const sameCampaign =
         slot.apiId === newApiId && slot.stageId === newStageId;
       if (slot.cycleEndMs <= t) continue;
+      if (sameCampaign) {
+        const slotBcf = slot.nextSameCampaignStartMs - slot.startMs;
+        if (t >= slot.nextSameCampaignStartMs) {
+          if (slot.startMs < t + cycleMs) overlapsSameCampaign = true;
+          continue;
+        }
+        if (t + slotBcf <= slot.startMs) continue;
+        const retry = Math.max(slot.nextSameCampaignStartMs, t + 1);
+        if (retry > advance) advance = retry;
+        continue;
+      }
       if (slot.startMs >= t + cycleMs) {
-        const requiredEnd = slot.startMs - (sameCampaign ? 0 : slot.pcoMs);
+        const requiredEnd = slot.startMs - slot.pcoMs;
         if (t + cycleMs > requiredEnd && slot.cycleEndMs > advance)
           advance = slot.cycleEndMs;
-        break;
+        continue;
       }
-      // Slot overlaps [t, t+cycleMs)
+      // Different-campaign slot overlaps [t, t+cycleMs)
       if (slot.cycleEndMs > advance) advance = slot.cycleEndMs;
-      break;
     }
     if (advance > t) return { ok: false, kind: "none", nextTry: advance };
 
@@ -516,6 +534,8 @@ export function runScheduler(
       break;
     }
     if (advance > t) return { ok: false, kind: "none", nextTry: advance };
+
+    if (overlapsSameCampaign) return { ok: true, kind: "none", nextTry: t };
 
     const pred = checkPredecessor(slots, t, newApiId, newStageId, newPcoMs);
     if (pred.earliestStart > t)
@@ -634,6 +654,19 @@ export function runScheduler(
       newStartMs - pred.campaignStartMs <= CAMPAIGN_MAX_MS
     ) {
       return pred.campaignStartMs;
+    }
+    // A same-campaign batch still running on R (BCF < BCT overlap) carries
+    // the campaign clock forward too.
+    for (const slot of slots) {
+      if (
+        slot.apiId === newApiId &&
+        slot.stageId === newStageId &&
+        slot.startMs <= newStartMs &&
+        slot.cycleEndMs > newStartMs &&
+        newStartMs - slot.campaignStartMs <= CAMPAIGN_MAX_MS
+      ) {
+        return slot.campaignStartMs;
+      }
     }
     return newStartMs;
   }
@@ -823,7 +856,13 @@ export function runScheduler(
       // Defensive clash check per train reactor.
       for (const s of chosenSlots) {
         if (s.cycleEndMs <= startMs) continue;
-        if (s.startMs >= cycleEndMs) break;
+        if (s.startMs >= cycleEndMs) continue;
+        if (
+          s.apiId === api.id &&
+          s.stageId === stage.id &&
+          Math.abs(startMs - s.startMs) >= rt.bcfMs
+        )
+          continue; // same-campaign overlap at BCF cadence is allowed
         clash = true;
         break;
       }
@@ -837,7 +876,7 @@ export function runScheduler(
         startMs,
         endMs: analysisEndMs,
         cycleEndMs,
-        nextSameCampaignStartMs: startMs + rt.cycleMs,
+        nextSameCampaignStartMs: startMs + rt.bcfMs,
         apiId: api.id,
         stageId: stage.id,
         pcoMs: rt.pcoMs,
@@ -908,7 +947,10 @@ export function runScheduler(
 
   const bcfGateOf = (rt: StageRT): number => {
     const prev = stageLastBatchStart.get(rt.stage.id);
-    return prev !== undefined ? prev + rt.cycleMs : -Infinity;
+    // BCF cadence: start_n >= start_(n-1) + BCF. Reactor occupancy (BCT) is
+    // enforced separately by findTrainSlot, so this gate must use BCF — not
+    // the BCT slot length — or a BCF shorter than BCT is silently ignored.
+    return prev !== undefined ? prev + rt.bcfMs : -Infinity;
   };
 
   // ─ Quarterly distribution (backward integration from API quantities) ───────
