@@ -10,6 +10,10 @@ import {
   Filter,
   Activity,
   Tags,
+  Building2,
+  Factory,
+  ChevronsDownUp,
+  ChevronsUpDown,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useStore } from "../store";
@@ -26,7 +30,72 @@ import {
 import { computeWeeks, fmtDateTime } from "../utils/dates";
 import type { BatchScheduleEntry, Reactor } from "../types";
 
-type Mode = "by-api" | "by-stage" | "by-reactor";
+type Mode = "by-api" | "by-stage" | "by-reactor" | "by-block" | "by-cleanroom";
+
+/** Modes rendered from the unified grouped-row model (`groupRows`). */
+const GROUPED_MODES: ReadonlySet<Mode> = new Set<Mode>(["by-block", "by-cleanroom"]);
+const NO_BLOCK = "(no block)";
+const GROUP_ROW_H = 30;
+
+/** One line of a grouped Gantt: a collapsible group header or a bar row.
+ *  The label rail and the timeline body both render from the same list, so
+ *  they can never drift out of vertical alignment. */
+type GanttLine =
+  | {
+      kind: "group";
+      key: string;
+      depth: number;
+      label: string;
+      sub?: string;
+      color?: string;
+      /** All batches under the group — drawn as a summary strip. */
+      batches: BatchScheduleEntry[];
+      collapsed: boolean;
+    }
+  | {
+      kind: "row";
+      key: string;
+      depth: number;
+      label: string;
+      sub?: string;
+      color?: string;
+      batches: BatchScheduleEntry[];
+    };
+
+const natural = (a: string, b: string) =>
+  a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+
+/** Merge [start,end) spans so a summary strip draws one div per busy span. */
+function mergeSpans(batches: BatchScheduleEntry[]): [number, number][] {
+  const iv = batches
+    .map((b) => [b.startMs, b.endMs] as [number, number])
+    .sort((x, y) => x[0] - y[0]);
+  const out: [number, number][] = [];
+  for (const [a, b] of iv) {
+    const last = out[out.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
+
+/** Busy fraction of `reactorCount` reactors over [ws, we), from the batches
+ *  on those reactors (per-reactor merged so overlaps are not double counted). */
+function utilisation(
+  batches: BatchScheduleEntry[],
+  reactorIds: string[],
+  ws: number,
+  we: number
+): number {
+  if (reactorIds.length === 0 || we <= ws) return 0;
+  let busy = 0;
+  for (const rid of reactorIds) {
+    const mine = batches.filter((b) => b.reactorIds.includes(rid));
+    for (const [a, b] of mergeSpans(mine))
+      busy += Math.max(0, Math.min(b, we) - Math.max(a, ws));
+  }
+  return busy / (reactorIds.length * (we - ws));
+}
 
 export default function GanttTab() {
   const apisRaw = useStore((s) => s.apis);
@@ -115,11 +184,20 @@ export default function GanttTab() {
   const [stageFilter, setStageFilter] = useState<Set<string>>(new Set());
   const [reactorFilter, setReactorFilter] = useState<Set<string>>(new Set());
   const [typeFilter, setTypeFilter] = useState<Set<string>>(new Set());
+  const [blockFilter, setBlockFilter] = useState<Set<string>>(new Set());
   const anyFilterActive =
     apiFilter.size > 0 ||
     stageFilter.size > 0 ||
     reactorFilter.size > 0 ||
-    typeFilter.size > 0;
+    typeFilter.size > 0 ||
+    blockFilter.size > 0;
+
+  // reactorId → production block ("(no block)" when unset).
+  const blockOfReactor = useMemo(
+    () =>
+      new Map(reactors.map((r) => [r.id, r.productionBlock?.trim() || NO_BLOCK])),
+    [reactors]
+  );
 
   // stageId → IM/API classification (smart-defaulted).
   const stageKindById = useMemo(() => buildStageKindMap(apisRaw), [apisRaw]);
@@ -140,6 +218,11 @@ export default function GanttTab() {
         !typeFilter.has(stageKindById.get(b.stageId) ?? "")
       )
         return false;
+      if (
+        blockFilter.size > 0 &&
+        !b.reactorIds.some((rid) => blockFilter.has(blockOfReactor.get(rid) ?? NO_BLOCK))
+      )
+        return false;
       return true;
     });
   }, [
@@ -148,9 +231,24 @@ export default function GanttTab() {
     stageFilter,
     reactorFilter,
     typeFilter,
+    blockFilter,
+    blockOfReactor,
     stageKindById,
     anyFilterActive,
   ]);
+
+  const blockOptions: MsOption[] = useMemo(() => {
+    const names = Array.from(new Set(blockOfReactor.values())).sort(natural);
+    return names.map((n) => {
+      const rs = reactors.filter((r) => blockOfReactor.get(r.id) === n);
+      const cl = rs.filter((r) => r.reactorClass === "CL").length;
+      return {
+        value: n,
+        label: n,
+        secondary: `${rs.length} reactor${rs.length === 1 ? "" : "s"}${cl ? ` · ${cl} CL` : ""}`,
+      };
+    });
+  }, [blockOfReactor, reactors]);
 
   // Build filter option lists
   const apiOptions: MsOption[] = useMemo(
@@ -243,6 +341,8 @@ export default function GanttTab() {
       moc?: Reactor["moc"];
     }[] = [];
 
+    if (GROUPED_MODES.has(mode)) return out;
+
     if (mode === "by-reactor") {
       reactors.forEach((r) => {
         out.push({
@@ -282,7 +382,9 @@ export default function GanttTab() {
   );
   const fyStartMs = weeks.length > 0 ? weeks[0].startMs : Date.now();
   const totalWeeks = weeks.length;
-  const rowH = mode === "by-api" ? 40 : mode === "by-reactor" ? 30 : 28;
+  const rowH =
+    mode === "by-api" ? 40 : mode === "by-reactor" || GROUPED_MODES.has(mode) ? 30 : 28;
+  const isGrouped = GROUPED_MODES.has(mode);
 
   // For collapse: by API
   const apiCollapsed = (apiId: string) => collapsed.has(apiId);
@@ -308,6 +410,189 @@ export default function GanttTab() {
     return result;
   }, [rows, mode, collapsed, anyFilterActive, grouped]);
 
+  // ─ Grouped modes ────────────────────────────────────────────────────────
+  //   by-block      Production block ▸ reactor rows
+  //   by-cleanroom  Cleanroom ▸ product (API) ▸ stage rows
+  // A cleanroom is a production block holding Cleanroom (class "CL")
+  // reactors; when no reactor is classed CL every block is treated as one.
+  const hasClReactors = reactors.some((r) => r.reactorClass === "CL");
+  const groupRows = useMemo<GanttLine[]>(() => {
+    if (!isGrouped) return [];
+    const out: GanttLine[] = [];
+    const ws = planWindow.startMs;
+    const we = planWindow.endMs;
+    const hideEmpty = anyFilterActive;
+
+    // Batches per reactor (reactor filter narrows the fan-out, as By Reactor).
+    const byReactor = new Map<string, BatchScheduleEntry[]>();
+    filteredBatches.forEach((b) =>
+      b.reactorIds.forEach((rid) => {
+        if (reactorFilter.size > 0 && !reactorFilter.has(rid)) return;
+        const arr = byReactor.get(rid);
+        if (arr) arr.push(b);
+        else byReactor.set(rid, [b]);
+      })
+    );
+    const pool =
+      mode === "by-cleanroom" && hasClReactors
+        ? reactors.filter((r) => r.reactorClass === "CL")
+        : reactors;
+    const blocks = new Map<string, Reactor[]>();
+    pool.forEach((r) => {
+      const n = blockOfReactor.get(r.id) ?? NO_BLOCK;
+      if (blockFilter.size > 0 && !blockFilter.has(n)) return;
+      const arr = blocks.get(n);
+      if (arr) arr.push(r);
+      else blocks.set(n, [r]);
+    });
+    const blockNames = Array.from(blocks.keys()).sort((a, b) =>
+      a === NO_BLOCK ? 1 : b === NO_BLOCK ? -1 : natural(a, b)
+    );
+    const apiIndex = new Map(apis.map((a, i) => [a.id, i]));
+
+    for (const name of blockNames) {
+      const rs = [...blocks.get(name)!].sort((a, b) => natural(a.name, b.name));
+      const ids = rs.map((r) => r.id);
+      const seen = new Set<string>();
+      const groupBatches: BatchScheduleEntry[] = [];
+      ids.forEach((rid) =>
+        (byReactor.get(rid) ?? []).forEach((b) => {
+          // batchId repeats across APIs (e.g. "FinalAPI#001"), so de-dupe a
+          // multi-reactor train batch on API + stage + batch number.
+          const k = `${b.apiId}|${b.stageId}|${b.batchNo}`;
+          if (seen.has(k)) return;
+          seen.add(k);
+          groupBatches.push(b);
+        })
+      );
+      if (hideEmpty && groupBatches.length === 0) continue;
+      const apiCount = new Set(groupBatches.map((b) => b.apiId)).size;
+      const util = utilisation(groupBatches, ids, ws, we);
+      const gKey = `${mode}:${name}`;
+      const isCollapsed = collapsed.has(gKey);
+      out.push({
+        kind: "group",
+        key: gKey,
+        depth: 0,
+        label: name,
+        sub: `${rs.length} reactor${rs.length === 1 ? "" : "s"} · ${apiCount} API${apiCount === 1 ? "" : "s"} · ${Math.round(util * 100)}%`,
+        batches: groupBatches,
+        collapsed: isCollapsed,
+      });
+      if (isCollapsed) continue;
+
+      if (mode === "by-block") {
+        for (const r of rs) {
+          const bs = byReactor.get(r.id) ?? [];
+          if (hideEmpty && bs.length === 0) continue;
+          out.push({
+            kind: "row",
+            key: `${gKey}:${r.id}`,
+            depth: 1,
+            label: r.name,
+            sub: `${r.reactorClass ?? ""} ${r.moc}`.trim(),
+            color: classColor(r.moc),
+            batches: bs,
+          });
+        }
+        continue;
+      }
+
+      // by-cleanroom: product (API) ▸ stage
+      const byApi = new Map<string, BatchScheduleEntry[]>();
+      groupBatches.forEach((b) => {
+        const arr = byApi.get(b.apiId);
+        if (arr) arr.push(b);
+        else byApi.set(b.apiId, [b]);
+      });
+      const apiIds = Array.from(byApi.keys()).sort(
+        (a, b) => (apiIndex.get(a) ?? 0) - (apiIndex.get(b) ?? 0)
+      );
+      for (const apiId of apiIds) {
+        const bs = byApi.get(apiId)!;
+        const api = apis.find((a) => a.id === apiId);
+        const color = apiColorById.get(apiId) ?? bs[0].apiColor;
+        const pKey = `${gKey}:${apiId}`;
+        const pCollapsed = collapsed.has(pKey);
+        const byStage = new Map<string, BatchScheduleEntry[]>();
+        bs.forEach((b) => {
+          const arr = byStage.get(b.stageId);
+          if (arr) arr.push(b);
+          else byStage.set(b.stageId, [b]);
+        });
+        out.push({
+          kind: "group",
+          key: pKey,
+          depth: 1,
+          label: api?.name ?? bs[0].apiName,
+          sub: `${bs.length} batch${bs.length === 1 ? "" : "es"} · ${byStage.size} stage${byStage.size === 1 ? "" : "s"}`,
+          color,
+          batches: bs,
+          collapsed: pCollapsed,
+        });
+        if (pCollapsed) continue;
+        const stageEntries = Array.from(byStage.entries()).sort(
+          (x, y) => x[1][0].stageNo - y[1][0].stageNo
+        );
+        for (const [stageId, sbs] of stageEntries) {
+          const used = Array.from(
+            new Set(sbs.flatMap((b) => b.reactorIds).filter((id) => ids.includes(id)))
+          )
+            .map((id) => reactors.find((r) => r.id === id)?.name ?? id)
+            .sort(natural);
+          out.push({
+            kind: "row",
+            key: `${pKey}:${stageId}`,
+            depth: 2,
+            label: `S${sbs[0].stageNo} · ${sbs[0].stageName}`,
+            sub: used.join(" + "),
+            color,
+            batches: sbs,
+          });
+        }
+      }
+    }
+    return out;
+  }, [
+    isGrouped,
+    mode,
+    filteredBatches,
+    reactorFilter,
+    blockFilter,
+    reactors,
+    hasClReactors,
+    blockOfReactor,
+    apis,
+    apiColorById,
+    collapsed,
+    anyFilterActive,
+    planWindow,
+  ]);
+
+  const groupKeys = useMemo(() => {
+    // Every collapsible key for the current mode, independent of the
+    // current collapse state (so "collapse all" also catches nested groups).
+    if (!isGrouped) return [] as string[];
+    const keys: string[] = [];
+    const names = new Set<string>();
+    reactors.forEach((r) => {
+      if (mode === "by-cleanroom" && hasClReactors && r.reactorClass !== "CL") return;
+      names.add(blockOfReactor.get(r.id) ?? NO_BLOCK);
+    });
+    names.forEach((n) => {
+      keys.push(`${mode}:${n}`);
+      if (mode === "by-cleanroom") apis.forEach((a) => keys.push(`${mode}:${n}:${a.id}`));
+    });
+    return keys;
+  }, [isGrouped, mode, reactors, hasClReactors, blockOfReactor, apis]);
+
+  const toggleKey = (key: string) => {
+    const c = new Set(collapsed);
+    if (c.has(key)) c.delete(key);
+    else c.add(key);
+    setCollapsed(c);
+  };
+
   // Determine quarter band positions
   const quarterBands = useMemo(() => {
     const bands: { qStart: number; qEnd: number; label: string }[] = [];
@@ -332,6 +617,235 @@ export default function GanttTab() {
     return bands;
   }, [weeks]);
 
+  // Renders one batch bar (cleaning pre-tail, wait, process, analysis tail,
+  // hover tooltip). Shared by every Gantt mode.
+  const renderBar = (b: BatchScheduleEntry, rowH: number) => {
+                        const startWk = (b.startMs - fyStartMs) / (7 * 24 * 3600 * 1000);
+                        const cycleEndWk = (b.endMs - fyStartMs) / (7 * 24 * 3600 * 1000);
+                        const analysisEndWk =
+                          (b.analysisEndMs - fyStartMs) / (7 * 24 * 3600 * 1000);
+                        const left = Math.max(0, startWk * pxPerWeek);
+                        const cycleWidth = Math.max(
+                          2,
+                          (cycleEndWk - startWk) * pxPerWeek
+                        );
+                        const tailWidth = Math.max(
+                          0,
+                          (analysisEndWk - cycleEndWk) * pxPerWeek
+                        );
+                        // Split the slot into leading WAIT (faded) + trailing
+                        // PROCESS (solid). Wait fraction = (bct − process)/bct.
+                        // Falls back to "no wait" when stage info is missing.
+                        const slotInfo = stageSlotByStageId.get(b.stageId);
+                        const waitFrac =
+                          slotInfo && slotInfo.bctHours > 0
+                            ? Math.max(
+                                0,
+                                Math.min(
+                                  1,
+                                  (slotInfo.bctHours -
+                                    slotInfo.processHours) /
+                                    slotInfo.bctHours
+                                )
+                              )
+                            : 0;
+                        const waitWidth = cycleWidth * waitFrac;
+                        const processWidth = Math.max(
+                          0,
+                          cycleWidth - waitWidth
+                        );
+                        // Cleaning gap rendered BEFORE the bar — dark red for
+                        // PCO, dark teal for the 30-day campaign cleaning.
+                        // `cleaningBeforeMs` lives on each batch; the block
+                        // visually fills the gap from this batch's predecessor
+                        // on its train to this batch's start.
+                        const cleaningHrs =
+                          (b.cleaningBeforeMs ?? 0) / (3600 * 1000);
+                        const cleaningWidth = Math.max(
+                          0,
+                          (cleaningHrs / (7 * 24)) * pxPerWeek
+                        );
+                        const cleanType = b.cleaningType ?? "none";
+                        const cleanColor =
+                          cleanType === "campaign"
+                            ? "#0d9488" // teal-600 — campaign cleaning
+                            : cleanType === "pco"
+                            ? "#dc2626" // red-600 — PCO
+                            : null;
+                        if (startWk >= totalWeeks) return null;
+                        const barH = rowH - 6;
+
+                        // Live color lookup - guarantees the bar uses the
+                        // CURRENT api.color, never a stale snapshot from when
+                        // the schedule was last computed.
+                        const barColor =
+                          apiColorById.get(b.apiId) ?? b.apiColor;
+                        return (
+                          <div
+                            key={`${b.apiId}|${b.stageId}|${b.batchNo}`}
+                            className="group absolute top-1/2 -translate-y-1/2"
+                            style={{ left: Math.max(0, left - cleaningWidth) }}
+                            title={`${b.batchId} · ${b.reactorId}\n${new Date(
+                              b.startMs
+                            ).toDateString()} → ${new Date(
+                              b.analysisEndMs
+                            ).toDateString()}`}
+                          >
+                            <div className="flex items-center">
+                              {cleanColor && cleaningWidth > 1 && (
+                                <div
+                                  style={{
+                                    width: cleaningWidth,
+                                    height: barH,
+                                    background: `repeating-linear-gradient(135deg, ${cleanColor}cc 0 4px, ${cleanColor}55 4px 8px)`,
+                                    border: `1px solid ${cleanColor}`,
+                                    borderRight: "none",
+                                  }}
+                                  className="rounded-l-sm"
+                                  title={
+                                    cleanType === "campaign"
+                                      ? `Campaign cleaning · ${cleaningHrs.toFixed(1)}h`
+                                      : `PCO cleaning · ${cleaningHrs.toFixed(1)}h`
+                                  }
+                                />
+                              )}
+                              {waitWidth > 1 ? (
+                                <>
+                                  <div
+                                    style={{
+                                      width: waitWidth,
+                                      height: barH,
+                                      background: `repeating-linear-gradient(45deg, ${barColor}33 0 6px, ${barColor}1a 6px 12px)`,
+                                      border: `1px dashed ${barColor}80`,
+                                      borderRight: "none",
+                                    }}
+                                    className={clsx(
+                                      "transition-all group-hover:brightness-125",
+                                      cleanColor && cleaningWidth > 1
+                                        ? ""
+                                        : "rounded-l-sm"
+                                    )}
+                                    title={`Wait · ${(
+                                      ((slotInfo?.bctHours ?? 0) -
+                                        (slotInfo?.processHours ?? 0))
+                                    ).toFixed(1)}h (slot−process)`}
+                                  />
+                                  <div
+                                    style={{
+                                      width: processWidth,
+                                      height: barH,
+                                      background: barColor,
+                                      boxShadow: `0 0 6px ${barColor}99, inset 0 1px 0 rgba(255,255,255,0.25)`,
+                                    }}
+                                    className="relative border border-white/20 transition-all group-hover:brightness-125 group-hover:saturate-150"
+                                  >
+                                    {processWidth > 36 && (
+                                      <span className="pointer-events-none absolute inset-0 flex items-center overflow-hidden px-1.5">
+                                        <span
+                                          className="truncate font-mono text-[10px] font-bold leading-none tracking-tight text-sky-200"
+                                          style={{ textShadow: "0 1px 3px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.7)" }}
+                                        >
+                                          {b.batchId}
+                                        </span>
+                                      </span>
+                                    )}
+                                  </div>
+                                </>
+                              ) : (
+                                <div
+                                  style={{
+                                    width: cycleWidth,
+                                    height: barH,
+                                    background: barColor,
+                                    boxShadow: `0 0 6px ${barColor}99, inset 0 1px 0 rgba(255,255,255,0.25)`,
+                                  }}
+                                  className={clsx(
+                                    "relative border border-white/20 transition-all group-hover:brightness-125 group-hover:saturate-150",
+                                    cleanColor && cleaningWidth > 1
+                                      ? ""
+                                      : "rounded-l-sm"
+                                  )}
+                                >
+                                  {cycleWidth > 36 && (
+                                    <span className="pointer-events-none absolute inset-0 flex items-center overflow-hidden px-1.5">
+                                      <span
+                                        className="truncate font-mono text-[10px] font-bold leading-none tracking-tight text-sky-200"
+                                        style={{ textShadow: "0 1px 3px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.7)" }}
+                                      >
+                                        {b.batchId}
+                                      </span>
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                              {tailWidth > 1 && (
+                                <div
+                                  style={{
+                                    width: tailWidth,
+                                    height: barH,
+                                    background: `linear-gradient(90deg, ${barColor}88, ${barColor}22)`,
+                                    border: `1px dashed ${barColor}80`,
+                                    borderLeft: "none",
+                                  }}
+                                  className="rounded-r-sm opacity-80"
+                                />
+                              )}
+                            </div>
+                            {/* Tooltip on hover */}
+                            <div className="pointer-events-none absolute bottom-full left-0 z-30 mb-1 hidden whitespace-nowrap rounded-md border border-white/15 bg-ink-950/95 px-2 py-1.5 text-[10px] text-white shadow-xl group-hover:block">
+                              <div className="font-bold">{b.apiName}</div>
+                              <div className="text-ink-300">
+                                {b.batchId} · S{b.stageNo} · #{b.batchNo}
+                              </div>
+                              <div className="text-ink-300">
+                                Reactor:{" "}
+                                {b.reactorIds
+                                  .map(
+                                    (id) =>
+                                      reactors.find((x) => x.id === id)?.name ??
+                                      id
+                                  )
+                                  .join(" + ")}
+                              </div>
+                              <div className="text-ink-300">
+                                Start: {new Date(b.startMs).toLocaleString()}
+                              </div>
+                              <div className="text-ink-300">
+                                Cycle End: {new Date(b.endMs).toLocaleString()}
+                              </div>
+                              <div className="text-ink-300">
+                                Analysis End:{" "}
+                                {new Date(b.analysisEndMs).toLocaleString()}
+                              </div>
+                              {(b.cleaningType ?? "none") !== "none" && (
+                                <div
+                                  className={clsx(
+                                    "text-[10px]",
+                                    b.cleaningType === "campaign"
+                                      ? "text-lime-300"
+                                      : "text-amber-300"
+                                  )}
+                                >
+                                  {b.cleaningType === "campaign"
+                                    ? "Campaign cleaning"
+                                    : "PCO cleaning"}{" "}
+                                  before:{" "}
+                                  {(b.cleaningBeforeMs / 3600 / 1000).toFixed(1)}h
+                                </div>
+                              )}
+                              <div
+                                className={clsx(
+                                  "mt-0.5 font-bold",
+                                  b.inFY ? "text-lime-300" : "text-amber-300"
+                                )}
+                              >
+                                {b.inFY ? "Within FY" : "Overflow"}
+                              </div>
+                            </div>
+                          </div>
+                        );
+  };
+
   return (
     <div className="space-y-4">
       <SectionHeader
@@ -341,6 +855,12 @@ export default function GanttTab() {
             ? `Showing ${filteredBatches.length} of ${schedule.batches.length} batches (filters active)`
             : mode === "by-api"
             ? "By API — final (product) stage only. Solid bar = process; cyan tail = analysis."
+            : mode === "by-block"
+            ? "Production block ▸ reactor. Click a block to collapse it to its occupancy strip; header shows reactors · APIs · utilisation over the plan window."
+            : mode === "by-cleanroom"
+            ? hasClReactors
+              ? "Cleanroom ▸ product ▸ stage — Cleanroom (CL) reactors only, grouped by production block. Collapse a cleanroom or product to see its occupancy strip."
+              : "Cleanroom ▸ product ▸ stage — no reactor is classed CL, so every production block is shown as a cleanroom."
             : "Solid bar = process; striped bar = wait inside slot. Cyan tail = analysis, yellow pre-tail = PCO, green pre-tail = 30-day campaign cleaning."
         }
         right={
@@ -379,7 +899,61 @@ export default function GanttTab() {
               >
                 <Beaker size={11} className="mr-1 inline" /> By Reactor
               </button>
+              <button
+                onClick={() => setMode("by-block")}
+                title="Production block ▸ reactors. Block header = block occupancy strip + utilisation."
+                className={clsx(
+                  "rounded-md px-3 py-1 font-semibold transition",
+                  mode === "by-block"
+                    ? "bg-cyan-300/20 text-cyan-200 shadow-glow"
+                    : "text-ink-300 hover:text-white"
+                )}
+              >
+                <Building2 size={11} className="mr-1 inline" /> By Block
+              </button>
+              <button
+                onClick={() => setMode("by-cleanroom")}
+                title="Cleanroom ▸ product (API) ▸ stage — which products run in each cleanroom, and when."
+                className={clsx(
+                  "rounded-md px-3 py-1 font-semibold transition",
+                  mode === "by-cleanroom"
+                    ? "bg-cyan-300/20 text-cyan-200 shadow-glow"
+                    : "text-ink-300 hover:text-white"
+                )}
+              >
+                <Factory size={11} className="mr-1 inline" /> Cleanroom · Product
+              </button>
             </div>
+            {isGrouped && (
+              <div className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 p-1">
+                <button
+                  onClick={() => {
+                    const c = new Set(collapsed);
+                    groupKeys.forEach((k) => c.delete(k));
+                    setCollapsed(c);
+                  }}
+                  className="rounded-md p-1.5 text-ink-300 hover:bg-white/10 hover:text-white"
+                  title="Expand all groups"
+                >
+                  <ChevronsUpDown size={13} />
+                </button>
+                <button
+                  onClick={() => {
+                    const c = new Set(collapsed);
+                    // Collapse only the top level so one click gives a
+                    // block / cleanroom overview with summary strips.
+                    groupKeys
+                      .filter((k) => k.split(":").length === 2)
+                      .forEach((k) => c.add(k));
+                    setCollapsed(c);
+                  }}
+                  className="rounded-md p-1.5 text-ink-300 hover:bg-white/10 hover:text-white"
+                  title="Collapse all to block / cleanroom overview"
+                >
+                  <ChevronsDownUp size={13} />
+                </button>
+              </div>
+            )}
             {/* Quick-zoom presets */}
             <div className="inline-flex rounded-lg border border-white/10 bg-white/5 p-1 text-[10px]">
               {(
@@ -464,6 +1038,14 @@ export default function GanttTab() {
           width={260}
         />
         <MultiSelectPopover
+          label="Blocks"
+          icon={<Building2 size={12} />}
+          options={blockOptions}
+          selected={blockFilter}
+          onChange={setBlockFilter}
+          width={260}
+        />
+        <MultiSelectPopover
           label="Type"
           icon={<Tags size={12} />}
           options={typeOptions}
@@ -479,6 +1061,7 @@ export default function GanttTab() {
             setStageFilter(new Set());
             setReactorFilter(new Set());
             setTypeFilter(new Set());
+            setBlockFilter(new Set());
           }}
         />
         {anyFilterActive && (
@@ -501,6 +1084,72 @@ export default function GanttTab() {
             {/* Header spacer — frozen on BOTH axes (corner) */}
             <div className="sticky top-0 z-30 h-[60px] border-b border-white/10 bg-ink-950" />
             {/* Rows */}
+            {isGrouped && groupRows.length === 0 && (
+              <div className="px-3 py-6 text-[11px] text-ink-400">
+                {reactors.length === 0
+                  ? "No reactors defined."
+                  : "Nothing to show — set production blocks on the Equipment tab, or clear the filters."}
+              </div>
+            )}
+            {isGrouped &&
+              groupRows.map((line) =>
+                line.kind === "group" ? (
+                  <button
+                    key={line.key}
+                    onClick={() => toggleKey(line.key)}
+                    style={{ height: GROUP_ROW_H, paddingLeft: 8 + line.depth * 12 }}
+                    className={clsx(
+                      "flex w-full items-center gap-1.5 border-b border-white/5 pr-2 text-left text-xs font-bold text-white hover:bg-white/[0.06]",
+                      line.depth === 0 ? "bg-white/[0.04]" : "bg-white/[0.02]"
+                    )}
+                    title={`${line.label} · ${line.sub ?? ""}`}
+                  >
+                    {line.collapsed ? (
+                      <ChevronRight size={12} className="shrink-0 text-ink-400" />
+                    ) : (
+                      <ChevronDown size={12} className="shrink-0 text-ink-400" />
+                    )}
+                    {line.depth === 0 ? (
+                      mode === "by-block" ? (
+                        <Building2 size={12} className="shrink-0 text-violet-300" />
+                      ) : (
+                        <Factory size={12} className="shrink-0 text-violet-300" />
+                      )
+                    ) : (
+                      <span
+                        className="h-2.5 w-2.5 shrink-0 rounded-full"
+                        style={{ background: line.color, boxShadow: `0 0 8px ${line.color}80` }}
+                      />
+                    )}
+                    <span className="truncate">{line.label}</span>
+                    {line.sub && (
+                      <span className="ml-auto shrink-0 truncate pl-1 text-[9px] font-normal text-ink-400">
+                        {line.depth === 0 ? line.sub.split(" · ").slice(-1)[0] : line.batches.length}
+                      </span>
+                    )}
+                  </button>
+                ) : (
+                  <div
+                    key={line.key}
+                    style={{ height: rowH, paddingLeft: 10 + line.depth * 12 }}
+                    className="flex items-center gap-1.5 border-b border-white/5 pr-2 text-[11px] text-ink-200"
+                    title={`${line.label}${line.sub ? ` · ${line.sub}` : ""}`}
+                  >
+                    {mode === "by-block" && (
+                      <span
+                        className="inline-block h-2 w-2 shrink-0 rounded-sm"
+                        style={{ background: line.color, boxShadow: `0 0 6px ${line.color}80` }}
+                      />
+                    )}
+                    <span className="truncate font-semibold text-white">{line.label}</span>
+                    {line.sub && (
+                      <span className="ml-auto shrink-0 truncate pl-1 text-[9px] uppercase text-ink-400">
+                        {line.sub}
+                      </span>
+                    )}
+                  </div>
+                )
+              )}
             {mode === "by-stage" &&
               apis.map((a) => {
                 if (anyFilterActive) {
@@ -755,6 +1404,60 @@ export default function GanttTab() {
 
               {/* Body grid + bars */}
               <div className="relative">
+                {/* Grouped modes: one body line per rail line (same heights). */}
+                {isGrouped &&
+                  groupRows.map((line, idx) => {
+                    const h = line.kind === "group" ? GROUP_ROW_H : rowH;
+                    const toX = (ms: number) =>
+                      ((ms - fyStartMs) / (7 * 24 * 3600 * 1000)) * pxPerWeek;
+                    return (
+                      <div
+                        key={line.key}
+                        style={{ height: h }}
+                        className={clsx(
+                          "relative border-b border-white/5",
+                          line.kind === "group"
+                            ? line.depth === 0
+                              ? "bg-white/[0.04]"
+                              : "bg-white/[0.02]"
+                            : idx % 2 === 0
+                            ? "bg-white/[0.005]"
+                            : "bg-white/[0.015]"
+                        )}
+                      >
+                        {weeks.map((_, i) =>
+                          i % 4 === 0 ? (
+                            <div
+                              key={i}
+                              style={{ left: i * pxPerWeek }}
+                              className="absolute top-0 h-full border-l border-white/10"
+                            />
+                          ) : null
+                        )}
+                        {line.kind === "row"
+                          ? line.batches.map((b) => renderBar(b, rowH))
+                          : mergeSpans(line.batches).map(([a, b]) => {
+                              const left = Math.max(0, toX(a));
+                              const width = Math.max(2, toX(b) - left);
+                              const c = line.color ?? "#a78bfa";
+                              return (
+                                <div
+                                  key={a}
+                                  className="absolute top-1/2 -translate-y-1/2 rounded-sm"
+                                  style={{
+                                    left,
+                                    width,
+                                    height: line.collapsed ? 12 : 6,
+                                    background: line.collapsed ? `${c}aa` : `${c}55`,
+                                    border: `1px solid ${c}`,
+                                  }}
+                                  title={`${line.label} busy ${new Date(a).toDateString()} → ${new Date(b).toDateString()}`}
+                                />
+                              );
+                            })}
+                      </div>
+                    );
+                  })}
                 {/* Row backgrounds with vertical week guides */}
                 {visibleRows.map((row, idx) => {
                   const batches = grouped.get(row.key) || [];
@@ -798,232 +1501,7 @@ export default function GanttTab() {
                         />
                       ))}
                       {/* Bars */}
-                      {batches.map((b) => {
-                        const startWk = (b.startMs - fyStartMs) / (7 * 24 * 3600 * 1000);
-                        const cycleEndWk = (b.endMs - fyStartMs) / (7 * 24 * 3600 * 1000);
-                        const analysisEndWk =
-                          (b.analysisEndMs - fyStartMs) / (7 * 24 * 3600 * 1000);
-                        const left = Math.max(0, startWk * pxPerWeek);
-                        const cycleWidth = Math.max(
-                          2,
-                          (cycleEndWk - startWk) * pxPerWeek
-                        );
-                        const tailWidth = Math.max(
-                          0,
-                          (analysisEndWk - cycleEndWk) * pxPerWeek
-                        );
-                        // Split the slot into leading WAIT (faded) + trailing
-                        // PROCESS (solid). Wait fraction = (bct − process)/bct.
-                        // Falls back to "no wait" when stage info is missing.
-                        const slotInfo = stageSlotByStageId.get(b.stageId);
-                        const waitFrac =
-                          slotInfo && slotInfo.bctHours > 0
-                            ? Math.max(
-                                0,
-                                Math.min(
-                                  1,
-                                  (slotInfo.bctHours -
-                                    slotInfo.processHours) /
-                                    slotInfo.bctHours
-                                )
-                              )
-                            : 0;
-                        const waitWidth = cycleWidth * waitFrac;
-                        const processWidth = Math.max(
-                          0,
-                          cycleWidth - waitWidth
-                        );
-                        // Cleaning gap rendered BEFORE the bar — dark red for
-                        // PCO, dark teal for the 30-day campaign cleaning.
-                        // `cleaningBeforeMs` lives on each batch; the block
-                        // visually fills the gap from this batch's predecessor
-                        // on its train to this batch's start.
-                        const cleaningHrs =
-                          (b.cleaningBeforeMs ?? 0) / (3600 * 1000);
-                        const cleaningWidth = Math.max(
-                          0,
-                          (cleaningHrs / (7 * 24)) * pxPerWeek
-                        );
-                        const cleanType = b.cleaningType ?? "none";
-                        const cleanColor =
-                          cleanType === "campaign"
-                            ? "#0d9488" // teal-600 — campaign cleaning
-                            : cleanType === "pco"
-                            ? "#dc2626" // red-600 — PCO
-                            : null;
-                        if (startWk >= totalWeeks) return null;
-                        const barH = rowH - 6;
-
-                        // Live color lookup - guarantees the bar uses the
-                        // CURRENT api.color, never a stale snapshot from when
-                        // the schedule was last computed.
-                        const barColor =
-                          apiColorById.get(b.apiId) ?? b.apiColor;
-                        return (
-                          <div
-                            key={b.batchId}
-                            className="group absolute top-1/2 -translate-y-1/2"
-                            style={{ left: Math.max(0, left - cleaningWidth) }}
-                            title={`${b.batchId} · ${b.reactorId}\n${new Date(
-                              b.startMs
-                            ).toDateString()} → ${new Date(
-                              b.analysisEndMs
-                            ).toDateString()}`}
-                          >
-                            <div className="flex items-center">
-                              {cleanColor && cleaningWidth > 1 && (
-                                <div
-                                  style={{
-                                    width: cleaningWidth,
-                                    height: barH,
-                                    background: `repeating-linear-gradient(135deg, ${cleanColor}cc 0 4px, ${cleanColor}55 4px 8px)`,
-                                    border: `1px solid ${cleanColor}`,
-                                    borderRight: "none",
-                                  }}
-                                  className="rounded-l-sm"
-                                  title={
-                                    cleanType === "campaign"
-                                      ? `Campaign cleaning · ${cleaningHrs.toFixed(1)}h`
-                                      : `PCO cleaning · ${cleaningHrs.toFixed(1)}h`
-                                  }
-                                />
-                              )}
-                              {waitWidth > 1 ? (
-                                <>
-                                  <div
-                                    style={{
-                                      width: waitWidth,
-                                      height: barH,
-                                      background: `repeating-linear-gradient(45deg, ${barColor}33 0 6px, ${barColor}1a 6px 12px)`,
-                                      border: `1px dashed ${barColor}80`,
-                                      borderRight: "none",
-                                    }}
-                                    className={clsx(
-                                      "transition-all group-hover:brightness-125",
-                                      cleanColor && cleaningWidth > 1
-                                        ? ""
-                                        : "rounded-l-sm"
-                                    )}
-                                    title={`Wait · ${(
-                                      ((slotInfo?.bctHours ?? 0) -
-                                        (slotInfo?.processHours ?? 0))
-                                    ).toFixed(1)}h (slot−process)`}
-                                  />
-                                  <div
-                                    style={{
-                                      width: processWidth,
-                                      height: barH,
-                                      background: barColor,
-                                      boxShadow: `0 0 6px ${barColor}99, inset 0 1px 0 rgba(255,255,255,0.25)`,
-                                    }}
-                                    className="relative border border-white/20 transition-all group-hover:brightness-125 group-hover:saturate-150"
-                                  >
-                                    {processWidth > 36 && (
-                                      <span className="pointer-events-none absolute inset-0 flex items-center overflow-hidden px-1.5">
-                                        <span
-                                          className="truncate font-mono text-[10px] font-bold leading-none tracking-tight text-sky-200"
-                                          style={{ textShadow: "0 1px 3px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.7)" }}
-                                        >
-                                          {b.batchId}
-                                        </span>
-                                      </span>
-                                    )}
-                                  </div>
-                                </>
-                              ) : (
-                                <div
-                                  style={{
-                                    width: cycleWidth,
-                                    height: barH,
-                                    background: barColor,
-                                    boxShadow: `0 0 6px ${barColor}99, inset 0 1px 0 rgba(255,255,255,0.25)`,
-                                  }}
-                                  className={clsx(
-                                    "relative border border-white/20 transition-all group-hover:brightness-125 group-hover:saturate-150",
-                                    cleanColor && cleaningWidth > 1
-                                      ? ""
-                                      : "rounded-l-sm"
-                                  )}
-                                >
-                                  {cycleWidth > 36 && (
-                                    <span className="pointer-events-none absolute inset-0 flex items-center overflow-hidden px-1.5">
-                                      <span
-                                        className="truncate font-mono text-[10px] font-bold leading-none tracking-tight text-sky-200"
-                                        style={{ textShadow: "0 1px 3px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.7)" }}
-                                      >
-                                        {b.batchId}
-                                      </span>
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-                              {tailWidth > 1 && (
-                                <div
-                                  style={{
-                                    width: tailWidth,
-                                    height: barH,
-                                    background: `linear-gradient(90deg, ${barColor}88, ${barColor}22)`,
-                                    border: `1px dashed ${barColor}80`,
-                                    borderLeft: "none",
-                                  }}
-                                  className="rounded-r-sm opacity-80"
-                                />
-                              )}
-                            </div>
-                            {/* Tooltip on hover */}
-                            <div className="pointer-events-none absolute bottom-full left-0 z-30 mb-1 hidden whitespace-nowrap rounded-md border border-white/15 bg-ink-950/95 px-2 py-1.5 text-[10px] text-white shadow-xl group-hover:block">
-                              <div className="font-bold">{b.apiName}</div>
-                              <div className="text-ink-300">
-                                {b.batchId} · S{b.stageNo} · #{b.batchNo}
-                              </div>
-                              <div className="text-ink-300">
-                                Reactor:{" "}
-                                {b.reactorIds
-                                  .map(
-                                    (id) =>
-                                      reactors.find((x) => x.id === id)?.name ??
-                                      id
-                                  )
-                                  .join(" + ")}
-                              </div>
-                              <div className="text-ink-300">
-                                Start: {new Date(b.startMs).toLocaleString()}
-                              </div>
-                              <div className="text-ink-300">
-                                Cycle End: {new Date(b.endMs).toLocaleString()}
-                              </div>
-                              <div className="text-ink-300">
-                                Analysis End:{" "}
-                                {new Date(b.analysisEndMs).toLocaleString()}
-                              </div>
-                              {(b.cleaningType ?? "none") !== "none" && (
-                                <div
-                                  className={clsx(
-                                    "text-[10px]",
-                                    b.cleaningType === "campaign"
-                                      ? "text-lime-300"
-                                      : "text-amber-300"
-                                  )}
-                                >
-                                  {b.cleaningType === "campaign"
-                                    ? "Campaign cleaning"
-                                    : "PCO cleaning"}{" "}
-                                  before:{" "}
-                                  {(b.cleaningBeforeMs / 3600 / 1000).toFixed(1)}h
-                                </div>
-                              )}
-                              <div
-                                className={clsx(
-                                  "mt-0.5 font-bold",
-                                  b.inFY ? "text-lime-300" : "text-amber-300"
-                                )}
-                              >
-                                {b.inFY ? "Within FY" : "Overflow"}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
+                      {batches.map((b) => renderBar(b, rowH))}
                     </div>
                     </Fragment>
                   );
@@ -1094,6 +1572,12 @@ export default function GanttTab() {
             }
             label="Campaign cleaning (green pre-tail · 30d)"
           />
+          {isGrouped && (
+            <span className="inline-flex items-center gap-1.5 rounded-md border border-violet-300/30 bg-violet-300/8 px-2 py-1 font-semibold text-violet-200">
+              <Building2 size={11} /> Header strip = merged occupancy of the
+              group · % = busy reactor-time over the plan window
+            </span>
+          )}
           {mode === "by-reactor" && (
             <span className="inline-flex items-center gap-1.5 rounded-md border border-violet-300/30 bg-violet-300/8 px-2 py-1 font-semibold text-violet-200">
               <Beaker size={11} /> Bar color = API · Row = Reactor · spot
