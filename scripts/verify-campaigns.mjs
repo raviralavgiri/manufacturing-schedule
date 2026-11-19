@@ -92,5 +92,28 @@ for (const rid of ["R101", "R102"]) {
   check(bs[0].startMs === FY.startMs && idle <= 12, `${rid}: starts at year start, back-to-back (idle ${idle} h = PCO only)`);
 }
 
+// ── User-defined quarter sequence in the shared cleanroom ─────────────────
+// Q3 order API-03 → API-02 → API-04 → API-01 (other quarters stay automatic).
+const wanted = ["API-03", "API-02", "API-04", "API-01"];
+const seqApis = apis.map((a) => ({
+  ...a,
+  quarterSequence: [null, null, wanted.indexOf(a.id) + 1, null],
+}));
+const seqSchedule = runScheduler(seqApis, reactors, FY);
+const seqReport = buildCampaignReport(seqApis, reactors, seqSchedule, FY, { computeEarliest: false });
+const q3 = seqReport.campaigns
+  .filter((c) => c.targetQuarter === 2)
+  .sort((a, b) => a.startMs - b.startMs);
+console.log("\nQ3 with sequence API-03, API-02, API-04, API-01:");
+q3.forEach((c) => console.log(`  ${c.apiName}  ${d(c.startMs)} → ${d(c.endMs)}  ${c.status}`));
+check(
+  q3.map((c) => c.apiName).join(",") === wanted.join(","),
+  `Q3 campaigns run in the user sequence (${q3.map((c) => c.apiName).join(" → ")})`
+);
+check(seqReport.totals.scheduled === 16 && seqSchedule.clashCount === 0, "sequenced plan still schedules all 16 campaigns with no clashes");
+const autoQ1 = report.campaigns.filter((c) => c.targetQuarter === 0).sort((a, b) => a.startMs - b.startMs).map((c) => c.apiName);
+const seqQ1 = seqReport.campaigns.filter((c) => c.targetQuarter === 0).sort((a, b) => a.startMs - b.startMs).map((c) => c.apiName);
+check(autoQ1.join() === seqQ1.join(), `quarters without a sequence keep the automatic order (Q1 ${seqQ1.join(" → ")})`);
+
 console.log(failed ? `\n${failed} check(s) FAILED` : "\nAll checks passed");
 process.exit(failed ? 1 : 0);

@@ -706,6 +706,7 @@ function renderApiSheet(sheet: any, apis: API[]): void {
     [28, "Stages/branch"],
     [29, "Campaigns/yr"],
     [30, "Q split (Q1,Q2,Q3,Q4)"],
+    [31, "Q sequence (Q1,Q2,Q3,Q4)"],
   ];
   subLabels.forEach(([col, lbl]) => {
     const cell = sheet.getRow(5).getCell(col);
@@ -754,6 +755,11 @@ function renderApiSheet(sheet: any, apis: API[]): void {
       row.getCell(29).value = api.campaignsPerYear;
     if (api.campaignQuarterSplit && api.campaignQuarterSplit.length === 4)
       row.getCell(30).value = api.campaignQuarterSplit.join(",");
+    // AE = campaign sequence rank per quarter within the block (blank = auto)
+    if (api.quarterSequence && api.quarterSequence.some((v) => v != null))
+      row.getCell(31).value = [0, 1, 2, 3]
+        .map((q) => api.quarterSequence?.[q] ?? "")
+        .join(",");
   });
 
   sheet.getColumn(3).width = 26;

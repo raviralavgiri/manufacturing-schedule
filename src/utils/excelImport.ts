@@ -322,6 +322,7 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
   //   Fork:       Z(26)=sharedPreamble  AA(27)=branches  AB(28)=stagesPerBranch
   //   Campaigns:  AC(29)=campaigns per year (optional → campaign mode)
   //               AD(30)=quarter split "n1,n2,n3,n4" (optional)
+  //               AE(31)=quarter sequence rank "r1,r2,r3,r4", blanks = auto
 
   const rawApis: API[] = [];
 
@@ -350,6 +351,15 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
       : [];
     // Kept as typed even when it doesn't sum to campaigns/yr — the campaign
     // report flags the mismatch instead of silently changing the plan.
+    const seqStr = cellStr(row.getCell(31)); // col AE (optional)
+    const seqParts = seqStr ? seqStr.split(/[,;/]/).map((t) => t.trim()) : [];
+    const quarterSequence =
+      seqParts.length === 4
+        ? seqParts.map((t) => {
+            const n = Math.round(Number(t));
+            return t !== "" && Number.isFinite(n) && n > 0 ? n : null;
+          })
+        : undefined;
     const campaignQuarterSplit =
       splitParts.length === 4 && splitParts.every((n) => Number.isInteger(n) && n >= 0)
         ? splitParts
@@ -477,6 +487,7 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
       ...(block ? { block } : {}),
       ...(campaignsPerYear ? { campaignsPerYear } : {}),
       ...(campaignQuarterSplit ? { campaignQuarterSplit } : {}),
+      ...(quarterSequence ? { quarterSequence } : {}),
     };
 
     // Scaffold stages with correct DAG wiring via topology preset

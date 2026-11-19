@@ -21,8 +21,10 @@ import {
   campaignSizes,
   isCampaignMode,
   quarterIndexIn,
+  quarterRankOf,
   sinkStageIds,
 } from "./campaigns";
+import { buildReactorBlockMap, resolveApiBlock } from "../utils/apiOrder";
 
 interface BookedSlot {
   startMs: number;
@@ -722,9 +724,14 @@ export function runScheduler(
     campaignSizes: number[];
     /** Campaign mode: target quarter (0..3) per campaign. */
     campaignTargets: number[];
+    /** Cleanroom / production block of the API (for the quarter sequence). */
+    block: string;
+    /** Campaign mode: start of the LAST booked batch of each campaign. */
+    campaignLastStart: number[];
   }
 
   const bufferMs = hoursToMs(INTER_STAGE_BUFFER_HOURS);
+  const reactorBlockMap = buildReactorBlockMap(reactors);
   const stageRTs: StageRT[] = [];
   for (const api of apisInOrder) {
     const apiStart = apiStartMs(api);
@@ -733,6 +740,7 @@ export function runScheduler(
     const nCampaigns = campaignCountOf(api);
     const sinks = sinkStageIds(api);
     const campaignTargets = campaignMode ? campaignQuarterTargets(api).targets : [];
+    const apiBlock = resolveApiBlock(api, reactorBlockMap);
     const stagesInOrder = apiTopoStages.get(api.id) ?? api.stages;
     stagesInOrder.forEach((stage, topoIndex) => {
       const planned = stage.plannedBatches;
@@ -794,6 +802,8 @@ export function runScheduler(
         isSink: sinks.has(stage.id),
         campaignSizes: campaignMode ? campaignSizes(planned, nCampaigns) : [],
         campaignTargets,
+        block: apiBlock,
+        campaignLastStart: campaignMode ? new Array(nCampaigns).fill(-Infinity) : [],
       });
     });
   }
@@ -887,6 +897,36 @@ export function runScheduler(
     const c = campaignOf(rt, rt.booked);
     const q = rt.campaignTargets[c] ?? 0;
     return rt.apiStart + ((rt.apiEnd - rt.apiStart) / 4) * q;
+  };
+
+  /**
+   * User-defined quarter sequence (api.quarterSequence) inside a cleanroom /
+   * block. For a FINAL-stage batch whose campaign targets quarter q, every
+   * other campaign-mode API of the same block with a LOWER rank in q must
+   * have booked all of its q-campaign batches first; this batch may then not
+   * start before the last of those batches started. Returns that floor, or
+   * null when an earlier-ranked campaign is still unbooked (wait).
+   */
+  const sinkRTsByBlock = new Map<string, StageRT[]>();
+  const sequenceGateOf = (rt: StageRT): number | null => {
+    if (!rt.campaignMode || !rt.isSink || rt.booked >= rt.planned) return -Infinity;
+    const q = rt.campaignTargets[campaignOf(rt, rt.booked)] ?? 0;
+    const rank = quarterRankOf(rt.api, q);
+    if (rank === null) return -Infinity;
+    let floor = -Infinity;
+    for (const o of sinkRTsByBlock.get(rt.block) ?? []) {
+      if (o.api.id === rt.api.id) continue;
+      const oRank = quarterRankOf(o.api, q);
+      if (oRank === null || oRank >= rank) continue;
+      let cum = 0;
+      for (let c = 0; c < o.campaignSizes.length; c++) {
+        cum += o.campaignSizes[c];
+        if (o.campaignTargets[c] !== q || o.campaignSizes[c] === 0) continue;
+        if (o.booked < cum) return null; // earlier-sequenced campaign not booked yet
+        floor = Math.max(floor, o.campaignLastStart[c]);
+      }
+    }
+    return floor;
   };
 
   // Commit a batch: book the WHOLE train (every reactor in the slot), update
@@ -988,6 +1028,10 @@ export function runScheduler(
       cleaningType: cleaningKind,
       ...campaignFieldsOf(rt, rt.booked, startMs),
     });
+    if (rt.campaignMode) {
+      const c = campaignOf(rt, rt.booked);
+      rt.campaignLastStart[c] = Math.max(rt.campaignLastStart[c] ?? -Infinity, startMs);
+    }
     rt.booked++;
   };
 
@@ -1057,6 +1101,12 @@ export function runScheduler(
   // booked (pool sharers) or when a stage produces another approved batch
   // (its successors may newly clear their material gate).
   const rtByStageId = new Map(stageRTs.map((rt) => [rt.stage.id, rt]));
+  for (const rt of stageRTs) {
+    if (!rt.campaignMode || !rt.isSink) continue;
+    const arr = sinkRTsByBlock.get(rt.block);
+    if (arr) arr.push(rt);
+    else sinkRTsByBlock.set(rt.block, [rt]);
+  }
   const sharersOfReactor = new Map<string, StageRT[]>();
   const successorsOfStage = new Map<string, StageRT[]>();
   for (const rt of stageRTs) {
@@ -1087,11 +1137,17 @@ export function runScheduler(
       cand.set(rt.stage.id, null);
       return;
     }
+    const seqGate = sequenceGateOf(rt);
+    if (seqGate === null) {
+      cand.set(rt.stage.id, null); // waits for an earlier-sequenced campaign
+      return;
+    }
     let earliest = Math.max(
       matTime + bufferMs,
       rt.firstStartMs,
       bcfGateOf(rt),
-      campaignFloorOf(rt)
+      campaignFloorOf(rt),
+      seqGate
     );
     let slot = findBestSlot(rt, earliest);
     // Soft per-quarter cap. If the chosen slot lands in a quarter that has
@@ -1131,6 +1187,11 @@ export function runScheduler(
         dirty.add(other.stage.id);
     for (const succ of successorsOfStage.get(stageId) ?? [])
       if (cand.get(succ.stage.id) == null) dirty.add(succ.stage.id);
+    // A final-stage booking can release the next campaign in the block's
+    // quarter sequence.
+    if (rt.campaignMode && rt.isSink)
+      for (const other of sinkRTsByBlock.get(rt.block) ?? [])
+        dirty.add(other.stage.id);
   };
 
   // ─ PCO-minimisation helper ────────────────────────────────────────────────
@@ -1238,7 +1299,9 @@ export function runScheduler(
         matTime + bufferMs,
         fb.firstStartMs,
         bcfGateOf(fb),
-        campaignFloorOf(fb)
+        campaignFloorOf(fb),
+        // Deadlock guard: an unsatisfiable sequence wait is ignored here.
+        sequenceGateOf(fb) ?? -Infinity
       );
       place(fb, findBestSlot(fb, earliest));
       remainingBatches--;

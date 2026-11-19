@@ -298,6 +298,13 @@ a reactor's production block. An API's cleanroom is its **Block**, or, if
 that's blank, the block of its final-stage reactors. Many APIs can share one
 cleanroom.
 
+**Campaign sequence by cleanroom and quarter** is set on the Q-Plan tab, or in
+column AE of the API import sheet as ranks `Q1,Q2,Q3,Q4`. In a quarter where
+APIs of the same block have a rank (1 = first), each API's final-stage
+campaign starts only after every lower-ranked API's campaign in that block and
+quarter is booked, and no earlier than the last of those batches starts.
+Blank means automatic order.
+
 The Dashboard's **Campaign plan** panel shows:
 - campaigns planned vs required, per quarter;
 - every campaign's dates and status, with a reason for each exception;
