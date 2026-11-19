@@ -909,9 +909,6 @@ function renderScheduleSheet(
     a.stages.forEach((s) => stagePoolById.set(s.id, s.reactorPool))
   );
 
-  const nameOf = (id: string) =>
-    reactors.find((x) => x.id === id)?.name ?? id;
-
   const stageKindById = buildStageKindMap(apis);
 
   const headers = [
@@ -938,9 +935,10 @@ function renderScheduleSheet(
   ];
 
   const rows = schedule.batches.map((b) => {
-    const bookedNames = b.reactorIds.map(nameOf).join(" + ") || "—";
+    // Same format as the Schedule tab: booked reactor IDs, comma, no spaces.
+    const bookedNames = b.reactorIds.join(",") || "—";
     const poolIds = stagePoolById.get(b.stageId) ?? [];
-    const poolNames = poolIds.map(nameOf).join(", ");
+    const poolNames = poolIds.join(",");
     // Train model: the booked reactors ARE the whole pool, so we show just the
     // booked train. Only when a SUBSTITUTE was used (a booked reactor not in
     // the configured pool) do we append the configured pool for reference.
