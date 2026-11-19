@@ -278,6 +278,41 @@ The Dashboard KPI strip reports in-FY and overflow counts; the Schedule tab high
 
 ---
 
+### 8a. Campaign-wise scheduling (optional, per API)
+
+Set **Camp/yr** on the APIs tab (or column AC of the API import sheet) to
+schedule an API campaign-wise. Leave it blank for the behaviour described
+above.
+
+| Priority | Rule |
+| --- | --- |
+| 1 | The required campaign count is never changed. The final stage's planned batches are split evenly into that many campaigns. |
+| 2 | Stage dependencies and material readiness (the mass-balance gate) are always respected. |
+| 3 | Intermediate stages run as early as material and equipment allow. They get no quarterly spreading and no right-align, and they keep their reactor until complete. |
+| 4 | Each final-stage campaign starts no earlier than its target quarter: 4/yr gives Q1–Q4, and **Q split** (column AD, e.g. `2,0,1,1`) overrides the distribution. |
+| 5–7 | Shared cleanrooms and reactors are sequenced by `productionSequence`, the existing PCO / campaign-cleaning rules and the PCO-minimising campaign consolidation. |
+| 8 | Anything that cannot be met is reported, never silently changed. This covers too few batches for the campaigns, a quarter split that doesn't add up, an off-quarter or out-of-window campaign, a final stage with no reactor pool, and clashes. |
+
+Quarters are the four equal quarters of the API's plan window. A cleanroom is
+a reactor's production block. An API's cleanroom is its **Block**, or, if
+that's blank, the block of its final-stage reactors. Many APIs can share one
+cleanroom.
+
+The Dashboard's **Campaign plan** panel shows:
+- campaigns planned vs required, per quarter;
+- every campaign's dates and status, with a reason for each exception;
+- intermediate completion vs the earliest achievable (the same API scheduled alone);
+- cleanroom and equipment utilisation (overlapping batches are counted once);
+- clashes and constraints.
+
+The Schedule tab and the Excel export carry **Cleanroom / Campaign / Target
+Qtr / Qtr** for every batch.
+
+Code: `src/scheduler/campaigns.ts` (helpers), `src/scheduler/scheduler.ts`
+(`campaignFloorOf`, the campaign branches in `perQuarterLimitOf` and
+`effectiveStartOf`, and the right-align opt-out), and
+`src/scheduler/campaignReport.ts` (validation and report).
+
 ### 9. What happens when you edit a value
 
 When you change any yellow cell, this happens (debounced 350 ms):
@@ -409,6 +444,13 @@ To run the scheduler standalone (no UI) for sanity-checking after changes:
 
 ```bash
 npx tsx scripts/verify.mjs
+```
+
+Campaign-scheduler validation: 4 APIs share cleanroom CR-1, with 4 campaigns
+each (16 campaigns in total). The script exits non-zero if any check fails.
+
+```bash
+npx tsx scripts/verify-campaigns.mjs
 ```
 
 ---

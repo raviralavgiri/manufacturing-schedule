@@ -39,6 +39,10 @@ export default function ApisTab() {
   const setApiTargetOutput = useStore((s) => s.setApiTargetOutput);
   const setApiProductionSequence = useStore((s) => s.setApiProductionSequence);
   const setApiBlock = useStore((s) => s.setApiBlock);
+  const setApiCampaignsPerYear = useStore((s) => s.setApiCampaignsPerYear);
+  const setApiCampaignQuarterSplit = useStore(
+    (s) => s.setApiCampaignQuarterSplit
+  );
   const setApiWindow = useStore((s) => s.setApiWindow);
   const setApiStageCount = useStore((s) => s.setApiStageCount);
   const applyTopologyPreset = useStore((s) => s.applyTopologyPreset);
@@ -184,6 +188,19 @@ export default function ApisTab() {
                 >
                   Block
                 </Th>
+                <Th
+                  align="right"
+                  yellow
+                  title="Campaigns per year. Set a number to schedule this API campaign-wise: the final stage's batches are split into this many campaigns distributed over Q1–Q4 (4 = one per quarter) and intermediates run as early as feasible. Blank = legacy scheduling (final stage right-aligned to the window end)."
+                >
+                  Camp/yr
+                </Th>
+                <Th
+                  yellow
+                  title="Optional campaign split over Q1,Q2,Q3,Q4 (e.g. 2,0,1,1). Must add up to Camp/yr. Blank = even distribution."
+                >
+                  Q split
+                </Th>
                 <Th yellow>Plan Window</Th>
                 <Th align="right" yellow>
                   Stages
@@ -248,6 +265,28 @@ export default function ApisTab() {
                           value={api.block ?? ""}
                           onCommit={(v) => setApiBlock(api.id, v)}
                           placeholder="—"
+                        />
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <SeqCell
+                          value={api.campaignsPerYear}
+                          onChange={(v) =>
+                            setApiCampaignsPerYear(
+                              api.id,
+                              Number.isFinite(v) ? v : undefined
+                            )
+                          }
+                          title="Campaigns per year (blank = legacy scheduling)."
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <EditableTextCell
+                          value={(api.campaignQuarterSplit ?? []).join(",")}
+                          onCommit={(v) => {
+                            const err = setApiCampaignQuarterSplit(api.id, v);
+                            if (err) window.alert(err);
+                          }}
+                          placeholder={api.campaignsPerYear ? "even" : "—"}
                         />
                       </td>
                       <td className="px-3 py-2">
@@ -338,7 +377,7 @@ export default function ApisTab() {
                       {isExpanded && currentTopology !== "linear" && (
                         <tr className="border-t border-white/5">
                           <td
-                            colSpan={8}
+                            colSpan={10}
                             className="bg-ink-900/40 px-3 py-3"
                           >
                             {currentTopology === "parallel" && (
@@ -414,7 +453,7 @@ export default function ApisTab() {
               {filteredApis.length === 0 && (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={10}
                     className="py-12 text-center text-sm text-ink-300"
                   >
                     No APIs match. Click{" "}
@@ -586,9 +625,11 @@ function EditableNumCell({
 function SeqCell({
   value,
   onChange,
+  title = "Production sequence (lower = earlier). Blank = default order.",
 }: {
   value: number | undefined;
   onChange: (v: number) => void;
+  title?: string;
 }) {
   const [local, setLocal] = useState(value == null ? "" : String(value));
   useEffect(() => setLocal(value == null ? "" : String(value)), [value]);
@@ -627,7 +668,7 @@ function SeqCell({
         }
       }}
       className="cell-yellow w-16 rounded-md px-2 py-1 text-right font-mono text-sm tabular-nums transition"
-      title="Production sequence (lower = earlier). Blank = default order."
+      title={title}
     />
   );
 }
