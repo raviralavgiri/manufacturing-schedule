@@ -257,7 +257,16 @@ function normalizeProject(p: any): Project | null {
         return {
           ...rest,
           name: r.name ?? r.id,
-          moc: migrateMoc(r.moc ?? legacyClass),
+          // `reactorClass` is now the CL / INT classification. Older data
+          // used the same key for the material of construction, so only a
+          // non-CL/INT value is treated as a legacy MOC.
+          ...(legacyClass === "CL" || legacyClass === "INT"
+            ? { reactorClass: legacyClass }
+            : {}),
+          moc: migrateMoc(
+            r.moc ??
+              (legacyClass === "CL" || legacyClass === "INT" ? undefined : legacyClass)
+          ),
           agitatorType: migrateAgitator(r.agitatorType),
         };
       })
