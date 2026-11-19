@@ -470,8 +470,8 @@ export default function ScheduleTab() {
                       (id) => !poolSet.has(id)
                     );
                     const tooltip = isSubstituted
-                      ? `Booked: ${bookedNames.join(" + ") || "—"} (substituted — not in configured pool) · Configured pool: ${poolLabel || "(empty)"}`
-                      : `Booked: ${bookedNames.join(" + ") || "—"} · Configured pool: ${poolLabel || "(empty)"}`;
+                      ? `Booked: ${bookedNames.join(",") || "—"} (substituted — not in configured pool) · Configured pool: ${poolLabel || "(empty)"}`
+                      : `Booked: ${bookedNames.join(",") || "—"} · Configured pool: ${poolLabel || "(empty)"}`;
                     if (bookedNames.length === 0 && poolNames.length === 0) {
                       return (
                         <span
@@ -491,7 +491,9 @@ export default function ScheduleTab() {
                             so we show just the booked train (no redundant pool
                             list). The configured pool stays in the tooltip. */}
                         <span className="truncate font-semibold">
-                          {bookedNames.join(" + ") || "—"}
+                          {/* Booked reactor IDs, comma-separated with no
+                              spaces (e.g. R103,R104,R105). */}
+                          {b.reactorIds.join(",") || "—"}
                         </span>
                         {isSubstituted && (
                           <span
