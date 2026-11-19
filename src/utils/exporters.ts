@@ -704,6 +704,8 @@ function renderApiSheet(sheet: any, apis: API[]): void {
     [26, "Shared preamble"],
     [27, "Branches"],
     [28, "Stages/branch"],
+    [29, "Campaigns/yr"],
+    [30, "Q split (Q1,Q2,Q3,Q4)"],
   ];
   subLabels.forEach(([col, lbl]) => {
     const cell = sheet.getRow(5).getCell(col);
@@ -747,6 +749,11 @@ function renderApiSheet(sheet: any, apis: API[]): void {
       row.getCell(27).value = topo.fork.branches;
       row.getCell(28).value = topo.fork.perBranch;
     }
+    // Campaign planning: AC = campaigns/yr, AD = quarterly split
+    if (typeof api.campaignsPerYear === "number" && api.campaignsPerYear > 0)
+      row.getCell(29).value = api.campaignsPerYear;
+    if (api.campaignQuarterSplit && api.campaignQuarterSplit.length === 4)
+      row.getCell(30).value = api.campaignQuarterSplit.join(",");
   });
 
   sheet.getColumn(3).width = 26;
@@ -916,6 +923,10 @@ function renderScheduleSheet(
     "Type",
     "Batch #",
     "Reactor Pool",
+    "Cleanroom",
+    "Campaign",
+    "Target Qtr",
+    "Qtr",
     "Start",
     "End (Cycle)",
     "Analysis End",
@@ -948,6 +959,10 @@ function renderScheduleSheet(
       stageKindById.get(b.stageId) ?? "",
       b.batchNo,
       reactorPoolCell,
+      reactors.find((x) => x.id === b.reactorId)?.productionBlock ?? "",
+      b.campaignNo ? `C${b.campaignNo}` : "",
+      b.targetQuarter != null ? `Q${b.targetQuarter + 1}` : "",
+      b.quarter == null ? "" : b.quarter < 0 ? "Ovr" : `Q${b.quarter + 1}`,
       fmtDateTime(b.startMs),
       fmtDateTime(b.endMs),
       fmtDateTime(b.analysisEndMs),

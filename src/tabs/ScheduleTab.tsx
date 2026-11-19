@@ -19,6 +19,7 @@ import MultiSelectPopover, {
 } from "../components/MultiSelectPopover";
 import { buildStageKindMap } from "../utils/stageKind";
 import { fmtDate, fmtDateTime } from "../utils/dates";
+import { sinkStageIds } from "../scheduler/campaigns";
 
 const ROW_H = 40;
 
@@ -26,7 +27,8 @@ const ROW_H = 40;
 //   Batch ID | API | Stage | # | Reactor Pool | Start | End | Analysis End | Clash | Out
 // Batch ID is shown for traceability — useful when cross-referencing
 // CSV/Excel exports or discussing a specific batch with a colleague.
-const GRID_TEMPLATE = "130px 72px 120px 70px 240px 180px 180px 180px 60px 72px";
+const GRID_TEMPLATE =
+  "130px 72px 120px 50px 170px 90px 56px 64px 150px 150px 150px 60px 72px";
 
 export default function ScheduleTab() {
   const schedule = useStore((s) => s.schedule);
@@ -55,6 +57,18 @@ export default function ScheduleTab() {
   }, [apisRaw]);
   // stageId → IM/API classification (smart-defaulted).
   const stageKindById = useMemo(() => buildStageKindMap(apisRaw), [apisRaw]);
+  // Final (sink) stages — the stages whose batches carry a campaign quarter
+  // target (same definition the scheduler uses).
+  const finalStageIds = useMemo(() => {
+    const set = new Set<string>();
+    apisRaw.forEach((a) => sinkStageIds(a).forEach((id) => set.add(id)));
+    return set;
+  }, [apisRaw]);
+  // reactorId → cleanroom (production block) for the Cleanroom column.
+  const cleanroomOfReactor = useMemo(
+    () => new Map(reactors.map((r) => [r.id, r.productionBlock?.trim() || ""])),
+    [reactors]
+  );
   const [q, setQ] = useState("");
   // Multi-select filters — empty Set means "all" (no filter), matching the
   // Gantt tab's MultiSelectPopover convention.
@@ -356,6 +370,15 @@ export default function ScheduleTab() {
           <span title="Reactors this batch is booked on (first one is the primary reactor).">
             Reactor Pool
           </span>
+          <span title="Cleanroom / production block of the booked reactor.">
+            Cleanroom
+          </span>
+          <span title="Campaign number (campaign-mode APIs only). For intermediate stages: the campaign this batch's output is planned to feed.">
+            Camp
+          </span>
+          <span title="Quarter of the API window in which the batch starts. Amber = differs from the campaign's target quarter.">
+            Qtr
+          </span>
           <span>Start</span>
           <span>End (Cycle)</span>
           <span>Analysis End</span>
@@ -476,6 +499,46 @@ export default function ScheduleTab() {
                             title="Substituted: one or more reactors are not in the stage's configured pool — the scheduler picked a like-for-like spare because a configured reactor was busy."
                           >
                             sub
+                          </span>
+                        )}
+                      </span>
+                    );
+                  })()}
+                  <span
+                    className="truncate font-mono text-[11px] text-ink-200"
+                    title={b.reactorIds
+                      .map((id) => `${id}: ${cleanroomOfReactor.get(id) || "—"}`)
+                      .join(" · ")}
+                  >
+                    {cleanroomOfReactor.get(b.reactorId) || "—"}
+                  </span>
+                  <span className="font-mono text-ink-200">
+                    {b.campaignNo ? `C${b.campaignNo}` : "—"}
+                  </span>
+                  {(() => {
+                    const q = b.quarter;
+                    const label = q == null ? "—" : q < 0 ? "Ovr" : `Q${q + 1}`;
+                    const off =
+                      b.targetQuarter != null &&
+                      finalStageIds.has(b.stageId) &&
+                      q !== b.targetQuarter;
+                    return (
+                      <span
+                        className={clsx(
+                          "font-mono",
+                          off ? "font-semibold text-amber-300" : "text-ink-200"
+                        )}
+                        title={
+                          b.targetQuarter != null
+                            ? `Starts in ${label} · campaign target Q${b.targetQuarter + 1}`
+                            : `Starts in ${label}`
+                        }
+                      >
+                        {label}
+                        {off && (
+                          <span className="text-[9px] text-amber-300/80">
+                            {" "}
+                            →Q{b.targetQuarter! + 1}
                           </span>
                         )}
                       </span>

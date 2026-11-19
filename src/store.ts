@@ -162,6 +162,18 @@ interface AppState {
   setApiProductionSequence: (apiId: string, sequence: number) => void;
   /** Production block / cleanroom where this API's final stage runs. */
   setApiBlock: (apiId: string, block: string) => void;
+  /**
+   * Campaigns per year for an API. A positive number switches the API to
+   * campaign mode (one campaign per quarter for 4/yr); undefined / 0 restores
+   * the legacy scheduling. Triggers a recompute.
+   */
+  setApiCampaignsPerYear: (apiId: string, campaigns: number | undefined) => void;
+  /**
+   * Quarterly campaign split for an API as text "n1,n2,n3,n4" (Q1..Q4).
+   * Blank clears it (even distribution). Returns an error message when the
+   * text is not four whole numbers; the stored value is left unchanged then.
+   */
+  setApiCampaignQuarterSplit: (apiId: string, split: string) => string | null;
   /** Set ONE api's plan window (per-API window replaces the old global). */
   setApiWindow: (apiId: string, startMs: number, endMs: number) => void;
   setApiStageCount: (apiId: string, count: number) => void;
@@ -790,6 +802,39 @@ export const useStore = create<AppState>((set, get) => ({
       return { ...p, apis };
     });
     // Block is informational metadata — no schedule recompute needed.
+  },
+
+  setApiCampaignsPerYear: (apiId, campaigns) => {
+    const n =
+      typeof campaigns === "number" && Number.isFinite(campaigns) && campaigns > 0
+        ? Math.round(campaigns)
+        : undefined;
+    mutateActive(set, get, (p) => {
+      const apis = p.apis.map((a) =>
+        a.id === apiId ? { ...a, campaignsPerYear: n } : a
+      );
+      return { ...p, apis };
+    });
+    scheduleRecompute(set, get, true);
+  },
+
+  setApiCampaignQuarterSplit: (apiId, split) => {
+    const text = split.trim();
+    let value: number[] | undefined;
+    if (text) {
+      const parts = text.split(/[\s,;/]+/).filter(Boolean).map(Number);
+      if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0))
+        return "Enter four whole numbers for Q1–Q4, e.g. 1,1,1,1";
+      value = parts;
+    }
+    mutateActive(set, get, (p) => {
+      const apis = p.apis.map((a) =>
+        a.id === apiId ? { ...a, campaignQuarterSplit: value } : a
+      );
+      return { ...p, apis };
+    });
+    scheduleRecompute(set, get, true);
+    return null;
   },
 
   setApiWindow: (apiId, startMs, endMs) => {

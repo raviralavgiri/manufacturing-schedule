@@ -11,6 +11,7 @@ import {
 import { clsx } from "clsx";
 import { useStore } from "../store";
 import { Card, SectionHeader } from "../components/Primitives";
+import CampaignPlanPanel from "../components/CampaignPlanPanel";
 import { computeWeeks, quarterIn } from "../utils/dates";
 import { useChartTheme } from "../utils/chartTheme";
 import {
@@ -456,6 +457,14 @@ export default function DashboardTab() {
           tone={clashes === 0 ? "lime" : "pink"}
         />
       </div>
+
+      {/* ─── Campaign plan (campaign-wise quarterly scheduling) ─────── */}
+      <CampaignPlanPanel
+        apis={apisRaw}
+        reactors={reactors}
+        schedule={schedule}
+        planWindow={planWindow}
+      />
 
       {/* ─── Intermediate (n-1) shortfall flags ──────────────────── */}
       <Card className="overflow-hidden p-0">

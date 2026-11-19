@@ -320,6 +320,8 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
   //               R(18)=SC3merge  S(19)=SC3factor  T(20)=SC3length
   //   Parallel:   U(21)=subA  V(22)=subB  W(23)=subC  X(24)=f1  Y(25)=f2
   //   Fork:       Z(26)=sharedPreamble  AA(27)=branches  AB(28)=stagesPerBranch
+  //   Campaigns:  AC(29)=campaigns per year (optional → campaign mode)
+  //               AD(30)=quarter split "n1,n2,n3,n4" (optional)
 
   const rawApis: API[] = [];
 
@@ -337,6 +339,21 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
     const topoStr = (cellStr(row.getCell(9)) ?? "Linear").toLowerCase(); // col I
     const mainStages = Math.max(1, cellNum(row.getCell(11)) ?? 1); // col K
     const plannedBatchesOverride = null; // no API-level override column
+    const campaignsRaw = cellNum(row.getCell(29)); // col AC (optional)
+    const campaignsPerYear =
+      campaignsRaw !== null && Number.isFinite(campaignsRaw) && campaignsRaw > 0
+        ? Math.round(campaignsRaw)
+        : undefined;
+    const splitStr = cellStr(row.getCell(30)); // col AD (optional)
+    const splitParts = splitStr
+      ? splitStr.split(/[\s,;/]+/).filter(Boolean).map(Number)
+      : [];
+    // Kept as typed even when it doesn't sum to campaigns/yr — the campaign
+    // report flags the mismatch instead of silently changing the plan.
+    const campaignQuarterSplit =
+      splitParts.length === 4 && splitParts.every((n) => Number.isInteger(n) && n >= 0)
+        ? splitParts
+        : undefined;
 
     // Look up Stages sheet data now (normalised key) so it's available to both
     // the linear-length calculation and the per-stage overlay below.
@@ -458,6 +475,8 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
         ? { productionSequence: Math.max(0, Math.round(sequence)) }
         : {}),
       ...(block ? { block } : {}),
+      ...(campaignsPerYear ? { campaignsPerYear } : {}),
+      ...(campaignQuarterSplit ? { campaignQuarterSplit } : {}),
     };
 
     // Scaffold stages with correct DAG wiring via topology preset

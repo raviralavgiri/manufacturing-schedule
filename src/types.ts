@@ -306,6 +306,27 @@ export interface API {
    * does not by itself constrain reactor selection.
    */
   block?: string;
+  /**
+   * OPTIONAL — number of production campaigns planned for this API per year.
+   * When set (> 0) the API is scheduled in CAMPAIGN MODE:
+   *   • the final stage's planned batches are split evenly into this many
+   *     campaigns, and each campaign is scheduled forward into its target
+   *     quarter (4 campaigns → one per quarter Q1..Q4);
+   *   • intermediate stages are scheduled as EARLY as material, equipment and
+   *     cleanroom availability allow (no quarterly spreading, no right-align);
+   *   • the campaign count is never changed by the scheduler — infeasible
+   *     plans are reported in the campaign report instead.
+   * Leave undefined for the legacy behaviour (quarterly soft-cap + final-stage
+   * right-alignment to the plan-window end).
+   */
+  campaignsPerYear?: number;
+  /**
+   * OPTIONAL — explicit quarterly distribution of the campaigns, as campaign
+   * counts for [Q1, Q2, Q3, Q4] of the API plan window (e.g. [2, 0, 1, 1]).
+   * Must sum to `campaignsPerYear`; otherwise it is ignored, the even
+   * distribution is used and the mismatch is reported. Undefined = even.
+   */
+  campaignQuarterSplit?: number[];
 }
 
 /**
@@ -371,6 +392,18 @@ export interface BatchScheduleEntry {
    *                  so a campaign cleaning was inserted (resets the clock)
    */
   cleaningType: "none" | "pco" | "campaign";
+  /**
+   * Campaign-mode traceability (undefined for APIs not in campaign mode).
+   * `campaignNo` is 1-based. For the final stage it is the campaign the batch
+   * belongs to; for an intermediate stage it is the campaign the batch's
+   * output is planned to feed (even split of the stage's batches).
+   */
+  campaignNo?: number;
+  /** Target quarter (0 = Q1 … 3 = Q4 of the API window) of `campaignNo`. */
+  targetQuarter?: number;
+  /** Quarter (0..3 of the API window) in which the batch actually starts;
+   *  -1 when it starts outside the API window. */
+  quarter?: number;
 }
 
 export interface ScheduleResult {

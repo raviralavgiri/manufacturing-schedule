@@ -14,6 +14,15 @@ import {
   weekIndexIn,
 } from "../utils/dates";
 import { topologicalStageOrder } from "../utils/validation";
+import {
+  campaignCountOf,
+  campaignIndexOfBatch,
+  campaignQuarterTargets,
+  campaignSizes,
+  isCampaignMode,
+  quarterIndexIn,
+  sinkStageIds,
+} from "./campaigns";
 
 interface BookedSlot {
   startMs: number;
@@ -337,6 +346,10 @@ export function runScheduler(
       if (s.plannedBatches <= 0) continue;
       const isSink = !consumed.has(s.id);
       if (!s.rightAlign && !isSink) continue; // back-prop handles interior stages
+      // Campaign mode: final stages are placed forward into their campaign's
+      // target quarter, so they are NOT right-aligned by default. An explicit
+      // per-stage `rightAlign` flag still wins.
+      if (!s.rightAlign && isCampaignMode(api)) continue;
       if (hasFirstBatchPin(s) && !s.rightAlign) continue; // user-pinned start wins
       const bctMs = hoursToMs(
         typeof s.bctHours === "number" && s.bctHours > 0 ? s.bctHours : s.bcfHours
@@ -701,6 +714,14 @@ export function runScheduler(
     /** Earliest start floor for this stage = stage.firstBatchStartMs when set,
      *  else apiStart. Quarter boundaries still use apiStart/apiEnd. */
     firstStartMs: number;
+    /** Campaign mode (api.campaignsPerYear > 0). */
+    campaignMode: boolean;
+    /** Final / product stage (no stage of the API consumes it). */
+    isSink: boolean;
+    /** Campaign mode: batches per campaign for THIS stage (even split). */
+    campaignSizes: number[];
+    /** Campaign mode: target quarter (0..3) per campaign. */
+    campaignTargets: number[];
   }
 
   const bufferMs = hoursToMs(INTER_STAGE_BUFFER_HOURS);
@@ -708,6 +729,10 @@ export function runScheduler(
   for (const api of apisInOrder) {
     const apiStart = apiStartMs(api);
     const apiEnd = apiEndMs(api);
+    const campaignMode = isCampaignMode(api);
+    const nCampaigns = campaignCountOf(api);
+    const sinks = sinkStageIds(api);
+    const campaignTargets = campaignMode ? campaignQuarterTargets(api).targets : [];
     const stagesInOrder = apiTopoStages.get(api.id) ?? api.stages;
     stagesInOrder.forEach((stage, topoIndex) => {
       const planned = stage.plannedBatches;
@@ -765,6 +790,10 @@ export function runScheduler(
             ? stage.firstBatchStartMs
             : apiStart;
         })(),
+        campaignMode,
+        isSink: sinks.has(stage.id),
+        campaignSizes: campaignMode ? campaignSizes(planned, nCampaigns) : [],
+        campaignTargets,
       });
     });
   }
@@ -828,6 +857,36 @@ export function runScheduler(
       reactors: probe.reactors,
       cleaningKind: probe.cleaningKind,
     };
+  };
+
+  // ─ Campaign mode helpers ───────────────────────────────────────────────
+  /** 0-based campaign index of the stage's 0-based batch index `k`. */
+  const campaignOf = (rt: StageRT, k: number): number =>
+    campaignIndexOfBatch(k, rt.campaignSizes);
+
+  /** Traceability fields stamped on every batch. */
+  const campaignFieldsOf = (
+    rt: StageRT,
+    k: number,
+    startMs: number
+  ): Pick<BatchScheduleEntry, "campaignNo" | "targetQuarter" | "quarter"> => {
+    const quarter = quarterIndexIn(startMs, rt.apiStart, rt.apiEnd);
+    if (!rt.campaignMode) return { quarter };
+    const c = campaignOf(rt, k);
+    return { campaignNo: c + 1, targetQuarter: rt.campaignTargets[c] ?? 0, quarter };
+  };
+
+  /**
+   * Campaign floor: a FINAL-stage batch may not start before the start of its
+   * campaign's target quarter, which is what distributes the campaigns over
+   * Q1..Q4. Intermediate stages have no floor — they run as early as material
+   * and equipment allow (earliest intermediate completion).
+   */
+  const campaignFloorOf = (rt: StageRT): number => {
+    if (!rt.campaignMode || !rt.isSink) return -Infinity;
+    const c = campaignOf(rt, rt.booked);
+    const q = rt.campaignTargets[c] ?? 0;
+    return rt.apiStart + ((rt.apiEnd - rt.apiStart) / 4) * q;
   };
 
   // Commit a batch: book the WHOLE train (every reactor in the slot), update
@@ -927,6 +986,7 @@ export function runScheduler(
       inputKg: rt.inputPerBatch,
       cleaningBeforeMs,
       cleaningType: cleaningKind,
+      ...campaignFieldsOf(rt, rt.booked, startMs),
     });
     rt.booked++;
   };
@@ -972,6 +1032,10 @@ export function runScheduler(
     // window — disabling the quarterly soft-cap prevents it from scattering
     // their batches back into earlier quarters, which would undo the alignment.
     if (rightAlignStart.has(rt.stage.id)) return rt.planned;
+    // Campaign mode replaces the soft cap: final stages are distributed by
+    // their campaign's target quarter (campaignFloorOf) and intermediates are
+    // never held back to spread the load.
+    if (rt.campaignMode) return rt.planned;
     return Math.max(1, Math.ceil(rt.planned / 4));
   };
 
@@ -1023,7 +1087,12 @@ export function runScheduler(
       cand.set(rt.stage.id, null);
       return;
     }
-    let earliest = Math.max(matTime + bufferMs, rt.firstStartMs, bcfGateOf(rt));
+    let earliest = Math.max(
+      matTime + bufferMs,
+      rt.firstStartMs,
+      bcfGateOf(rt),
+      campaignFloorOf(rt)
+    );
     let slot = findBestSlot(rt, earliest);
     // Soft per-quarter cap. If the chosen slot lands in a quarter that has
     // already taken its ≈ planned/4 share for this stage, defer to the start
@@ -1091,6 +1160,14 @@ export function runScheduler(
         if (srt.api.id !== active.apiId || srt.stage.id !== active.stageId)
           return false;
         if (srt.booked >= srt.planned) return false;
+        if (srt.campaignMode) {
+          // Intermediate: keep the reactor until the stage is complete
+          // (earliest intermediate completion). Final stage: it still owes
+          // work while its next campaign targets this quarter or earlier.
+          if (!srt.isSink) return true;
+          const nextQ = srt.campaignTargets[campaignOf(srt, srt.booked)] ?? 0;
+          return nextQ <= candQ;
+        }
         // Earliest quarter the active campaign can still place a batch in,
         // given the soft per-quarter cap (greedy fills the lowest open quarter
         // first). If that quarter is the candidate's quarter or earlier, the
@@ -1160,7 +1237,8 @@ export function runScheduler(
       const earliest = Math.max(
         matTime + bufferMs,
         fb.firstStartMs,
-        bcfGateOf(fb)
+        bcfGateOf(fb),
+        campaignFloorOf(fb)
       );
       place(fb, findBestSlot(fb, earliest));
       remainingBatches--;
