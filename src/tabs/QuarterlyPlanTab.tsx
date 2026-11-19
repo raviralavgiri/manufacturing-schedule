@@ -30,6 +30,7 @@ import {
   type QuarterlySuggestion,
 } from "../scheduler/quarterlyOptimizer";
 import { FY_START_MS } from "../utils/dates";
+import CampaignSequenceEditor from "../components/CampaignSequenceEditor";
 
 // ─── Colour helpers ───────────────────────────────────────────────────────────
 
@@ -220,6 +221,9 @@ export default function QuarterlyPlanTab() {
           />
         ))}
       </div>
+
+      {/* ── Campaign sequence per cleanroom / block and quarter ──────── */}
+      <CampaignSequenceEditor apis={apis} reactors={reactors} schedule={schedule} />
 
       {/* ── API × Quarter grid ──────────────────────────────────────── */}
       <div className="overflow-hidden rounded-xl border border-white/8">

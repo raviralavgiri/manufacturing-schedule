@@ -327,6 +327,14 @@ export interface API {
    * distribution is used and the mismatch is reported. Undefined = even.
    */
   campaignQuarterSplit?: number[];
+  /**
+   * OPTIONAL — campaign sequence of this API within its cleanroom / block,
+   * per quarter [Q1, Q2, Q3, Q4] (1 = first). In a quarter where several
+   * campaign-mode APIs of the same block have a rank, an API's final-stage
+   * campaign starts only after every lower-ranked (earlier) API's campaign in
+   * that block + quarter has been scheduled. null / missing = automatic order.
+   */
+  quarterSequence?: (number | null)[];
 }
 
 /**

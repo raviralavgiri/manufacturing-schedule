@@ -174,6 +174,13 @@ interface AppState {
    * text is not four whole numbers; the stored value is left unchanged then.
    */
   setApiCampaignQuarterSplit: (apiId: string, split: string) => string | null;
+  /**
+   * Campaign sequence rank of an API within its cleanroom / block for one
+   * quarter (q = 0..3; 1 = first). undefined clears it (automatic order).
+   */
+  setApiQuarterSequence: (apiId: string, q: number, rank: number | undefined) => void;
+  /** Replace the whole quarter's sequence for several APIs at once. */
+  setQuarterSequence: (q: number, ranks: Record<string, number | undefined>) => void;
   /** Set ONE api's plan window (per-API window replaces the old global). */
   setApiWindow: (apiId: string, startMs: number, endMs: number) => void;
   setApiStageCount: (apiId: string, count: number) => void;
@@ -813,6 +820,30 @@ export const useStore = create<AppState>((set, get) => ({
       const apis = p.apis.map((a) =>
         a.id === apiId ? { ...a, campaignsPerYear: n } : a
       );
+      return { ...p, apis };
+    });
+    scheduleRecompute(set, get, true);
+  },
+
+  setApiQuarterSequence: (apiId, q, rank) => {
+    get().setQuarterSequence(q, { [apiId]: rank });
+  },
+
+  setQuarterSequence: (q, ranks) => {
+    if (q < 0 || q > 3) return;
+    mutateActive(set, get, (p) => {
+      const apis = p.apis.map((a) => {
+        if (!(a.id in ranks)) return a;
+        const r = ranks[a.id];
+        const seq = [...(a.quarterSequence ?? [null, null, null, null])];
+        while (seq.length < 4) seq.push(null);
+        seq[q] =
+          typeof r === "number" && Number.isFinite(r) && r > 0 ? Math.round(r) : null;
+        return {
+          ...a,
+          quarterSequence: seq.every((v) => v == null) ? undefined : seq,
+        };
+      });
       return { ...p, apis };
     });
     scheduleRecompute(set, get, true);

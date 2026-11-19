@@ -91,6 +91,12 @@ export function campaignIndexOfBatch(k: number, sizes: number[]): number {
   return Math.max(0, sizes.length - 1);
 }
 
+/** User-defined campaign sequence rank of the API in quarter q (null = auto). */
+export function quarterRankOf(api: API, q: number): number | null {
+  const v = api.quarterSequence?.[q];
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
+}
+
 /** Stages no other stage of the API consumes (the final / product stages). */
 export function sinkStageIds(api: API): Set<string> {
   const consumed = new Set<string>();
