@@ -464,3 +464,67 @@ function suffixLetter(idx: number): string {
   if (idx < 26) return String.fromCharCode(97 + idx);
   return suffixLetter(Math.floor(idx / 26) - 1) + suffixLetter(idx % 26);
 }
+
+// ─── Stage-flow preview (diagram data) ───────────────────────────────────
+
+/** One stage of a stage-flow diagram. `inputs` are 1-based stage numbers. */
+export interface FlowNode {
+  no: number;
+  name: string;
+  inputs: number[];
+  /** Per-input factor aligned with `inputs` (convergence merge; 1 = base). */
+  inputFactors?: number[];
+  /** Side-chain anchor: sized by base stage output × factor. */
+  sideChain?: { baseNo: number; factor: number };
+}
+
+/**
+ * The stage flow that `applyTopologyPresetToApi(api, spec)` WILL produce,
+ * for previewing before Apply. Existing stage names are kept by position
+ * (as Apply does); stages beyond the preset are appended as a linear chain.
+ */
+export function previewStageFlow(
+  spec: TopologyPresetSpec,
+  existingNames: string[] = []
+): FlowNode[] {
+  const positions = buildPositions(spec);
+  const nodes: FlowNode[] = positions.map((p, i) => ({
+    no: i + 1,
+    name: existingNames[i] ?? p.defaultName,
+    inputs: p.inputStageNos.slice(),
+    ...(p.inputFactors ? { inputFactors: p.inputFactors.slice() } : {}),
+    ...(p.cascadePolicy
+      ? { sideChain: { baseNo: p.cascadePolicy.baseStageNo, factor: p.cascadePolicy.factor } }
+      : {}),
+  }));
+  for (let i = positions.length; i < existingNames.length; i++)
+    nodes.push({ no: i + 1, name: existingNames[i], inputs: i === 0 ? [] : [i] });
+  return nodes;
+}
+
+/** The current stage flow of an API, as diagram data. */
+export function stageFlowFromStages(stages: StageMaster[]): FlowNode[] {
+  const sorted = [...stages].sort((a, b) => a.stageNo - b.stageNo);
+  const noById = new Map(sorted.map((s, i) => [s.id, i + 1]));
+  return sorted.map((s, i) => {
+    const inputs = (s.inputStageIds ?? [])
+      .map((id) => noById.get(id))
+      .filter((n): n is number => typeof n === "number");
+    const factors = inputs.map((n) => {
+      const id = sorted[n - 1]?.id;
+      const f = id ? s.inputFactorByStageId?.[id] : undefined;
+      return typeof f === "number" && f > 0 ? f : 1;
+    });
+    const baseNo =
+      s.cascadePolicy?.kind === "side-chain" ? noById.get(s.cascadePolicy.baseStageId) : undefined;
+    return {
+      no: i + 1,
+      name: s.stageName || `S${i + 1}`,
+      inputs,
+      ...(factors.some((f) => f !== 1) ? { inputFactors: factors } : {}),
+      ...(s.cascadePolicy?.kind === "side-chain" && baseNo
+        ? { sideChain: { baseNo, factor: s.cascadePolicy.factor } }
+        : {}),
+    };
+  });
+}
