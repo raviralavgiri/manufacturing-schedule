@@ -453,6 +453,15 @@ To run the scheduler standalone (no UI) for sanity-checking after changes:
 npx tsx scripts/verify.mjs
 ```
 
+Excel export / re-import round trip. This covers the Stages sheet
+**Equipment** cell, where main reactors are separated by commas and optional
+substitutes follow their main reactor separated by slashes (e.g.
+`R105/R203/R118,R114,R119`), plus every API, stage and equipment input field.
+
+```bash
+npx tsx scripts/verify-excel-roundtrip.mts
+```
+
 Campaign-scheduler validation: 4 APIs share cleanroom CR-1, with 4 campaigns
 each (16 campaigns in total). The script exits non-zero if any check fails.
 
