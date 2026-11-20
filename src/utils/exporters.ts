@@ -537,10 +537,10 @@ interface ApiTopoCells {
 }
 
 /**
- * Reverse the stage graph into the API-sheet topology columns. Returns a
- * spec that, when re-imported, reproduces the SAME number of stages. Falls
- * back to Linear (sized by the Stages sheet) whenever the reconstruction
- * can't be verified to match the stage count.
+ * Reverse the stage graph into the API-sheet topology columns. The Stage
+ * flow label is always the API's own topology; the detail columns are filled
+ * only when they reproduce the SAME stages on re-import (otherwise they are
+ * left blank and the importer uses the Stages sheet + "Input from stages").
  */
 function reconstructTopologyCells(api: API): ApiTopoCells {
   const stages = api.stages.slice().sort((a, b) => a.stageNo - b.stageNo);
@@ -552,6 +552,19 @@ function reconstructTopologyCells(api: API): ApiTopoCells {
     parallelSubLengths: [],
     parallelFactors: [],
   };
+  // The API's actual Stage Flow (same labels as the APIs tab). It is always
+  // written; the detail columns are added only when they reproduce the same
+  // stages — otherwise the importer wires the stages from the Stages sheet's
+  // "Input from stages" column and still keeps this Stage Flow.
+  const declaredLabel =
+    api.topology === "parallel"
+      ? "Parallel"
+      : api.topology === "side_chains"
+      ? "Side chains"
+      : api.topology === "fork"
+      ? "Fork"
+      : "Linear";
+  const declaredOnly: ApiTopoCells = { ...linearFallback, topology: declaredLabel };
   const stageNoById = new Map<string, number>();
   stages.forEach((s) => stageNoById.set(s.id, s.stageNo));
   const idByStageNo = new Map<number, string>();
@@ -561,10 +574,10 @@ function reconstructTopologyCells(api: API): ApiTopoCells {
     const anchors = stages
       .filter((s) => s.cascadePolicy?.kind === "side-chain")
       .sort((a, b) => a.stageNo - b.stageNo);
-    if (anchors.length === 0) return linearFallback;
+    if (anchors.length === 0) return declaredOnly;
     const firstAnchorNo = anchors[0].stageNo;
     const mainBackboneLength = firstAnchorNo - 1;
-    if (mainBackboneLength < 1) return linearFallback;
+    if (mainBackboneLength < 1) return declaredOnly;
     const sideChains = anchors.map((anchor, idx) => {
       const next = anchors[idx + 1];
       const endNo = next ? next.stageNo : total + 1;
@@ -579,7 +592,7 @@ function reconstructTopologyCells(api: API): ApiTopoCells {
     const reconstructedTotal =
       mainBackboneLength + sideChains.reduce((n, sc) => n + sc.length, 0);
     if (reconstructedTotal !== total || sideChains.length > 3)
-      return linearFallback;
+      return declaredOnly;
     return {
       topology: "Side chains",
       mainStages: mainBackboneLength,
@@ -595,15 +608,15 @@ function reconstructTopologyCells(api: API): ApiTopoCells {
     const merge = stages.find(
       (s) => !s.cascadePolicy && s.inputStageIds.length >= 2
     );
-    if (!merge) return linearFallback;
+    if (!merge) return declaredOnly;
     const subSum = merge.stageNo - 1;
-    if (subSum < 2) return linearFallback;
+    if (subSum < 2) return declaredOnly;
     const lastNos = merge.inputStageIds
       .map((id) => stageNoById.get(id))
       .filter((n): n is number => typeof n === "number")
       .sort((a, b) => a - b);
     if (lastNos.length < 2 || lastNos[lastNos.length - 1] !== subSum)
-      return linearFallback;
+      return declaredOnly;
     const subLengths: number[] = [];
     let prev = 0;
     for (const n of lastNos) {
@@ -611,7 +624,7 @@ function reconstructTopologyCells(api: API): ApiTopoCells {
       prev = n;
     }
     const postMergeCount = total - subSum - 1;
-    if (postMergeCount < 0 || subLengths.length > 3) return linearFallback;
+    if (postMergeCount < 0 || subLengths.length > 3) return declaredOnly;
     // Per-branch input factors: branch A (first) = 1; others come from the
     // merge stage's inputFactorByStageId (keyed by each branch's last stage).
     const parallelFactors = lastNos.map((no, i) => {
@@ -653,7 +666,7 @@ function reconstructTopologyCells(api: API): ApiTopoCells {
         const perBranch = tail / branchesCount;
         if (perBranch >= 1) {
           return {
-            topology: "Fork/ Diverge",
+            topology: "Fork",
             mainStages: total,
             sideChains: [],
             parallelSubLengths: [],
@@ -663,7 +676,7 @@ function reconstructTopologyCells(api: API): ApiTopoCells {
         }
       }
     }
-    return linearFallback;
+    return declaredOnly;
   }
 
   return linearFallback;

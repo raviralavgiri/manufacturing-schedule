@@ -8,6 +8,7 @@ import { buildGlobalWorkbook } from "../src/utils/exporters.ts";
 import { parseExcelFile, parseEquipmentCell } from "../src/utils/excelImport.ts";
 import ExcelJS from "exceljs";
 import { cascadePlannedBatches } from "../src/scheduler/cascade.ts";
+import { applyTopologyPresetToApi } from "../src/utils/topologyPresets.ts";
 import fs from "fs";
 
 const OUT = process.argv[2];
@@ -106,5 +107,52 @@ for (const a of apis) {
   if (a.stages.length !== b.stages.length) apiDiffs.push(`${a.name}.stages`);
 }
 check(apiDiffs.length === 0, `all ${apis.length} APIs: name, seq, block, camp/yr, Q split, plan window, stages, target, stage flow, Q sequence identical${apiDiffs.length ? " — " + apiDiffs.slice(0, 5).join(", ") : ""}`);
+// ── Stage flow (topology) round trip for every preset ────────────────────
+{
+  const base = buildSeed();
+  const tApis = base.apis.slice(0, 5).map(cascadePlannedBatches);
+  const D = { batchSizeKg: 100, inputKgPerBatch: 100, bcfHours: 48, bctHours: 48, processHours: 48, analysisHours: 12, pcoHours: 8, plannedBatches: 1, reactorPool: ["R101"] };
+  tApis[1] = cascadePlannedBatches(applyTopologyPresetToApi(tApis[1], {
+    kind: "parallel", subChainCount: 2, subChainLengths: [2, 1], mergeStageName: "Merge", postMergeCount: 1, subChainFactors: [1, 0.5],
+  }, D));
+  tApis[2] = cascadePlannedBatches(applyTopologyPresetToApi(tApis[2], {
+    kind: "side_chains", mainBackboneLength: 3, sideChains: [{ mergesIntoStageNo: 3, factor: 0.4, length: 1 }],
+  }, D));
+  tApis[3] = cascadePlannedBatches(applyTopologyPresetToApi(tApis[3], { kind: "fork", sharedStages: 2, branches: 2, stagesPerBranch: 1 }, D));
+  // An irregular flow the preset columns can't express: parallel API whose
+  // merge also takes the first stage directly.
+  const irr = cascadePlannedBatches(applyTopologyPresetToApi(tApis[4], {
+    kind: "parallel", subChainCount: 2, subChainLengths: [1, 1], mergeStageName: "Merge", postMergeCount: 0,
+  }, D));
+  const merge = irr.stages.find((s) => s.inputStageIds.length >= 2)!;
+  const extra = irr.stages.find((s) => s.stageNo === 1)!;
+  irr.stages.push({ ...extra, id: extra.id + "-X", stageNo: irr.stages.length + 1, stageName: "Extra feed", inputStageIds: [] });
+  merge.inputStageIds = [...merge.inputStageIds, extra.id + "-X"];
+  tApis[4] = cascadePlannedBatches(irr);
+  // Stage names identify stages on the Stages sheet, so they must be unique
+  // within an API (presets can repeat a name when they add stages).
+  tApis.forEach((a) => {
+    const seen = new Set<string>();
+    a.stages.forEach((st) => {
+      if (seen.has(st.stageName)) st.stageName = `${st.stageName} ${st.stageNo}`;
+      seen.add(st.stageName);
+    });
+  });
+  const wbT = await buildGlobalWorkbook({ apis: tApis, reactors: base.reactors, schedule: runScheduler(tApis, base.reactors), weeks: computeWeeks(Date.UTC(2026,3,1), Date.UTC(2027,3,1)) } as any);
+  const bufT = await wbT.xlsx.writeBuffer();
+  const sh = new ExcelJS.Workbook(); await sh.xlsx.load(bufT);
+  const labels = tApis.map((_, i) => String(sh.getWorksheet("API")!.getRow(6 + i).getCell(12).value));
+  check(labels.join() === "Linear,Parallel,Side chains,Fork,Parallel", `Stage flow column = APIs tab labels (${labels.join(", ")})`);
+  const back = await parseExcelFile(new File([bufT], "t.xlsx"));
+  const edges = (a: any) => a.stages.map((s: any) => `${s.stageName}<${s.inputStageIds.map((id: string) => a.stages.find((x: any) => x.id === id)?.stageName).sort().join("+")}`).sort().join("|");
+  tApis.forEach((a, i) => {
+    const b = back.apis.find((x) => x.name === a.name)!;
+    check((b.topology ?? "linear") === (a.topology ?? "linear") && b.stages.length === a.stages.length && edges(a) === edges(b),
+      `${labels[i]} API: stage flow, stage count and wiring identical after re-import`);
+  });
+  const sc = back.apis.find((x) => x.name === tApis[2].name)!.stages.find((s) => s.cascadePolicy)!;
+  check(sc?.cascadePolicy?.factor === 0.4, "side-chain factor kept");
+}
+
 console.log("warnings:", res.warnings.slice(0, 5));
 process.exit(fail ? 1 : 0);
