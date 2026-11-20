@@ -6,6 +6,19 @@ import type { PlanWindow, Reactor, ScheduleResult } from "../types";
 import { buildBuckets, type Granularity } from "../utils/timeBuckets";
 
 const NO_BLOCK = "(no block)";
+
+/** Reactor class groups shown under every block. */
+const CLASS_GROUPS = [
+  { key: "CL", label: "Cleanroom (CL)" },
+  { key: "INT", label: "Intermediate (INT)" },
+  { key: "OTHER", label: "Unclassified" },
+] as const;
+type ClassKey = (typeof CLASS_GROUPS)[number]["key"];
+const classOf = (r: Reactor): ClassKey =>
+  r.reactorClass === "CL" ? "CL" : r.reactorClass === "INT" ? "INT" : "OTHER";
+
+type GroupRow = OccRow & { key: ClassKey; reactorIds: string[] };
+type BlockRow = OccRow & { groups: GroupRow[] };
 const H = 3600 * 1000;
 /** Sequential single hue (blue 450) — cell opacity encodes occupancy. */
 const SEQ_RGB = "42, 120, 214";
@@ -118,25 +131,39 @@ export default function BlockOccupancyPanel({
     });
     const coll = (a: string, b: string) =>
       a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
-    const blocks: (OccRow & { reactorIds: string[] })[] = Array.from(byBlock.entries())
+    // Sum reactor rows into one occupancy row (busy and capacity add up).
+    const aggregate = (id: string, label: string, rs: Reactor[]): OccRow => {
+      const rows = rs.map((r) => reactorRows.get(r.id)!);
+      const sum = (f: (o: OccRow) => number[]) =>
+        buckets.map((_, i) => rows.reduce((a, o) => a + f(o)[i], 0));
+      return {
+        id,
+        label,
+        reactorCount: rs.length,
+        clCount: rs.filter((r) => r.reactorClass === "CL").length,
+        apiNames: Array.from(new Set(rows.flatMap((o) => o.apiNames))).sort(),
+        busy: sum((o) => o.busy),
+        cap: sum((o) => o.cap),
+        busyTotal: rows.reduce((a, o) => a + o.busyTotal, 0),
+        capTotal: rows.reduce((a, o) => a + o.capTotal, 0),
+      };
+    };
+    const blocks: BlockRow[] = Array.from(byBlock.entries())
       .sort(([a], [b]) => (a === NO_BLOCK ? 1 : b === NO_BLOCK ? -1 : coll(a, b)))
-      .map(([name, rs]) => {
-        const rows = rs.map((r) => reactorRows.get(r.id)!);
-        const sum = (f: (o: OccRow) => number[]) =>
-          buckets.map((_, i) => rows.reduce((a, o) => a + f(o)[i], 0));
-        return {
-          id: name,
-          label: name,
-          reactorCount: rs.length,
-          clCount: rs.filter((r) => r.reactorClass === "CL").length,
-          apiNames: Array.from(new Set(rows.flatMap((o) => o.apiNames))).sort(),
-          busy: sum((o) => o.busy),
-          cap: sum((o) => o.cap),
-          busyTotal: rows.reduce((a, o) => a + o.busyTotal, 0),
-          capTotal: rows.reduce((a, o) => a + o.capTotal, 0),
-          reactorIds: [...rs].sort((a, b) => coll(a.id, b.id)).map((r) => r.id),
-        };
-      });
+      .map(([name, rs]) => ({
+        ...aggregate(name, name, rs),
+        // Separate cleanroom / intermediate occupancy inside the block.
+        groups: CLASS_GROUPS.map(({ key, label }) => {
+          const members = rs
+            .filter((r) => classOf(r) === key)
+            .sort((a, b) => coll(a.id, b.id));
+          return {
+            ...aggregate(`${name}:${key}`, label, members),
+            key,
+            reactorIds: members.map((r) => r.id),
+          };
+        }).filter((g) => g.reactorCount > 0),
+      }));
     return { blocks, reactorRows };
   }, [reactors, schedule, planWindow, buckets]);
 
@@ -167,7 +194,8 @@ export default function BlockOccupancyPanel({
           </h3>
           <p className="text-[11px] text-ink-400">
             Share of each production block's reactor time booked by batches (start →
-            cycle end) · click a block to see its reactors
+            cycle end), split into cleanroom (CL) and intermediate (INT) reactors ·
+            click a block to see its reactors
             {peak && peak.pct > 0 && (
               <>
                 {" "}· peak <b className="text-ink-100">{Math.round(peak.pct * 100)}%</b> in{" "}
@@ -260,36 +288,72 @@ export default function BlockOccupancyPanel({
                         {pct(blk.busyTotal, blk.capTotal)}
                       </td>
                     </tr>
-                    {isOpen &&
-                      blk.reactorIds.map((rid) => {
-                        const r = reactorRows.get(rid)!;
-                        return (
-                          <tr key={rid}>
-                            <td
-                              className="sticky left-0 z-10 bg-ink-900 py-1 pl-8 pr-3 font-mono text-ink-200"
-                              title={`APIs: ${r.apiNames.join(", ") || "none"}`}
-                            >
-                              {r.label}
-                              {r.clCount > 0 && (
-                                <span className="ml-1 text-[9px] text-ink-400">CL</span>
+                    {blk.groups.map((g) => (
+                      <Fragment key={g.id}>
+                        <tr>
+                          <td
+                            className="sticky left-0 z-10 bg-ink-900 py-1 pl-7 pr-3 text-[11px] font-semibold text-ink-100"
+                            title={`${g.label} reactors: ${g.reactorIds.join(", ")} · APIs: ${g.apiNames.join(", ") || "none"}`}
+                          >
+                            <span
+                              className={clsx(
+                                "mr-1.5 inline-block rounded border px-1 text-[9px] font-bold",
+                                g.key === "CL"
+                                  ? "border-cyan-300/40 text-cyan-300"
+                                  : g.key === "INT"
+                                  ? "border-violet-300/40 text-violet-300"
+                                  : "border-white/15 text-ink-400"
                               )}
-                            </td>
-                            <td className="px-2 py-1 text-right font-mono text-ink-400">1</td>
-                            {buckets.map((b, i) => (
-                              <OccCell
-                                key={b.key}
-                                busy={r.busy[i]}
-                                cap={r.cap[i]}
-                                small
-                                title={`${r.label} · ${b.label}${b.sub ? ` (${b.sub})` : ""}`}
-                              />
-                            ))}
-                            <td className="px-2 py-1 text-right font-mono text-ink-200">
-                              {pct(r.busyTotal, r.capTotal)}
-                            </td>
-                          </tr>
-                        );
-                      })}
+                            >
+                              {g.key === "OTHER" ? "—" : g.key}
+                            </span>
+                            {g.key === "CL" ? "Cleanroom" : g.key === "INT" ? "Intermediate" : "Unclassified"}
+                          </td>
+                          <td className="px-2 py-1 text-right font-mono text-ink-300">
+                            {g.reactorCount}
+                          </td>
+                          {buckets.map((b, i) => (
+                            <OccCell
+                              key={b.key}
+                              busy={g.busy[i]}
+                              cap={g.cap[i]}
+                              small
+                              title={`${blk.label} · ${g.label} · ${b.label}${b.sub ? ` (${b.sub})` : ""}`}
+                            />
+                          ))}
+                          <td className="px-2 py-1 text-right font-mono text-ink-100">
+                            {pct(g.busyTotal, g.capTotal)}
+                          </td>
+                        </tr>
+                        {isOpen &&
+                          g.reactorIds.map((rid) => {
+                            const r = reactorRows.get(rid)!;
+                            return (
+                              <tr key={rid}>
+                                <td
+                                  className="sticky left-0 z-10 bg-ink-900 py-1 pl-12 pr-3 font-mono text-[11px] text-ink-300"
+                                  title={`APIs: ${r.apiNames.join(", ") || "none"}`}
+                                >
+                                  {r.label}
+                                </td>
+                                <td className="px-2 py-1 text-right font-mono text-ink-400">1</td>
+                                {buckets.map((b, i) => (
+                                  <OccCell
+                                    key={b.key}
+                                    busy={r.busy[i]}
+                                    cap={r.cap[i]}
+                                    small
+                                    title={`${r.label} · ${b.label}${b.sub ? ` (${b.sub})` : ""}`}
+                                  />
+                                ))}
+                                <td className="px-2 py-1 text-right font-mono text-ink-300">
+                                  {pct(r.busyTotal, r.capTotal)}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                      </Fragment>
+                    ))}
                   </Fragment>
                 );
               })}

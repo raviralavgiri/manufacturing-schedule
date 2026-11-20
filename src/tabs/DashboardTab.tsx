@@ -13,20 +13,7 @@ import { useStore } from "../store";
 import { Card, SectionHeader } from "../components/Primitives";
 import CampaignPlanPanel from "../components/CampaignPlanPanel";
 import BlockOccupancyPanel from "../components/BlockOccupancyPanel";
-import { buildBuckets, type Bucket, type Granularity } from "../utils/timeBuckets";
 import { computeWeeks, quarterIn } from "../utils/dates";
-import { useChartTheme } from "../utils/chartTheme";
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-  Legend,
-  LabelList,
-} from "recharts";
 
 /**
  * Dashboard
@@ -34,8 +21,7 @@ import {
  * The "command center" tab. Three sections worth of insight:
  *
  *   1. KPI strip — the top-level "is the plan healthy?" numbers.
- *   2. Time-series chart — output (kg) or batches stacked per API,
- *      bucketed Monthly / Quarterly / Yearly.
+ *   2. Block-wise occupancy (cleanroom / intermediate) and campaign plan.
  *   3. Per-API performance table — Target vs. Achieved vs. Gap with a
  *      Met / Partial / Behind status pill.
  *   4. Detail pivot — API × Stage × Q1-Q4 (+ FY total). Same data as
@@ -43,19 +29,6 @@ import {
  */
 
 
-// Categorical palette for stage-number stacking. Cycles after 8 stages
-// (which is more than any realistic API has). Tuned to match the rest
-// of the app's accent palette.
-const STAGE_COLORS = [
-  "#22d3ee", // S1 — cyan
-  "#a78bfa", // S2 — violet
-  "#f472b6", // S3 — pink
-  "#a3e635", // S4 — lime
-  "#fbbf24", // S5 — amber
-  "#fb7185", // S6 — rose
-  "#38bdf8", // S7 — sky
-  "#fdba74", // S8 — orange
-];
 
 
 interface PivotRow {
@@ -99,7 +72,6 @@ export default function DashboardTab() {
   const schedule = useStore((s) => s.schedule);
   const reactors = useStore((s) => s.reactors);
   const planWindow = useStore((s) => s.window);
-  const chartTheme = useChartTheme();
 
   const apis = useMemo(
     () => [...apisRaw].sort((a, b) => a.id.localeCompare(b.id)),
@@ -111,110 +83,10 @@ export default function DashboardTab() {
     return m;
   }, [apis]);
 
-  // ─── User toggles ──────────────────────────────────────────────────
-  // Single shared slicer. Drives both the "Output (kg) by API" chart
-  // and the "Batches by stage" chart below.
-  const [gran, setGran] = useState<Granularity>("monthly");
-
-  // ─── Buckets for the time axis ─────────────────────────────────────
-  // Quarterly buckets are derived from the existing plan-window quarter
-  // helper so labels stay consistent with the rest of the app. Monthly
-  // and Yearly buckets walk calendar boundaries.
   const weeks = useMemo(
     () => computeWeeks(planWindow.startMs, planWindow.endMs),
     [planWindow]
   );
-  const buckets = useMemo<Bucket[]>(
-    () => buildBuckets(gran, planWindow.startMs, planWindow.endMs),
-    [gran, planWindow]
-  );
-
-  // For a given batch start time, which bucket does it land in? We
-  // special-case quarterly so it uses the same plan-window slicer the
-  // pivot table uses.
-  const bucketIndexFor = (ms: number): number => {
-    if (gran === "quarterly") {
-      const q = quarterIn(weeks, ms);
-      return q ? q - 1 : -1;
-    }
-    for (let i = 0; i < buckets.length; i++) {
-      if (ms >= buckets[i].startMs && ms <= buckets[i].endMs) return i;
-    }
-    return -1;
-  };
-
-  // ─── Aggregated chart data ────────────────────────────────────────
-  // Two independent datasets fed off the same buckets. The split lets
-  // the user see "what was produced (kg)" and "where the work landed
-  // (stages)" side by side without switching modes.
-  //
-  //   chartDataByApi  : output kg, one Bar per API
-  //   chartDataByStage: batch count, one Bar per stage number (S1, S2, …)
-  const chartDataByApi = useMemo(() => {
-    const rows: Record<string, number | string>[] = buckets.map((b) => ({
-      name: b.label,
-    }));
-    apis.forEach((a) => rows.forEach((r) => (r[a.id] = 0)));
-    schedule.batches.forEach((b) => {
-      const i = bucketIndexFor(b.startMs);
-      if (i < 0 || i >= rows.length) return;
-      rows[i][b.apiId] = ((rows[i][b.apiId] as number) ?? 0) + b.outputKg;
-    });
-    return rows;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buckets, apis, schedule, gran, weeks]);
-
-  // Distinct stage NAMES across all APIs (e.g., "DT1", "DT3", "Final
-  // API"). Two APIs that happen to use the same stage name are
-  // combined into one segment in the chart — this is usually the
-  // intended behavior for a cross-API view. To split them, we'd need
-  // to key by `${apiId}·${stageName}`.
-  //
-  // Order: by FIRST appearance in the apis list (which is sorted by
-  // apiId). This keeps DT1 left of DT2 left of DT3 left of Final API
-  // for the typical 4-stage chemistry path.
-  const stageNames = useMemo(() => {
-    const seen = new Set<string>();
-    const ordered: string[] = [];
-    apis.forEach((a) =>
-      a.stages
-        .slice()
-        .sort((x, y) => x.stageNo - y.stageNo)
-        .forEach((st) => {
-          const n = (st.stageName || "").trim() || `S${st.stageNo}`;
-          if (!seen.has(n)) {
-            seen.add(n);
-            ordered.push(n);
-          }
-        })
-    );
-    // Catch any stage names that exist on batches but not on apis
-    // (e.g., legacy data or after a delete).
-    schedule.batches.forEach((b) => {
-      const n = (b.stageName || "").trim() || `S${b.stageNo}`;
-      if (!seen.has(n)) {
-        seen.add(n);
-        ordered.push(n);
-      }
-    });
-    return ordered;
-  }, [apis, schedule]);
-
-  const chartDataByStage = useMemo(() => {
-    const rows: Record<string, number | string>[] = buckets.map((b) => ({
-      name: b.label,
-    }));
-    stageNames.forEach((n) => rows.forEach((r) => (r[n] = 0)));
-    schedule.batches.forEach((b) => {
-      const i = bucketIndexFor(b.startMs);
-      if (i < 0 || i >= rows.length) return;
-      const k = (b.stageName || "").trim() || `S${b.stageNo}`;
-      rows[i][k] = ((rows[i][k] as number) ?? 0) + 1;
-    });
-    return rows;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buckets, stageNames, schedule, gran, weeks]);
-
   // ─── KPI numbers ───────────────────────────────────────────────────
   const totalBatches = schedule.totalBatches;
   const totalKg = schedule.batches.reduce((a, b) => a + b.outputKg, 0);
@@ -536,162 +408,6 @@ export default function DashboardTab() {
         )}
       </Card>
 
-      {/* ─── Production-over-time: two charts driven by one slicer ── */}
-      <Card>
-        <div className="flex flex-wrap items-center justify-between gap-3 pb-3">
-          <div>
-            <h3 className="text-sm font-bold uppercase tracking-wider text-white">
-              Production over time
-            </h3>
-            <p className="text-[11px] text-ink-400">
-              Same time bucket on both charts — output (kg) split by API
-              on the left, batch count split by stage on the right.
-            </p>
-          </div>
-          <Toggle
-            value={gran}
-            onChange={setGran}
-            options={[
-              { v: "monthly", l: "Monthly" },
-              { v: "quarterly", l: "Quarterly" },
-              { v: "yearly", l: "Yearly" },
-            ]}
-          />
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-          {/* ── Chart 1: Output (kg) stacked by API ──────────────── */}
-          <div>
-            <div className="mb-2 flex items-center justify-between text-[11px]">
-              <span className="font-bold uppercase tracking-wider text-cyan-300">
-                Output (kg) — by API
-              </span>
-              <span className="font-mono text-ink-400">
-                {totalOutputT.toFixed(1)} t total
-              </span>
-            </div>
-            <div style={{ width: "100%", height: 300 }}>
-              <ResponsiveContainer>
-                <BarChart data={chartDataByApi}>
-                  <CartesianGrid
-                    stroke={chartTheme.grid}
-                    strokeDasharray="3 3"
-                  />
-                  <XAxis
-                    dataKey="name"
-                    stroke={chartTheme.axis}
-                    fontSize={11}
-                    interval={0}
-                    angle={gran === "monthly" ? -25 : 0}
-                    textAnchor={gran === "monthly" ? "end" : "middle"}
-                    height={gran === "monthly" ? 50 : 30}
-                  />
-                  <YAxis stroke={chartTheme.axis} fontSize={11} />
-                  <Tooltip
-                    contentStyle={{
-                      background: chartTheme.tooltipBg,
-                      border: `1px solid ${chartTheme.tooltipBorder}`,
-                      borderRadius: 8,
-                      fontSize: 12,
-                      color: chartTheme.tooltipText,
-                    }}
-                    labelStyle={{ color: chartTheme.tooltipText }}
-                    formatter={(v: number) =>
-                      `${Math.round(v).toLocaleString()} kg`
-                    }
-                  />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                  {apis.map((a) => (
-                    <Bar
-                      key={a.id}
-                      dataKey={a.id}
-                      name={a.name}
-                      fill={a.color}
-                      radius={[2, 2, 0, 0]}
-                    />
-                  ))}
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* ── Chart 2: Batches stacked by stage number ────────── */}
-          <div>
-            <div className="mb-2 flex items-center justify-between text-[11px]">
-              <span className="font-bold uppercase tracking-wider text-violet-300">
-                Batches — by stage
-              </span>
-              <span className="font-mono text-ink-400">
-                {totalBatches.toLocaleString()} batches total
-              </span>
-            </div>
-            <div style={{ width: "100%", height: 300 }}>
-              <ResponsiveContainer>
-                <BarChart data={chartDataByStage}>
-                  <CartesianGrid
-                    stroke={chartTheme.grid}
-                    strokeDasharray="3 3"
-                  />
-                  <XAxis
-                    dataKey="name"
-                    stroke={chartTheme.axis}
-                    fontSize={11}
-                    interval={0}
-                    angle={gran === "monthly" ? -25 : 0}
-                    textAnchor={gran === "monthly" ? "end" : "middle"}
-                    height={gran === "monthly" ? 50 : 30}
-                  />
-                  <YAxis stroke={chartTheme.axis} fontSize={11} />
-                  <Tooltip
-                    contentStyle={{
-                      background: chartTheme.tooltipBg,
-                      border: `1px solid ${chartTheme.tooltipBorder}`,
-                      borderRadius: 8,
-                      fontSize: 12,
-                      color: chartTheme.tooltipText,
-                    }}
-                    labelStyle={{ color: chartTheme.tooltipText }}
-                    formatter={(v: number) =>
-                      `${v} batch${v === 1 ? "" : "es"}`
-                    }
-                  />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                  {stageNames.map((n, i) => (
-                    <Bar
-                      key={n}
-                      dataKey={n}
-                      name={n}
-                      fill={STAGE_COLORS[i % STAGE_COLORS.length]}
-                      radius={[2, 2, 0, 0]}
-                    >
-                      {/* Show batch count above each bar; hide zeros */}
-                      <LabelList
-                        dataKey={n}
-                        position="top"
-                        fill={chartTheme.axis}
-                        fontSize={10}
-                        formatter={(val: unknown) =>
-                          typeof val === "number" && val > 0 ? val : ""
-                        }
-                      />
-                    </Bar>
-                  ))}
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-2 text-[10px] text-ink-400">
-          {gran === "monthly" &&
-            `${buckets.length} months in plan window.`}
-          {gran === "quarterly" &&
-            `Plan window split into 4 equal quarters. See the pivot table below for API × Stage × Quarter detail.`}
-          {gran === "yearly" &&
-            `${buckets.length} calendar year${buckets.length === 1 ? "" : "s"} touched by plan window.`}
-        </div>
-      </Card>
-
       {/* ─── Per-API performance ─────────────────────────────────── */}
       <Card className="overflow-hidden p-0">
         <div className="border-b border-white/10 px-4 py-3">
@@ -1002,36 +718,6 @@ function Kpi({
       {sub && (
         <div className="text-[10px] font-medium text-ink-400">{sub}</div>
       )}
-    </div>
-  );
-}
-
-function Toggle<T extends string>({
-  value,
-  onChange,
-  options,
-}: {
-  value: T;
-  onChange: (v: T) => void;
-  options: { v: T; l: string }[];
-}) {
-  return (
-    <div className="inline-flex items-center gap-0.5 rounded-lg border border-white/10 bg-white/[0.03] p-0.5">
-      {options.map((o) => (
-        <button
-          key={o.v}
-          type="button"
-          onClick={() => onChange(o.v)}
-          className={clsx(
-            "rounded-md px-2.5 py-1 text-[11px] font-bold transition",
-            o.v === value
-              ? "bg-cyan-300/15 text-cyan-200 shadow-glow"
-              : "text-ink-300 hover:bg-white/5 hover:text-white"
-          )}
-        >
-          {o.l}
-        </button>
-      ))}
     </div>
   );
 }

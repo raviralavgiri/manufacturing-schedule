@@ -574,7 +574,33 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
     };
 
     // Scaffold stages with correct DAG wiring via topology preset
-    const scaffolded = applyTopologyPresetToApi(baseApi, topoSpec, defaults);
+    let scaffolded = applyTopologyPresetToApi(baseApi, topoSpec, defaults);
+    // The detail columns may be blank (the export leaves them empty when they
+    // can't reproduce the stages). If the preset doesn't produce the stages
+    // listed on the Stages sheet, scaffold those stages and keep the declared
+    // Stage flow; the wiring then comes from "Input from stages" below.
+    const sheetStageCount = stageMap?.size ?? 0;
+    if (sheetStageCount > 0 && scaffolded.stages.length !== sheetStageCount) {
+      scaffolded = {
+        ...applyTopologyPresetToApi(
+          baseApi,
+          { kind: "linear", length: sheetStageCount },
+          defaults
+        ),
+        topology,
+      };
+      const hasFlow = Array.from(stageMap!.values()).some(
+        (d) => (d.inputFromNames?.length ?? 0) > 0
+      );
+      if (hasFlow && topology === "side_chains")
+        warnings.push(
+          `API "${name}": side-chain columns don't match the Stages sheet — stage flow taken from "Input from stages", but side-chain sizing factors were not restored; re-apply them in the Stage Flow panel.`
+        );
+      if (!hasFlow && topology !== "linear")
+        warnings.push(
+          `API "${name}": the ${topology.replace("_", " ")} columns don't match the ${sheetStageCount} stages on the Stages sheet and no "Input from stages" is given — stages were chained linearly.`
+        );
+    }
 
     // Overlay per-stage params from Stages sheet (matched by stageNo)
     const stages = scaffolded.stages.map((stage) => {
