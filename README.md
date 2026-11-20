@@ -280,7 +280,7 @@ The Dashboard KPI strip reports in-FY and overflow counts; the Schedule tab high
 
 ### 8a. Campaign-wise scheduling (optional, per API)
 
-Set **Camp/yr** on the APIs tab (or column AC of the API import sheet) to
+Set **Camp/yr** on the APIs tab (or column F of the API import sheet) to
 schedule an API campaign-wise. Leave it blank for the behaviour described
 above.
 
@@ -289,7 +289,7 @@ above.
 | 1 | The required campaign count is never changed. The final stage's planned batches are split evenly into that many campaigns. |
 | 2 | Stage dependencies and material readiness (the mass-balance gate) are always respected. |
 | 3 | Intermediate stages run as early as material and equipment allow. They get no quarterly spreading and no right-align, and they keep their reactor until complete. |
-| 4 | Each final-stage campaign starts no earlier than its target quarter: 4/yr gives Q1–Q4, and **Q split** (column AD, e.g. `2,0,1,1`) overrides the distribution. |
+| 4 | Each final-stage campaign starts no earlier than its target quarter: 4/yr gives Q1–Q4, and **Q split** (API sheet column G, e.g. `2,0,1,1`) overrides the distribution. |
 | 5–7 | Shared cleanrooms and reactors are sequenced by `productionSequence`, the existing PCO / campaign-cleaning rules and the PCO-minimising campaign consolidation. |
 | 8 | Anything that cannot be met is reported, never silently changed. This covers too few batches for the campaigns, a quarter split that doesn't add up, an off-quarter or out-of-window campaign, a final stage with no reactor pool, and clashes. |
 

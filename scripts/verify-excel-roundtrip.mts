@@ -34,6 +34,14 @@ st.reactorPool = pool;
 st.reactorSubstitutes = { [pool[0]]: [ids[5], ids[6]] };
 st.processHours = Math.max(1, st.bctHours - 10);
 st.stageKind = "IM";
+apis[0].productionSequence = 2;
+apis[0].block = "Block-2";
+apis[0].campaignsPerYear = 4;
+apis[0].campaignQuarterSplit = [1, 1, 1, 1];
+apis[0].quarterSequence = [null, null, 3, null];
+apis[1].productionSequence = 1;
+apis[1].block = "Block-2";
+apis[1].window = { startMs: Date.UTC(2026, 5, 1), endMs: Date.UTC(2027, 2, 31) };
 reactors[0].pmDurationDays = 5;
 reactors[0].buildingMaintenanceFirstDateMs = Date.UTC(2026, 5, 1);
 reactors[0].name = "Reactor-A";
@@ -79,5 +87,24 @@ for (const a of apis) {
   }
 }
 check(same, `all ${stageCount} stages: parameters, reactor pools and stage flow identical after re-import`);
+
+// API sheet: columns follow the APIs tab, every API field round-trips.
+const apiSh = wb2.getWorksheet("API")!;
+const hdr = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((c) => String(apiSh.getRow(5).getCell(c).value));
+check(
+  hdr.join("|") === "API Name|Seq|Block|Camp/yr|Q split (Q1,Q2,Q3,Q4)|Plan window start|Plan window end|Stages|Target (kg)|Stage flow",
+  `API sheet columns follow the APIs tab: ${hdr.join(" · ")}`
+);
+const apiKeys = ["productionSequence", "block", "campaignsPerYear", "campaignQuarterSplit", "window", "targetKg", "topology", "quarterSequence"];
+const apiDiffs: string[] = [];
+for (const a of apis) {
+  const b = res.apis.find((x) => x.name === a.name)!;
+  // A missing topology means "linear" (the app's default).
+  const norm = (o: any, k: string) => (k === "topology" ? o[k] ?? "linear" : o[k] ?? null);
+  for (const k of apiKeys)
+    if (JSON.stringify(norm(a, k)) !== JSON.stringify(norm(b, k))) apiDiffs.push(`${a.name}.${k}`);
+  if (a.stages.length !== b.stages.length) apiDiffs.push(`${a.name}.stages`);
+}
+check(apiDiffs.length === 0, `all ${apis.length} APIs: name, seq, block, camp/yr, Q split, plan window, stages, target, stage flow, Q sequence identical${apiDiffs.length ? " — " + apiDiffs.slice(0, 5).join(", ") : ""}`);
 console.log("warnings:", res.warnings.slice(0, 5));
 process.exit(fail ? 1 : 0);

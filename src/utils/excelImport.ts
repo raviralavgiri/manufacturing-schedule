@@ -1,13 +1,15 @@
 /**
  * Excel import parser for the standard three-sheet template:
- *   "API"              — API list with topology spec (data from row 6, cols B–AB)
- *                        B(2)=Sl.No  C(3)=Name  D(4)=Sequence  E(5)=Block
- *                        F(6)=TargetKg  G(7)=Start  H(8)=End  I(9)=StageFlow
- *                        J(10)=TotalStages  K(11)=MainStages
- *                        Side chains:  L/M/N  O/P/Q  R/S/T  (merge / factor / length)
- *                        Parallel:     U/V/W sub-chain lengths, X=f1 Y=f2 (branch
- *                                      B = A×f1, C = A×f2)
- *                        Fork:         Z=shared preamble  AA=branches  AB=stages/branch
+ *   "API"              — API list (data from row 6). Columns follow the APIs tab
+ *                        (positions in excelLayout.ts → API_COLS):
+ *                        B=Sl.No  C=API Name  D=Seq  E=Block  F=Camp/yr
+ *                        G=Q split  H=Plan start  I=Plan end  J=Stages
+ *                        K=Target (kg)  L=Stage flow  M=Main stages
+ *                        Side chains: N/O/P  Q/R/S  T/U/V (merge / factor / length)
+ *                        Parallel:    W/X/Y sub-chain lengths, Z=f1 AA=f2
+ *                        Fork:        AB=shared preamble AC=branches AD=stages/branch
+ *                        AE=Q sequence "r1,r2,r3,r4"
+ *                        Older files (Target kg in F, API_COLS_LEGACY) still import.
  *   "Stages"           — Per-stage operational params (data from row 3, cols A–P)
  *                        A=API  B=Stage  C=FirstBatchStart  D=ExistingStock(kg)
  *                        E=Input/Batch  F=Output/Batch  G=BCF  H=BCT
@@ -41,6 +43,7 @@ import { cascadePlannedBatches } from "../scheduler/cascade";
 import { refreshPaletteColors } from "../data/seed";
 import { FY_END_MS, FY_START_MS } from "./dates";
 import { validateApiDag } from "./validation";
+import { API_COLS, API_COLS_LEGACY, isCurrentApiLayout } from "./excelLayout";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -399,46 +402,43 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
   // ── 3. API sheet → build API objects ───────────────────────────────────────
   //
   // Headers: rows 1–4 (group labels) + row 5 (sub-labels). Data starts row 6.
-  // Col layout (1-based):
-  //   B(2)=Sl.No  C(3)=Name  D(4)=Sequence  E(5)=Block  F(6)=TargetKg
-  //   G(7)=Start  H(8)=End  I(9)=StageFlow  J(10)=TotalStages  K(11)=MainStages
-  //   Side-chain: L(12)=SC1merge  M(13)=SC1factor  N(14)=SC1length
-  //               O(15)=SC2merge  P(16)=SC2factor  Q(17)=SC2length
-  //               R(18)=SC3merge  S(19)=SC3factor  T(20)=SC3length
-  //   Parallel:   U(21)=subA  V(22)=subB  W(23)=subC  X(24)=f1  Y(25)=f2
-  //   Fork:       Z(26)=sharedPreamble  AA(27)=branches  AB(28)=stagesPerBranch
-  //   Campaigns:  AC(29)=campaigns per year (optional → campaign mode)
-  //               AD(30)=quarter split "n1,n2,n3,n4" (optional)
-  //               AE(31)=quarter sequence rank "r1,r2,r3,r4", blanks = auto
+  // Column positions come from excelLayout.ts (current = APIs-tab order,
+  // legacy = previous layout), picked from the column-F header.
 
   const rawApis: API[] = [];
+
+  // Current layout follows the APIs tab (Camp/yr in column F); older files
+  // have Target kg in F. See excelLayout.ts.
+  const C = isCurrentApiLayout(cellStr(apiSheet!.getRow(5).getCell(6)))
+    ? API_COLS
+    : API_COLS_LEGACY;
 
   apiSheet!.eachRow({ includeEmpty: false }, (row, rn) => {
     if (rn <= 5) return; // skip header rows
 
-    const name = cellStr(row.getCell(3)); // col C
+    const name = cellStr(row.getCell(C.name));
     if (!name) return;
 
-    const sequence = cellNum(row.getCell(4)); // col D (optional)
-    const block = cellStr(row.getCell(5)); // col E (optional)
-    const targetKg = cellNum(row.getCell(6)) ?? 0; // col F
-    const startMs = cellDate(row.getCell(7)) ?? FY_START_MS; // col G
-    const endMs = cellDate(row.getCell(8)) ?? FY_END_MS; // col H
-    const topoStr = (cellStr(row.getCell(9)) ?? "Linear").toLowerCase(); // col I
-    const mainStages = Math.max(1, cellNum(row.getCell(11)) ?? 1); // col K
+    const sequence = cellNum(row.getCell(C.seq)); // (optional)
+    const block = cellStr(row.getCell(C.block)); // (optional)
+    const targetKg = cellNum(row.getCell(C.target)) ?? 0;
+    const startMs = cellDate(row.getCell(C.start)) ?? FY_START_MS;
+    const endMs = cellDate(row.getCell(C.end)) ?? FY_END_MS;
+    const topoStr = (cellStr(row.getCell(C.flow)) ?? "Linear").toLowerCase();
+    const mainStages = Math.max(1, cellNum(row.getCell(C.mainStages)) ?? 1);
     const plannedBatchesOverride = null; // no API-level override column
-    const campaignsRaw = cellNum(row.getCell(29)); // col AC (optional)
+    const campaignsRaw = cellNum(row.getCell(C.camp)); // (optional)
     const campaignsPerYear =
       campaignsRaw !== null && Number.isFinite(campaignsRaw) && campaignsRaw > 0
         ? Math.round(campaignsRaw)
         : undefined;
-    const splitStr = cellStr(row.getCell(30)); // col AD (optional)
+    const splitStr = cellStr(row.getCell(C.split)); // (optional)
     const splitParts = splitStr
       ? splitStr.split(/[\s,;/]+/).filter(Boolean).map(Number)
       : [];
     // Kept as typed even when it doesn't sum to campaigns/yr — the campaign
     // report flags the mismatch instead of silently changing the plan.
-    const seqStr = cellStr(row.getCell(31)); // col AE (optional)
+    const seqStr = cellStr(row.getCell(C.qSequence)); // (optional)
     const seqParts = seqStr ? seqStr.split(/[,;/]/).map((t) => t.trim()) : [];
     const quarterSequence =
       seqParts.length === 4
@@ -467,25 +467,22 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
         factor: number;
         length: number;
       }> = [];
-      // SC1: L(12) M(13) N(14)
-      if (!isNA(row.getCell(12))) {
-        const m = cellNum(row.getCell(12));
-        const f = cellNum(row.getCell(13));
-        const l = cellNum(row.getCell(14)) ?? 1;
+      if (!isNA(row.getCell(C.sc[0]))) {
+        const m = cellNum(row.getCell(C.sc[0]));
+        const f = cellNum(row.getCell(C.sc[0] + 1));
+        const l = cellNum(row.getCell(C.sc[0] + 2)) ?? 1;
         if (m !== null && f !== null) sideChains.push({ mergesIntoStageNo: m, factor: f, length: l });
       }
-      // SC2: O(15) P(16) Q(17)
-      if (!isNA(row.getCell(15))) {
-        const m = cellNum(row.getCell(15));
-        const f = cellNum(row.getCell(16));
-        const l = cellNum(row.getCell(17)) ?? 1;
+      if (!isNA(row.getCell(C.sc[1]))) {
+        const m = cellNum(row.getCell(C.sc[1]));
+        const f = cellNum(row.getCell(C.sc[1] + 1));
+        const l = cellNum(row.getCell(C.sc[1] + 2)) ?? 1;
         if (m !== null && f !== null) sideChains.push({ mergesIntoStageNo: m, factor: f, length: l });
       }
-      // SC3: R(18) S(19) T(20)
-      if (!isNA(row.getCell(18))) {
-        const m = cellNum(row.getCell(18));
-        const f = cellNum(row.getCell(19));
-        const l = cellNum(row.getCell(20)) ?? 1;
+      if (!isNA(row.getCell(C.sc[2]))) {
+        const m = cellNum(row.getCell(C.sc[2]));
+        const f = cellNum(row.getCell(C.sc[2] + 1));
+        const l = cellNum(row.getCell(C.sc[2] + 2)) ?? 1;
         if (m !== null && f !== null) sideChains.push({ mergesIntoStageNo: m, factor: f, length: l });
       }
       topoSpec = {
@@ -498,15 +495,15 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
       };
     } else if (topoStr.includes("parallel")) {
       topology = "parallel";
-      const subA = cellNum(row.getCell(21)) ?? 0; // col U
-      const subB = cellNum(row.getCell(22)) ?? 0; // col V
-      const subCVal = cellNum(row.getCell(23));    // col W
+      const subA = cellNum(row.getCell(C.par[0])) ?? 0;
+      const subB = cellNum(row.getCell(C.par[1])) ?? 0;
+      const subCVal = cellNum(row.getCell(C.par[2]));
       const subChainLengths = [subA, subB].filter((n) => n > 0);
-      if (subCVal !== null && !isNA(row.getCell(23))) subChainLengths.push(subCVal);
+      if (subCVal !== null && !isNA(row.getCell(C.par[2]))) subChainLengths.push(subCVal);
       // Per-branch input (stoichiometric) factors. Branch A is the base (=1);
-      // f1 (branch B) col X, f2 (branch C) col Y. Blank ⇒ 1.
-      const fB = cellNum(row.getCell(24)); // col X — branch B factor (f1)
-      const fC = cellNum(row.getCell(25)); // col Y — branch C factor (f2)
+      // f1 (branch B), f2 (branch C). Blank ⇒ 1.
+      const fB = cellNum(row.getCell(C.parFactor[0])); // branch B factor (f1)
+      const fC = cellNum(row.getCell(C.parFactor[1])); // branch C factor (f2)
       const lens =
         subChainLengths.length > 0 ? subChainLengths : [2, 2];
       const subChainFactors = lens.map((_, i) =>
@@ -524,10 +521,9 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
       };
     } else if (topoStr.includes("fork") || topoStr.includes("diverge")) {
       topology = "fork";
-      // Fork columns: Z(26)=shared preamble, AA(27)=branches, AB(28)=stages/branch.
-      const shared = Math.max(1, cellNum(row.getCell(26)) ?? 1);
-      const branches = Math.max(2, cellNum(row.getCell(27)) ?? 2);
-      const perBranch = Math.max(1, cellNum(row.getCell(28)) ?? 1);
+      const shared = Math.max(1, cellNum(row.getCell(C.forkShared)) ?? 1);
+      const branches = Math.max(2, cellNum(row.getCell(C.forkBranches)) ?? 2);
+      const perBranch = Math.max(1, cellNum(row.getCell(C.forkPerBranch)) ?? 1);
       topoSpec = {
         kind: "fork",
         sharedStages: shared,
