@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ZoomIn,
   ZoomOut,
@@ -178,6 +178,83 @@ export default function GanttTab() {
 
   // Ref to the Gantt card so we can snapshot it as PNG
   const chartCardRef = useRef<HTMLDivElement>(null);
+
+  // ─ Interactive highlighting ───────────────────────────────────────────
+  // Hover a bar / API chip to highlight that API everywhere; click to pin
+  // the highlight (click again or Esc to clear). Other APIs fade back.
+  const [hoverApi, setHoverApi] = useState<string | null>(null);
+  const [focusApi, setFocusApi] = useState<string | null>(null);
+  const activeApi = hoverApi ?? focusApi;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setFocusApi(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // ─ Ctrl/⌘ + wheel zoom (anchored at the cursor) and drag-to-pan ───────
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const zoomAnchor = useRef<{ weeks: number; offsetX: number } | null>(null);
+  const RAIL_W = 200;
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const offsetX = e.clientX - rect.left;
+      setPxPerWeek((px) => {
+        const next = Math.round(
+          Math.min(240, Math.max(24, px * (e.deltaY < 0 ? 1.15 : 1 / 1.15)))
+        );
+        zoomAnchor.current = {
+          weeks: (el.scrollLeft + offsetX - RAIL_W) / px,
+          offsetX,
+        };
+        return next;
+      });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const a = zoomAnchor.current;
+    if (!el || !a) return;
+    el.scrollLeft = Math.max(0, a.weeks * pxPerWeek + RAIL_W - a.offsetX);
+    zoomAnchor.current = null;
+  }, [pxPerWeek]);
+  const drag = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const onPanStart = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const t = e.target as HTMLElement;
+    if (t.closest("[data-bar],button,input,select,a")) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    drag.current = { x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop };
+    setDragging(true);
+  };
+  useEffect(() => {
+    if (!dragging) return;
+    const move = (e: MouseEvent) => {
+      const el = scrollRef.current;
+      const d = drag.current;
+      if (!el || !d) return;
+      el.scrollLeft = d.left - (e.clientX - d.x);
+      el.scrollTop = d.top - (e.clientY - d.y);
+    };
+    const up = () => {
+      drag.current = null;
+      setDragging(false);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    return () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+  }, [dragging]);
 
   // Filter state - empty Set means "all" (no filter)
   const [apiFilter, setApiFilter] = useState<Set<string>>(new Set());
@@ -593,6 +670,60 @@ export default function GanttTab() {
     setCollapsed(c);
   };
 
+  // Header height (rail spacer must match): quarter band + week ticks
+  // (+ day row at Month/Week zoom) + weekly load strip.
+  const LOAD_H = 20;
+  const headerH = 32 + 28 + (pxPerWeek >= 100 ? 20 : 0) + LOAD_H;
+
+  // Weekly load: share of all reactor time booked (start → cycle end) by the
+  // visible batches in each week, merged per reactor so overlaps count once.
+  const weeklyLoad = useMemo(() => {
+    const WEEK = 7 * 24 * 3600 * 1000;
+    const busy = new Array(weeks.length).fill(0);
+    const active = new Array(weeks.length).fill(0);
+    const byReactor = new Map<string, [number, number][]>();
+    filteredBatches.forEach((b) =>
+      b.reactorIds.forEach((rid) =>
+        byReactor.set(rid, [...(byReactor.get(rid) ?? []), [b.startMs, b.endMs]])
+      )
+    );
+    byReactor.forEach((spans) => {
+      spans.sort((x, y) => x[0] - y[0]);
+      const merged: [number, number][] = [];
+      spans.forEach(([a, c]) => {
+        const last = merged[merged.length - 1];
+        if (last && a <= last[1]) last[1] = Math.max(last[1], c);
+        else merged.push([a, c]);
+      });
+      merged.forEach(([a, c]) => {
+        const w0 = Math.max(0, Math.floor((a - fyStartMs) / WEEK));
+        const w1 = Math.min(weeks.length - 1, Math.floor((c - 1 - fyStartMs) / WEEK));
+        for (let w = w0; w <= w1; w++) {
+          const ws = fyStartMs + w * WEEK;
+          busy[w] += Math.max(0, Math.min(c, ws + WEEK) - Math.max(a, ws));
+        }
+      });
+    });
+    filteredBatches.forEach((b) => {
+      const w0 = Math.max(0, Math.floor((b.startMs - fyStartMs) / WEEK));
+      const w1 = Math.min(weeks.length - 1, Math.floor((b.endMs - 1 - fyStartMs) / WEEK));
+      for (let w = w0; w <= w1; w++) active[w]++;
+    });
+    const cap = Math.max(1, reactors.length) * WEEK;
+    return busy.map((h, i) => ({ frac: Math.min(1, h / cap), active: active[i] }));
+  }, [filteredBatches, weeks, fyStartMs, reactors.length]);
+  const todayMs = Date.now();
+  const todayX =
+    todayMs >= fyStartMs && todayMs <= fyStartMs + weeks.length * 7 * 24 * 3600 * 1000
+      ? ((todayMs - fyStartMs) / (7 * 24 * 3600 * 1000)) * pxPerWeek
+      : null;
+
+  // APIs that have visible bars (for the highlight chips).
+  const visibleApiIds = useMemo(() => {
+    const set = new Set(filteredBatches.map((b) => b.apiId));
+    return apis.filter((a) => set.has(a.id));
+  }, [filteredBatches, apis]);
+
   // Determine quarter band positions
   const quarterBands = useMemo(() => {
     const bands: { qStart: number; qEnd: number; label: string }[] = [];
@@ -683,15 +814,33 @@ export default function GanttTab() {
                         return (
                           <div
                             key={`${b.apiId}|${b.stageId}|${b.batchNo}`}
-                            className="group absolute top-1/2 -translate-y-1/2"
-                            style={{ left: Math.max(0, left - cleaningWidth) }}
+                            data-bar
+                            className="group absolute top-1/2 -translate-y-1/2 cursor-pointer transition-opacity duration-200"
+                            style={{
+                              left: Math.max(0, left - cleaningWidth),
+                              opacity: activeApi && activeApi !== b.apiId ? 0.16 : 1,
+                              zIndex: activeApi === b.apiId ? 5 : undefined,
+                            }}
+                            onMouseEnter={() => setHoverApi(b.apiId)}
+                            onMouseLeave={() => setHoverApi(null)}
+                            onClick={() =>
+                              setFocusApi((f) => (f === b.apiId ? null : b.apiId))
+                            }
                             title={`${b.batchId} · ${b.reactorId}\n${new Date(
                               b.startMs
                             ).toDateString()} → ${new Date(
                               b.analysisEndMs
                             ).toDateString()}`}
                           >
-                            <div className="flex items-center">
+                            <div
+                              className="flex items-center overflow-hidden rounded-[5px] transition-[filter] duration-150 group-hover:brightness-110"
+                              style={{
+                                boxShadow:
+                                  activeApi === b.apiId
+                                    ? `0 0 0 1.5px ${barColor}, 0 0 14px ${barColor}aa`
+                                    : `0 1px 4px ${barColor}55`,
+                              }}
+                            >
                               {cleanColor && cleaningWidth > 1 && (
                                 <div
                                   style={{
@@ -734,8 +883,8 @@ export default function GanttTab() {
                                     style={{
                                       width: processWidth,
                                       height: barH,
-                                      background: barColor,
-                                      boxShadow: `0 0 6px ${barColor}99, inset 0 1px 0 rgba(255,255,255,0.25)`,
+                                      background: `linear-gradient(180deg, ${barColor} 0%, ${barColor} 55%, ${barColor}c0 100%)`,
+                                      boxShadow: "inset 0 1px 0 rgba(255,255,255,0.35)",
                                     }}
                                     className="relative border border-white/20 transition-all group-hover:brightness-125 group-hover:saturate-150"
                                   >
@@ -756,8 +905,8 @@ export default function GanttTab() {
                                   style={{
                                     width: cycleWidth,
                                     height: barH,
-                                    background: barColor,
-                                    boxShadow: `0 0 6px ${barColor}99, inset 0 1px 0 rgba(255,255,255,0.25)`,
+                                    background: `linear-gradient(180deg, ${barColor} 0%, ${barColor} 55%, ${barColor}c0 100%)`,
+                                    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.35)",
                                   }}
                                   className={clsx(
                                     "relative border border-white/20 transition-all group-hover:brightness-125 group-hover:saturate-150",
@@ -861,7 +1010,7 @@ export default function GanttTab() {
             ? hasClReactors
               ? "Cleanroom ▸ product ▸ stage — Cleanroom (CL) reactors only, grouped by production block. Collapse a cleanroom or product to see its occupancy strip."
               : "Cleanroom ▸ product ▸ stage — no reactor is classed CL, so every production block is shown as a cleanroom."
-            : "Solid bar = process; striped bar = wait inside slot. Cyan tail = analysis, yellow pre-tail = PCO, green pre-tail = 30-day campaign cleaning."
+            : "Solid bar = process; striped bar = wait inside slot. Faded tail = analysis; red stripes before a bar = PCO, teal stripes = campaign cleaning."
         }
         right={
           <div className="flex items-center gap-2">
@@ -1073,16 +1222,67 @@ export default function GanttTab() {
         )}
       </div>
 
+      {/* Highlight chips: hover to highlight an API, click to pin it */}
+      {visibleApiIds.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 px-1 text-[11px]">
+          <span className="mr-1 font-bold uppercase tracking-wider text-ink-400">Highlight</span>
+          {visibleApiIds.map((a) => {
+            const on = activeApi === a.id;
+            return (
+              <button
+                key={a.id}
+                onMouseEnter={() => setHoverApi(a.id)}
+                onMouseLeave={() => setHoverApi(null)}
+                onClick={() => setFocusApi((f) => (f === a.id ? null : a.id))}
+                className={clsx(
+                  "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-semibold transition",
+                  on ? "text-white" : "border-white/10 text-ink-300 hover:text-white",
+                  activeApi && !on && "opacity-50"
+                )}
+                style={on ? { borderColor: a.color, background: `${a.color}26` } : undefined}
+                title={focusApi === a.id ? "Click to clear the highlight (or press Esc)" : "Click to keep this API highlighted"}
+              >
+                <span className="h-2 w-2 rounded-full" style={{ background: a.color, boxShadow: `0 0 6px ${a.color}` }} />
+                {a.name}
+              </button>
+            );
+          })}
+          {focusApi && (
+            <button
+              onClick={() => setFocusApi(null)}
+              className="ml-1 rounded-full border border-white/10 px-2 py-0.5 text-ink-300 hover:text-white"
+            >
+              Clear ✕
+            </button>
+          )}
+          <span className="ml-auto text-[10px] text-ink-500">
+            Ctrl/⌘ + scroll to zoom · drag to pan · click a bar to pin its API
+          </span>
+        </div>
+      )}
+
       <div ref={chartCardRef} className="gantt-chart-card">
       <Card className="overflow-hidden p-0">
         {/* Single scroll container — freezes the dates header (sticky top) and
             the left labels column (sticky left) while both axes scroll. */}
-        <div className="max-h-[72vh] overflow-auto">
+        <div
+          ref={scrollRef}
+          onMouseDown={onPanStart}
+          className={clsx(
+            "max-h-[72vh] overflow-auto select-none",
+            dragging ? "cursor-grabbing" : "cursor-grab"
+          )}
+        >
         <div className="flex" style={{ width: 200 + totalWeeks * pxPerWeek }}>
           {/* Left labels column — frozen on horizontal scroll */}
           <div className="sticky left-0 z-20 w-[200px] shrink-0 border-r border-white/10 bg-ink-950">
             {/* Header spacer — frozen on BOTH axes (corner) */}
-            <div className="sticky top-0 z-30 h-[60px] border-b border-white/10 bg-ink-950" />
+            <div
+              className="sticky top-0 z-30 flex items-end border-b border-white/10 bg-ink-950 px-3 pb-1 text-[9px] font-bold uppercase tracking-wider text-ink-500"
+              style={{ height: headerH }}
+            >
+              Load
+            </div>
             {/* Rows */}
             {isGrouped && groupRows.length === 0 && (
               <div className="px-3 py-6 text-[11px] text-ink-400">
@@ -1319,7 +1519,7 @@ export default function GanttTab() {
                                 : "border-white/5 text-transparent"
                             )}
                           >
-                            <span className="block px-1 leading-7">
+                            <span className="block whitespace-nowrap px-1 leading-7">
                               {w.label}
                             </span>
                           </div>
@@ -1386,6 +1586,39 @@ export default function GanttTab() {
                       </div>
                     );
                   })()}
+                {/* Weekly load strip — how busy the plant is, week by week */}
+                <div
+                  className="relative flex items-end border-b border-white/10 bg-white/[0.015]"
+                  style={{ height: LOAD_H, width: totalWeeks * pxPerWeek }}
+                >
+                  {weeklyLoad.map((w, i) => (
+                    <div
+                      key={i}
+                      className="shrink-0 px-[1px]"
+                      style={{ width: pxPerWeek, height: "100%" }}
+                      title={`Week of ${weeks[i]?.start.toDateString() ?? ""}: ${Math.round(w.frac * 100)}% of reactor time booked · ${w.active} batch${w.active === 1 ? "" : "es"} running`}
+                    >
+                      <div className="flex h-full items-end">
+                        <div
+                          className="w-full rounded-t-sm"
+                          style={{
+                            height: `${Math.max(w.frac > 0 ? 8 : 0, w.frac * 100)}%`,
+                            background:
+                              "linear-gradient(180deg, rgba(34,211,238,0.85), rgba(167,139,250,0.55))",
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                  {todayX !== null && (
+                    <span
+                      className="pointer-events-none absolute top-0 -translate-x-1/2 rounded bg-rose-500 px-1 text-[8px] font-bold uppercase leading-3 text-white"
+                      style={{ left: todayX }}
+                    >
+                      Today
+                    </span>
+                  )}
+                </div>
               </div>
 
               {/*
@@ -1404,6 +1637,13 @@ export default function GanttTab() {
 
               {/* Body grid + bars */}
               <div className="relative">
+                {todayX !== null && (
+                  <div
+                    aria-hidden
+                    className="pointer-events-none absolute bottom-0 top-0 z-[6] w-px bg-rose-400/80"
+                    style={{ left: todayX, boxShadow: "0 0 6px rgba(251,113,133,0.8)" }}
+                  />
+                )}
                 {/* Grouped modes: one body line per rail line (same heights). */}
                 {isGrouped &&
                   groupRows.map((line, idx) => {
@@ -1551,26 +1791,26 @@ export default function GanttTab() {
           <Legend
             swatch={
               <span
-                className="inline-block h-3 w-6 rounded-sm border border-dashed border-amber-300"
+                className="inline-block h-3 w-6 rounded-sm border border-[#dc2626]"
                 style={{
                   background:
-                    "linear-gradient(90deg, rgba(251,191,36,0.13), rgba(251,191,36,0.4))",
+                    "repeating-linear-gradient(135deg, #dc2626cc 0 4px, #dc262655 4px 8px)",
                 }}
               />
             }
-            label="PCO cleaning (yellow pre-tail)"
+            label="PCO cleaning (red stripes before the bar)"
           />
           <Legend
             swatch={
               <span
-                className="inline-block h-3 w-6 rounded-sm border border-dashed border-lime-300"
+                className="inline-block h-3 w-6 rounded-sm border border-[#0d9488]"
                 style={{
                   background:
-                    "linear-gradient(90deg, rgba(163,230,53,0.13), rgba(163,230,53,0.4))",
+                    "repeating-linear-gradient(135deg, #0d9488cc 0 4px, #0d948855 4px 8px)",
                 }}
               />
             }
-            label="Campaign cleaning (green pre-tail · 30d)"
+            label="Campaign cleaning (teal stripes · after 34 days)"
           />
           {isGrouped && (
             <span className="inline-flex items-center gap-1.5 rounded-md border border-violet-300/30 bg-violet-300/8 px-2 py-1 font-semibold text-violet-200">
