@@ -21,6 +21,8 @@ import type { ApiTopology } from "../types";
 import ParallelTopologyEditor from "../components/ParallelTopologyEditor";
 import SideChainsTopologyEditor from "../components/SideChainsTopologyEditor";
 import ForkTopologyEditor from "../components/ForkTopologyEditor";
+import StageFlowPreview from "../components/StageFlowPreview";
+import { stageFlowFromStages } from "../utils/topologyPresets";
 
 /**
  * APIs tab — high-level "what we want to make" view.
@@ -374,14 +376,32 @@ export default function ApisTab() {
                         )}
                       </td>
                       </tr>
-                      {isExpanded && currentTopology !== "linear" && (
+                      {isExpanded && (
                         <tr className="border-t border-white/5">
                           <td
                             colSpan={10}
                             className="bg-ink-900/40 px-3 py-3"
                           >
+                            {api.stages.length > 0 && (
+                              <StageFlowPreview
+                                nodes={stageFlowFromStages(api.stages)}
+                                title={`Current stage flow · ${
+                                  { linear: "Linear", parallel: "Parallel", side_chains: "Side chains", fork: "Fork" }[
+                                    api.topology ?? "linear"
+                                  ]
+                                }`}
+                                note={
+                                  currentTopology === "linear"
+                                    ? "Choose another Stage Flow to preview and apply a different flow."
+                                    : undefined
+                                }
+                              />
+                            )}
                             {currentTopology === "parallel" && (
                               <ParallelTopologyEditor
+                                existingStageNames={[...api.stages]
+                                  .sort((x, y) => x.stageNo - y.stageNo)
+                                  .map((st) => st.stageName)}
                                 onApply={(spec) => {
                                   applyTopologyPreset(api.id, spec);
                                   setExpandedApiId(null);
@@ -403,6 +423,9 @@ export default function ApisTab() {
                             )}
                             {currentTopology === "side_chains" && (
                               <SideChainsTopologyEditor
+                                existingStageNames={[...api.stages]
+                                  .sort((x, y) => x.stageNo - y.stageNo)
+                                  .map((st) => st.stageName)}
                                 onApply={(spec) => {
                                   applyTopologyPreset(api.id, spec);
                                   setExpandedApiId(null);
@@ -424,6 +447,9 @@ export default function ApisTab() {
                             )}
                             {currentTopology === "fork" && (
                               <ForkTopologyEditor
+                                existingStageNames={[...api.stages]
+                                  .sort((x, y) => x.stageNo - y.stageNo)
+                                  .map((st) => st.stageName)}
                                 onApply={(spec) => {
                                   applyTopologyPreset(api.id, spec);
                                   setExpandedApiId(null);
@@ -729,11 +755,17 @@ function TopologyCell({
           Fork
         </option>
       </select>
-      {value !== "linear" && (
+      {(
         <button
           type="button"
           onClick={onToggleExpand}
-          title={isExpanded ? "Collapse spec panel" : "Open spec panel"}
+          title={
+            isExpanded
+              ? "Collapse"
+              : value === "linear"
+              ? "Show the stage flow diagram"
+              : "Open spec panel with stage flow preview"
+          }
           className="cell-yellow rounded-md p-1 hover:brightness-125"
         >
           {isExpanded ? (

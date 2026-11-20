@@ -1,11 +1,15 @@
+import StageFlowPreview from "./StageFlowPreview";
 import { useState } from "react";
 import { Plus, Minus, Sparkles, GitBranch, Info } from "lucide-react";
-import type { ForkSpec } from "../utils/topologyPresets";
+import { previewStageFlow, type ForkSpec } from "../utils/topologyPresets";
 
 interface Props {
   initial?: Partial<ForkSpec>;
   onApply: (spec: ForkSpec) => void;
   onCancel?: () => void;
+  /** Current stage names of the API, in stage order — Apply keeps them by
+   *  position, so the preview shows them too. */
+  existingStageNames?: string[];
 }
 
 /**
@@ -19,21 +23,21 @@ interface Props {
  * api.targetKg is split equally across all sinks; per-stage Input/Batch and
  * Output/Batch (set in the Stages tab) drive the material balance cascade.
  */
-export default function ForkTopologyEditor({ initial, onApply, onCancel }: Props) {
+export default function ForkTopologyEditor({ initial, onApply, onCancel, existingStageNames }: Props) {
   const [sharedStages,    setSharedStages]    = useState(clamp(initial?.sharedStages    ?? 1, 1, 8));
   const [branches,        setBranches]        = useState(clamp(initial?.branches        ?? 2, 2, 8));
   const [stagesPerBranch, setStagesPerBranch] = useState(clamp(initial?.stagesPerBranch ?? 2, 1, 8));
 
   const totalStages = sharedStages + branches * stagesPerBranch;
 
-  const handleApply = () => {
-    onApply({
+  // One spec for both the live preview and Apply.
+  const buildSpec = (): ForkSpec => ({
       kind: "fork",
       sharedStages:    Math.max(1, Math.floor(sharedStages)),
       branches:        Math.max(2, Math.floor(branches)),
       stagesPerBranch: Math.max(1, Math.floor(stagesPerBranch)),
-    });
-  };
+  });
+  const handleApply = () => onApply(buildSpec());
 
   return (
     <div className="rounded-xl border border-cyan-300/30 bg-gradient-to-br from-cyan-300/8 via-violet-300/5 to-lime-300/5 p-4 shadow-glowCyan">
@@ -116,6 +120,11 @@ export default function ForkTopologyEditor({ initial, onApply, onCancel }: Props
         tab to drive the per-branch material balance.
       </p>
 
+      <StageFlowPreview
+        nodes={previewStageFlow(buildSpec(), existingStageNames)}
+        title="Stage flow after Apply"
+        note="Check the flow before applying. Existing stage names are kept in order; any extra existing stages are chained after the last one."
+      />
       <div className="mt-4 flex items-center justify-end gap-2">
         {onCancel && (
           <button type="button" onClick={onCancel}

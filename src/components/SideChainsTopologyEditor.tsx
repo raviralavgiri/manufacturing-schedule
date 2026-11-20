@@ -1,14 +1,19 @@
+import StageFlowPreview from "./StageFlowPreview";
 import { useEffect, useState } from "react";
 import { Plus, Trash2, Sparkles, Workflow, Info } from "lucide-react";
-import type {
-  SideChainSpec,
-  SideChainsSpec,
+import {
+  previewStageFlow,
+  type SideChainSpec,
+  type SideChainsSpec,
 } from "../utils/topologyPresets";
 
 interface Props {
   initial?: Partial<SideChainsSpec>;
   onApply: (spec: SideChainsSpec) => void;
   onCancel?: () => void;
+  /** Current stage names of the API, in stage order — Apply keeps them by
+   *  position, so the preview shows them too. */
+  existingStageNames?: string[];
 }
 
 /**
@@ -36,6 +41,7 @@ export default function SideChainsTopologyEditor({
   initial,
   onApply,
   onCancel,
+  existingStageNames,
 }: Props) {
   const [mainBackboneLength, setMainBackboneLength] = useState(
     Math.max(2, initial?.mainBackboneLength ?? 4)
@@ -71,8 +77,8 @@ export default function SideChainsTopologyEditor({
     Math.max(2, mainBackboneLength) +
     sideChains.reduce((acc, sc) => acc + Math.max(1, sc.length), 0);
 
-  const handleApply = () => {
-    onApply({
+  // One spec for both the live preview and Apply.
+  const buildSpec = (): SideChainsSpec => ({
       kind: "side_chains",
       mainBackboneLength: Math.max(2, Math.floor(mainBackboneLength)),
       sideChains: sideChains.map((sc) => ({
@@ -90,8 +96,8 @@ export default function SideChainsTopologyEditor({
             : 0.3,
         namePrefix: sc.namePrefix?.trim() || undefined,
       })),
-    });
-  };
+  });
+  const handleApply = () => onApply(buildSpec());
 
   // Build dropdown of valid main stage numbers (≥ 2; can't feed into S1).
   const mainStageOptions: number[] = [];
@@ -233,6 +239,11 @@ export default function SideChainsTopologyEditor({
         ; continuations forward-cascade from the anchor.
       </p>
 
+      <StageFlowPreview
+        nodes={previewStageFlow(buildSpec(), existingStageNames)}
+        title="Stage flow after Apply"
+        note="Check the flow before applying. Existing stage names are kept in order; any extra existing stages are chained after the last one."
+      />
       <div className="mt-4 flex items-center justify-end gap-2">
         {onCancel && (
           <button

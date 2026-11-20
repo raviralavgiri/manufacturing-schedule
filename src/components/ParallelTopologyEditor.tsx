@@ -1,6 +1,7 @@
+import StageFlowPreview from "./StageFlowPreview";
 import { useState } from "react";
 import { Plus, Minus, Sparkles, GitMerge, Info } from "lucide-react";
-import type { ParallelSpec } from "../utils/topologyPresets";
+import { previewStageFlow, type ParallelSpec } from "../utils/topologyPresets";
 
 interface Props {
   /** Initial values to seed the editor with — typically derived from the
@@ -11,6 +12,9 @@ interface Props {
   onApply: (spec: ParallelSpec) => void;
   /** Optional cancel — closes the panel without applying. */
   onCancel?: () => void;
+  /** Current stage names of the API, in stage order — Apply keeps them by
+   *  position, so the preview shows them too. */
+  existingStageNames?: string[];
 }
 
 /**
@@ -31,6 +35,7 @@ export default function ParallelTopologyEditor({
   initial,
   onApply,
   onCancel,
+  existingStageNames,
 }: Props) {
   const initialCount = clampInt(initial?.subChainCount ?? 2, 2, 8);
   const seedLengths = (initial?.subChainLengths ?? []).slice(0, initialCount);
@@ -81,8 +86,8 @@ export default function ParallelTopologyEditor({
     );
   };
 
-  const handleApply = () => {
-    onApply({
+  // One spec for both the live preview and Apply.
+  const buildSpec = (): ParallelSpec => ({
       kind: "parallel",
       subChainCount,
       subChainLengths: subChainLengths.map((x) => Math.max(1, Math.floor(x))),
@@ -91,8 +96,8 @@ export default function ParallelTopologyEditor({
       subChainFactors: subChainFactors.map((f, i) =>
         i === 0 ? 1 : Number.isFinite(f) && f > 0 ? f : 1
       ),
-    });
-  };
+  });
+  const handleApply = () => onApply(buildSpec());
 
   return (
     <div className="rounded-xl border border-violet-300/30 bg-gradient-to-br from-violet-300/8 via-cyan-300/5 to-pink-300/5 p-4 shadow-glowViolet">
@@ -221,6 +226,11 @@ export default function ParallelTopologyEditor({
         which sizes each branch's batch count.
       </p>
 
+      <StageFlowPreview
+        nodes={previewStageFlow(buildSpec(), existingStageNames)}
+        title="Stage flow after Apply"
+        note="Check the flow before applying. Existing stage names are kept in order; any extra existing stages are chained after the last one."
+      />
       <div className="mt-4 flex items-center justify-end gap-2">
         {onCancel && (
           <button
