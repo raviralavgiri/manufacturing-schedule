@@ -1,22 +1,35 @@
 /**
  * Excel import parser for the standard three-sheet template:
- *   "API"              — API list with topology spec (data from row 6, cols B–AB)
- *                        B(2)=Sl.No  C(3)=Name  D(4)=Sequence  E(5)=Block
- *                        F(6)=TargetKg  G(7)=Start  H(8)=End  I(9)=StageFlow
- *                        J(10)=TotalStages  K(11)=MainStages
- *                        Side chains:  L/M/N  O/P/Q  R/S/T  (merge / factor / length)
- *                        Parallel:     U/V/W sub-chain lengths, X=f1 Y=f2 (branch
- *                                      B = A×f1, C = A×f2)
- *                        Fork:         Z=shared preamble  AA=branches  AB=stages/branch
+ *   "API"              — API list (data from row 6). Columns follow the APIs tab
+ *                        (positions in excelLayout.ts → API_COLS):
+ *                        B=Sl.No  C=API Name  D=Seq  E=Block  F=Camp/yr
+ *                        G=Q split  H=Plan start  I=Plan end  J=Stages
+ *                        K=Target (kg)  L=Stage flow  M=Main stages
+ *                        Side chains: N/O/P  Q/R/S  T/U/V (merge / factor / length)
+ *                        Parallel:    W/X/Y sub-chain lengths, Z=f1 AA=f2
+ *                        Fork:        AB=shared preamble AC=branches AD=stages/branch
+ *                        AE=Q sequence "r1,r2,r3,r4"
+ *                        Older files (Target kg in F, API_COLS_LEGACY) still import.
  *   "Stages"           — Per-stage operational params (data from row 3, cols A–P)
  *                        A=API  B=Stage  C=FirstBatchStart  D=ExistingStock(kg)
  *                        E=Input/Batch  F=Output/Batch  G=BCF  H=BCT
- *                        I=Analysis  J=PCO  K=Nos  L=Main  M–P=Substitutes P1–P4
+ *                        I=Analysis  J=PCO  K=Nos
+ *                        Current layout (header L starts "Equipment"), one row
+ *                        per stage:
+ *                          L=Equipment  "R105/R203/R118,R114,R119" — main
+ *                            reactors separated by commas, each followed by its
+ *                            optional substitutes separated by slashes
+ *                          M=Process (h)  N=Input from stages (names, commas)
+ *                          O=Type (IM/API)  P=Right-align (Y)
+ *                        Legacy layout, one row per main reactor:
+ *                          L=Main  M–P=Substitutes P1–P4
  *                        Stage numbers are assigned by encounter order per API,
  *                        so names like "DT1", "DT2C", "AX7" work without regex.
- *   "Master Equipment" — Reactor registry (data from row 3, cols A–I)
+ *   "Master Equipment" — Reactor registry (data from row 3, cols A–L)
  *                        A=Sl.No  B=Unit  C=Block  D=Class (CL/INT)  E=Name
  *                        F=MOC  G=Agitator  H=Capacity (L)  I=PM First Date
+ *                        J=PM Duration (days)  K=Building Maint. First Date
+ *                        L=Display name
  *
  * ExcelJS is dynamically imported so it stays out of the main bundle.
  */
@@ -29,6 +42,8 @@ import {
 import { cascadePlannedBatches } from "../scheduler/cascade";
 import { refreshPaletteColors } from "../data/seed";
 import { FY_END_MS, FY_START_MS } from "./dates";
+import { validateApiDag } from "./validation";
+import { API_COLS, API_COLS_LEGACY, isCurrentApiLayout } from "./excelLayout";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -136,6 +151,40 @@ interface ParsedStageData {
   firstBatchStartMs: number | null;
   /** Optional existing on-hand stock (kg) — col D. */
   existingStockKg: number | null;
+  /** Current layout only: IM / API classification — col O. */
+  stageKind?: "IM" | "API";
+  /** Current layout only: right-align flag — col P. */
+  rightAlign?: boolean;
+  /** Current layout only: predecessor stage NAMES — col N (null = not given). */
+  inputFromNames: string[] | null;
+}
+
+/**
+ * Parse an Equipment cell: main reactors separated by commas, each followed
+ * by its optional substitutes separated by slashes (priority order).
+ *   "R105/R203/R118,R114,R119" →
+ *     pool [R105, R114, R119], substitutes { R105: [R203, R118] }
+ * Spaces are ignored; NA / "-" entries are skipped.
+ */
+export function parseEquipmentCell(text: string | null): {
+  pool: string[];
+  substitutes: Record<string, string[]>;
+} {
+  const pool: string[] = [];
+  const substitutes: Record<string, string[]> = {};
+  if (!text) return { pool, substitutes };
+  for (const group of text.split(/[,;\n]/)) {
+    const ids = group
+      .split("/")
+      .map((t) => normalizeReactorId(t))
+      .filter((t): t is string => !!t && t.toUpperCase() !== "NA" && t !== "-");
+    if (ids.length === 0) continue;
+    const [main, ...subs] = ids;
+    if (!pool.includes(main)) pool.push(main);
+    const uniq = subs.filter((x, i) => x !== main && subs.indexOf(x) === i);
+    if (uniq.length > 0) substitutes[main] = [...(substitutes[main] ?? []), ...uniq];
+  }
+  return { pool, substitutes };
 }
 
 // ─── Main parse function ──────────────────────────────────────────────────────
@@ -166,6 +215,9 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
   }
 
   // ── 1. Master Equipment → Reactor[] ────────────────────────────────────────
+  const equipHasNewCols = /^PM\s*Duration/i.test(
+    cellStr(equipSheet!.getRow(2).getCell(10)) ?? ""
+  );
   const reactors: Reactor[] = [];
   const reactorIds = new Set<string>();
   equipSheet!.eachRow({ includeEmpty: false }, (row, rn) => {
@@ -182,10 +234,16 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
     const agitator = cellStr(row.getCell(7));   // col G: AGITATOR
     const cap = cellNum(row.getCell(8));        // col H: CAP.(L)
     const pmDate = cellDate(row.getCell(9));    // col I: PM FIRST DATE
-    // Optional extended-template columns (this template only goes through I,
-    // but accept them when present for forwards-compat with richer files).
-    const pmDays = cellNum(row.getCell(12));    // col L: PM Duration (days), if present
-    const bmDate = cellDate(row.getCell(13));   // col M: Building Maint. First Date, if present
+    // Extended columns. Current export: J = PM duration (days), K = building
+    // maintenance first date, L = display name. Older richer files put PM
+    // duration in L and the building-maintenance date in M — still accepted.
+    const pmDays = equipHasNewCols
+      ? cellNum(row.getCell(10))
+      : cellNum(row.getCell(12));
+    const bmDate = equipHasNewCols
+      ? cellDate(row.getCell(11))
+      : cellDate(row.getCell(13));
+    const displayName = equipHasNewCols ? cellStr(row.getCell(12)) : null;
 
     const rawClassUp = (rawClass ?? "").toUpperCase();
     const reactorClass =
@@ -196,7 +254,7 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
     reactorIds.add(equipId);
     reactors.push({
       id: equipId,
-      name: equipId,
+      name: displayName || equipId,
       moc: migrateMoc(moc),
       agitatorType: migrateAgitator(agitator),
       capacityKg: cap ?? 0,
@@ -226,6 +284,10 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
   let carryApi = "";
   let carryStageNo: number | null = null;
   let carryStageStr = "";
+  // Current layout = one row per stage with an "Equipment …" column L.
+  const stagesOneRowLayout = /^Equipment/i.test(
+    cellStr(stagesSheet!.getRow(2).getCell(12)) ?? ""
+  );
 
   stagesSheet!.eachRow({ includeEmpty: true }, (row, rn) => {
     if (rn <= 2) return; // rows 1–2 are headers; data starts row 3
@@ -282,7 +344,35 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
         pcoHours: cellNum(row.getCell(10)) ?? 8,         // col J
         reactorPool: [],
         reactorSubstitutes: {},
+        inputFromNames: null,
       });
+      if (stagesOneRowLayout) {
+        const d = stageMap.get(carryStageNo)!;
+        const proc = cellNum(row.getCell(13));             // col M: Process (h)
+        if (proc !== null && proc > 0) d.processHours = Math.min(proc, d.bctHours);
+        const from = cellStr(row.getCell(14));             // col N: Input from
+        d.inputFromNames = from
+          ? from.split(/[,;\n]/).map((t) => t.trim()).filter(Boolean)
+          : [];
+        const kind = (cellStr(row.getCell(15)) ?? "").toUpperCase(); // col O
+        if (kind === "IM" || kind === "API") d.stageKind = kind;
+        const ra = (cellStr(row.getCell(16)) ?? "").toUpperCase();   // col P
+        if (ra === "Y" || ra === "YES" || ra === "TRUE" || ra === "1") d.rightAlign = true;
+      }
+    }
+
+    if (stagesOneRowLayout) {
+      // col L: "R105/R203/R118,R114,R119" (main , optional /). A stage may
+      // continue on following rows with more equipment groups.
+      const { pool, substitutes } = parseEquipmentCell(cellStr(row.getCell(12)));
+      const d = stageMap.get(carryStageNo)!;
+      pool.forEach((rid) => {
+        if (!d.reactorPool.includes(rid)) d.reactorPool.push(rid);
+      });
+      Object.entries(substitutes).forEach(([rid, subs]) => {
+        d.reactorSubstitutes[rid] = [...(d.reactorSubstitutes[rid] ?? []), ...subs];
+      });
+      return;
     }
 
     // Reactor row: col L = Main reactor ID; cols M–P = substitutes P1–P4
@@ -312,46 +402,43 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
   // ── 3. API sheet → build API objects ───────────────────────────────────────
   //
   // Headers: rows 1–4 (group labels) + row 5 (sub-labels). Data starts row 6.
-  // Col layout (1-based):
-  //   B(2)=Sl.No  C(3)=Name  D(4)=Sequence  E(5)=Block  F(6)=TargetKg
-  //   G(7)=Start  H(8)=End  I(9)=StageFlow  J(10)=TotalStages  K(11)=MainStages
-  //   Side-chain: L(12)=SC1merge  M(13)=SC1factor  N(14)=SC1length
-  //               O(15)=SC2merge  P(16)=SC2factor  Q(17)=SC2length
-  //               R(18)=SC3merge  S(19)=SC3factor  T(20)=SC3length
-  //   Parallel:   U(21)=subA  V(22)=subB  W(23)=subC  X(24)=f1  Y(25)=f2
-  //   Fork:       Z(26)=sharedPreamble  AA(27)=branches  AB(28)=stagesPerBranch
-  //   Campaigns:  AC(29)=campaigns per year (optional → campaign mode)
-  //               AD(30)=quarter split "n1,n2,n3,n4" (optional)
-  //               AE(31)=quarter sequence rank "r1,r2,r3,r4", blanks = auto
+  // Column positions come from excelLayout.ts (current = APIs-tab order,
+  // legacy = previous layout), picked from the column-F header.
 
   const rawApis: API[] = [];
+
+  // Current layout follows the APIs tab (Camp/yr in column F); older files
+  // have Target kg in F. See excelLayout.ts.
+  const C = isCurrentApiLayout(cellStr(apiSheet!.getRow(5).getCell(6)))
+    ? API_COLS
+    : API_COLS_LEGACY;
 
   apiSheet!.eachRow({ includeEmpty: false }, (row, rn) => {
     if (rn <= 5) return; // skip header rows
 
-    const name = cellStr(row.getCell(3)); // col C
+    const name = cellStr(row.getCell(C.name));
     if (!name) return;
 
-    const sequence = cellNum(row.getCell(4)); // col D (optional)
-    const block = cellStr(row.getCell(5)); // col E (optional)
-    const targetKg = cellNum(row.getCell(6)) ?? 0; // col F
-    const startMs = cellDate(row.getCell(7)) ?? FY_START_MS; // col G
-    const endMs = cellDate(row.getCell(8)) ?? FY_END_MS; // col H
-    const topoStr = (cellStr(row.getCell(9)) ?? "Linear").toLowerCase(); // col I
-    const mainStages = Math.max(1, cellNum(row.getCell(11)) ?? 1); // col K
+    const sequence = cellNum(row.getCell(C.seq)); // (optional)
+    const block = cellStr(row.getCell(C.block)); // (optional)
+    const targetKg = cellNum(row.getCell(C.target)) ?? 0;
+    const startMs = cellDate(row.getCell(C.start)) ?? FY_START_MS;
+    const endMs = cellDate(row.getCell(C.end)) ?? FY_END_MS;
+    const topoStr = (cellStr(row.getCell(C.flow)) ?? "Linear").toLowerCase();
+    const mainStages = Math.max(1, cellNum(row.getCell(C.mainStages)) ?? 1);
     const plannedBatchesOverride = null; // no API-level override column
-    const campaignsRaw = cellNum(row.getCell(29)); // col AC (optional)
+    const campaignsRaw = cellNum(row.getCell(C.camp)); // (optional)
     const campaignsPerYear =
       campaignsRaw !== null && Number.isFinite(campaignsRaw) && campaignsRaw > 0
         ? Math.round(campaignsRaw)
         : undefined;
-    const splitStr = cellStr(row.getCell(30)); // col AD (optional)
+    const splitStr = cellStr(row.getCell(C.split)); // (optional)
     const splitParts = splitStr
       ? splitStr.split(/[\s,;/]+/).filter(Boolean).map(Number)
       : [];
     // Kept as typed even when it doesn't sum to campaigns/yr — the campaign
     // report flags the mismatch instead of silently changing the plan.
-    const seqStr = cellStr(row.getCell(31)); // col AE (optional)
+    const seqStr = cellStr(row.getCell(C.qSequence)); // (optional)
     const seqParts = seqStr ? seqStr.split(/[,;/]/).map((t) => t.trim()) : [];
     const quarterSequence =
       seqParts.length === 4
@@ -380,25 +467,22 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
         factor: number;
         length: number;
       }> = [];
-      // SC1: L(12) M(13) N(14)
-      if (!isNA(row.getCell(12))) {
-        const m = cellNum(row.getCell(12));
-        const f = cellNum(row.getCell(13));
-        const l = cellNum(row.getCell(14)) ?? 1;
+      if (!isNA(row.getCell(C.sc[0]))) {
+        const m = cellNum(row.getCell(C.sc[0]));
+        const f = cellNum(row.getCell(C.sc[0] + 1));
+        const l = cellNum(row.getCell(C.sc[0] + 2)) ?? 1;
         if (m !== null && f !== null) sideChains.push({ mergesIntoStageNo: m, factor: f, length: l });
       }
-      // SC2: O(15) P(16) Q(17)
-      if (!isNA(row.getCell(15))) {
-        const m = cellNum(row.getCell(15));
-        const f = cellNum(row.getCell(16));
-        const l = cellNum(row.getCell(17)) ?? 1;
+      if (!isNA(row.getCell(C.sc[1]))) {
+        const m = cellNum(row.getCell(C.sc[1]));
+        const f = cellNum(row.getCell(C.sc[1] + 1));
+        const l = cellNum(row.getCell(C.sc[1] + 2)) ?? 1;
         if (m !== null && f !== null) sideChains.push({ mergesIntoStageNo: m, factor: f, length: l });
       }
-      // SC3: R(18) S(19) T(20)
-      if (!isNA(row.getCell(18))) {
-        const m = cellNum(row.getCell(18));
-        const f = cellNum(row.getCell(19));
-        const l = cellNum(row.getCell(20)) ?? 1;
+      if (!isNA(row.getCell(C.sc[2]))) {
+        const m = cellNum(row.getCell(C.sc[2]));
+        const f = cellNum(row.getCell(C.sc[2] + 1));
+        const l = cellNum(row.getCell(C.sc[2] + 2)) ?? 1;
         if (m !== null && f !== null) sideChains.push({ mergesIntoStageNo: m, factor: f, length: l });
       }
       topoSpec = {
@@ -411,15 +495,15 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
       };
     } else if (topoStr.includes("parallel")) {
       topology = "parallel";
-      const subA = cellNum(row.getCell(21)) ?? 0; // col U
-      const subB = cellNum(row.getCell(22)) ?? 0; // col V
-      const subCVal = cellNum(row.getCell(23));    // col W
+      const subA = cellNum(row.getCell(C.par[0])) ?? 0;
+      const subB = cellNum(row.getCell(C.par[1])) ?? 0;
+      const subCVal = cellNum(row.getCell(C.par[2]));
       const subChainLengths = [subA, subB].filter((n) => n > 0);
-      if (subCVal !== null && !isNA(row.getCell(23))) subChainLengths.push(subCVal);
+      if (subCVal !== null && !isNA(row.getCell(C.par[2]))) subChainLengths.push(subCVal);
       // Per-branch input (stoichiometric) factors. Branch A is the base (=1);
-      // f1 (branch B) col X, f2 (branch C) col Y. Blank ⇒ 1.
-      const fB = cellNum(row.getCell(24)); // col X — branch B factor (f1)
-      const fC = cellNum(row.getCell(25)); // col Y — branch C factor (f2)
+      // f1 (branch B), f2 (branch C). Blank ⇒ 1.
+      const fB = cellNum(row.getCell(C.parFactor[0])); // branch B factor (f1)
+      const fC = cellNum(row.getCell(C.parFactor[1])); // branch C factor (f2)
       const lens =
         subChainLengths.length > 0 ? subChainLengths : [2, 2];
       const subChainFactors = lens.map((_, i) =>
@@ -437,10 +521,9 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
       };
     } else if (topoStr.includes("fork") || topoStr.includes("diverge")) {
       topology = "fork";
-      // Fork columns: Z(26)=shared preamble, AA(27)=branches, AB(28)=stages/branch.
-      const shared = Math.max(1, cellNum(row.getCell(26)) ?? 1);
-      const branches = Math.max(2, cellNum(row.getCell(27)) ?? 2);
-      const perBranch = Math.max(1, cellNum(row.getCell(28)) ?? 1);
+      const shared = Math.max(1, cellNum(row.getCell(C.forkShared)) ?? 1);
+      const branches = Math.max(2, cellNum(row.getCell(C.forkBranches)) ?? 2);
+      const perBranch = Math.max(1, cellNum(row.getCell(C.forkPerBranch)) ?? 1);
       topoSpec = {
         kind: "fork",
         sharedStages: shared,
@@ -517,10 +600,49 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
         ...(data.existingStockKg !== null && data.existingStockKg > 0
           ? { existingStockKg: data.existingStockKg }
           : {}),
+        ...(data.stageKind ? { stageKind: data.stageKind } : {}),
+        ...(data.rightAlign ? { rightAlign: true } : {}),
       };
     });
 
-    rawApis.push({ ...scaffolded, stages });
+    // Stage flow from "Input from stages" (current layout). When ANY stage of
+    // the API lists inputs, the column defines the whole graph (blank = no
+    // inputs); otherwise the topology scaffold's wiring is kept. Unknown names
+    // or an invalid graph fall back to the scaffold with a warning.
+    const flowGiven = stages.some(
+      (st) => (stageMap?.get(st.stageNo)?.inputFromNames?.length ?? 0) > 0
+    );
+    let finalStages = stages;
+    if (flowGiven) {
+      const idByName = new Map(stages.map((st) => [normalizeKey(st.stageName), st.id]));
+      const unknown: string[] = [];
+      const wired = stages.map((st) => {
+        const names = stageMap?.get(st.stageNo)?.inputFromNames ?? [];
+        const ids = names
+          .map((n) => {
+            const id = idByName.get(normalizeKey(n));
+            if (!id) unknown.push(n);
+            return id;
+          })
+          .filter((id): id is string => !!id && id !== st.id);
+        return { ...st, inputStageIds: ids };
+      });
+      const candidate = { ...scaffolded, stages: wired };
+      const errors = validateApiDag(candidate).filter((i) => i.level === "error");
+      if (unknown.length > 0) {
+        warnings.push(
+          `API "${name}": "Input from stages" names ${unknown.map((n) => `"${n}"`).join(", ")} are not stages of this API — stage flow from the Stage flow preset kept.`
+        );
+      } else if (errors.length > 0) {
+        warnings.push(
+          `API "${name}": "Input from stages" gives an invalid stage flow (${errors[0].msg}) — stage flow from the Stage flow preset kept.`
+        );
+      } else {
+        finalStages = wired;
+      }
+    }
+
+    rawApis.push({ ...scaffolded, stages: finalStages });
   });
 
   if (rawApis.length === 0) {

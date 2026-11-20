@@ -1,3 +1,4 @@
+import { API_COLS, API_SHEET_LABELS } from "./excelLayout";
 import { toPng } from "html-to-image";
 import type { API, Reactor, ScheduleResult, StageMaster } from "../types";
 import type { WeekBucket } from "./dates";
@@ -673,42 +674,13 @@ function reconstructTopologyCells(api: API): ApiTopoCells {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function renderApiSheet(sheet: any, apis: API[]): void {
   // Headers live in rows 4–5; the importer skips rows ≤ 5 and reads from row 6.
-  sheet.getCell(4, 2).value = "API list — re-importable (data from row 6)";
+  // Columns follow the APIs tab (see API_COLS in excelLayout.ts, shared with
+  // the importer).
+  sheet.getCell(4, 2).value =
+    "API list — re-importable (data from row 6). Columns follow the APIs tab: API Name · Seq · Block · Camp/yr · Q split · Plan window · Stages · Target (kg) · Stage flow";
   sheet.getCell(4, 2).font = { bold: true, color: { argb: "FFE5E7EB" } };
-  // Column layout MUST mirror the importer (see excelImport.ts).
-  const subLabels: [number, string][] = [
-    [2, "Sl.No"],
-    [3, "Name"],
-    [4, "Sequence"],
-    [5, "Block"],
-    [6, "Target kg"],
-    [7, "Start"],
-    [8, "End"],
-    [9, "Stage flow"],
-    [10, "Total Stages"],
-    [11, "Main Stages"],
-    [12, "SC1 merge"],
-    [13, "SC1 factor"],
-    [14, "SC1 len"],
-    [15, "SC2 merge"],
-    [16, "SC2 factor"],
-    [17, "SC2 len"],
-    [18, "SC3 merge"],
-    [19, "SC3 factor"],
-    [20, "SC3 len"],
-    [21, "Par subA"],
-    [22, "Par subB"],
-    [23, "Par subC"],
-    [24, "f1"],
-    [25, "f2"],
-    [26, "Shared preamble"],
-    [27, "Branches"],
-    [28, "Stages/branch"],
-    [29, "Campaigns/yr"],
-    [30, "Q split (Q1,Q2,Q3,Q4)"],
-    [31, "Q sequence (Q1,Q2,Q3,Q4)"],
-  ];
-  subLabels.forEach(([col, lbl]) => {
+  const C = API_COLS;
+  API_SHEET_LABELS.forEach(([col, lbl]) => {
     const cell = sheet.getRow(5).getCell(col);
     cell.value = lbl;
     cell.font = { bold: true, color: { argb: "FF94A3B8" }, size: 9 };
@@ -717,81 +689,97 @@ function renderApiSheet(sheet: any, apis: API[]): void {
   apis.forEach((api, idx) => {
     const row = sheet.getRow(6 + idx);
     const topo = reconstructTopologyCells(api);
-    row.getCell(2).value = idx + 1;
-    row.getCell(3).value = api.name;
+    row.getCell(C.slNo).value = idx + 1;
+    row.getCell(C.name).value = api.name;
     if (typeof api.productionSequence === "number")
-      row.getCell(4).value = api.productionSequence;
-    if (api.block) row.getCell(5).value = api.block;
-    row.getCell(6).value = api.targetKg;
-    row.getCell(7).value = new Date(api.window.startMs);
-    row.getCell(7).numFmt = "yyyy-mm-dd";
-    row.getCell(8).value = new Date(api.window.endMs);
-    row.getCell(8).numFmt = "yyyy-mm-dd";
-    row.getCell(9).value = topo.topology;
-    row.getCell(10).value = api.stages.length;
-    row.getCell(11).value = topo.mainStages;
-    // Side chains: L/M/N · O/P/Q · R/S/T
+      row.getCell(C.seq).value = api.productionSequence;
+    if (api.block) row.getCell(C.block).value = api.block;
+    if (typeof api.campaignsPerYear === "number" && api.campaignsPerYear > 0)
+      row.getCell(C.camp).value = api.campaignsPerYear;
+    if (api.campaignQuarterSplit && api.campaignQuarterSplit.length === 4)
+      row.getCell(C.split).value = api.campaignQuarterSplit.join(",");
+    row.getCell(C.start).value = new Date(api.window.startMs);
+    row.getCell(C.start).numFmt = "yyyy-mm-dd";
+    row.getCell(C.end).value = new Date(api.window.endMs);
+    row.getCell(C.end).numFmt = "yyyy-mm-dd";
+    row.getCell(C.totalStages).value = api.stages.length;
+    row.getCell(C.target).value = api.targetKg;
+    row.getCell(C.flow).value = topo.topology;
+    row.getCell(C.mainStages).value = topo.mainStages;
     topo.sideChains.slice(0, 3).forEach((sc, i) => {
-      const base = 12 + i * 3;
-      row.getCell(base).value = sc.merge;
-      row.getCell(base + 1).value = sc.factor;
-      row.getCell(base + 2).value = sc.length;
+      row.getCell(C.sc[i]).value = sc.merge;
+      row.getCell(C.sc[i] + 1).value = sc.factor;
+      row.getCell(C.sc[i] + 2).value = sc.length;
     });
-    // Parallel: sub lengths U/V/W, factors f1=X f2=Y (branch A is base, omitted)
+    // Parallel: sub lengths A/B/C, factors f1/f2 (branch A is the base, omitted)
     topo.parallelSubLengths.slice(0, 3).forEach((len, i) => {
-      row.getCell(21 + i).value = len;
+      row.getCell(C.par[i]).value = len;
     });
     topo.parallelFactors.slice(1, 3).forEach((f, i) => {
-      if (f !== 1) row.getCell(24 + i).value = f; // X=f1, Y=f2
+      if (f !== 1) row.getCell(C.parFactor[i]).value = f;
     });
-    // Fork: Z/AA/AB
     if (topo.fork) {
-      row.getCell(26).value = topo.fork.shared;
-      row.getCell(27).value = topo.fork.branches;
-      row.getCell(28).value = topo.fork.perBranch;
+      row.getCell(C.forkShared).value = topo.fork.shared;
+      row.getCell(C.forkBranches).value = topo.fork.branches;
+      row.getCell(C.forkPerBranch).value = topo.fork.perBranch;
     }
-    // Campaign planning: AC = campaigns/yr, AD = quarterly split
-    if (typeof api.campaignsPerYear === "number" && api.campaignsPerYear > 0)
-      row.getCell(29).value = api.campaignsPerYear;
-    if (api.campaignQuarterSplit && api.campaignQuarterSplit.length === 4)
-      row.getCell(30).value = api.campaignQuarterSplit.join(",");
-    // AE = campaign sequence rank per quarter within the block (blank = auto)
+    // Campaign sequence rank per quarter within the block (blank = auto)
     if (api.quarterSequence && api.quarterSequence.some((v) => v != null))
-      row.getCell(31).value = [0, 1, 2, 3]
+      row.getCell(C.qSequence).value = [0, 1, 2, 3]
         .map((q) => api.quarterSequence?.[q] ?? "")
         .join(",");
   });
 
-  sheet.getColumn(3).width = 26;
-  sheet.getColumn(5).width = 10;
-  sheet.getColumn(7).width = 12;
-  sheet.getColumn(8).width = 12;
-  sheet.getColumn(9).width = 14;
+  sheet.getColumn(C.name).width = 26;
+  sheet.getColumn(C.block).width = 10;
+  sheet.getColumn(C.split).width = 12;
+  sheet.getColumn(C.start).width = 12;
+  sheet.getColumn(C.end).width = 12;
+  sheet.getColumn(C.flow).width = 14;
 }
+
+/**
+ * Stage equipment as one cell: main (booked) reactors separated by commas,
+ * each followed by its optional BMR substitutes separated by slashes, in
+ * priority order. e.g. main R105 (subs R203, R118) + R114 + R119 →
+ *   "R105/R203/R118,R114,R119"
+ * Parsed back by `parseEquipmentCell` in excelImport.ts.
+ */
+export function formatEquipmentCell(
+  pool: string[],
+  substitutes: Record<string, string[]> | undefined
+): string {
+  return pool
+    .map((rid) => [rid, ...(substitutes?.[rid] ?? [])].join("/"))
+    .join(",");
+}
+
+/** Header labels of the one-row-per-stage Stages sheet. Column L's label is
+ *  how the importer recognises this layout — keep it starting "Equipment". */
+export const STAGES_SHEET_COLUMNS: [number, string][] = [
+  [1, "API"],
+  [2, "Stage"],
+  [3, "FIRST BATCH START"],
+  [4, "EXISTING STOCK(KG)"],
+  [5, "Input/Batch"],
+  [6, "Output/Batch"],
+  [7, "BCF (h)"],
+  [8, "BCT (h)"],
+  [9, "Analysis (h)"],
+  [10, "PCO (h)"],
+  [11, "Nos"],
+  [12, "Equipment (main , optional /)"],
+  [13, "Process (h)"],
+  [14, "Input from stages"],
+  [15, "Type (IM/API)"],
+  [16, "Right-align"],
+];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function renderStagesSheet(sheet: any, apis: API[]): void {
-  // Headers rows 1–2; data from row 3.
+  // Headers rows 1–2; data from row 3. ONE row per stage.
   // Column layout MUST mirror the importer (see excelImport.ts).
-  const cols: [number, string][] = [
-    [1, "API"],
-    [2, "Stage"],
-    [3, "FIRST BATCH START"],
-    [4, "EXISTING STOCK(KG)"],
-    [5, "Input/Batch"],
-    [6, "Output/Batch"],
-    [7, "BCF (h)"],
-    [8, "BCT (h)"],
-    [9, "Analysis (h)"],
-    [10, "PCO (h)"],
-    [11, "Nos"],
-    [12, "Main"],
-    [13, "P1"],
-    [14, "P2"],
-    [15, "P3"],
-    [16, "P4"],
-  ];
-  cols.forEach(([col, lbl]) => {
+  STAGES_SHEET_COLUMNS.forEach(([col, lbl]) => {
     const cell = sheet.getRow(2).getCell(col);
     cell.value = lbl;
     cell.font = { bold: true, color: { argb: "FF94A3B8" }, size: 9 };
@@ -801,7 +789,8 @@ function renderStagesSheet(sheet: any, apis: API[]): void {
       fgColor: { argb: "FF1F2937" },
     };
   });
-  sheet.getCell(1, 1).value = "Stages — re-importable (data from row 3)";
+  sheet.getCell(1, 1).value =
+    "Stages — re-importable (data from row 3). Equipment: main reactors separated by commas; optional substitutes follow their main reactor separated by slashes, e.g. R105/R203/R118,R114,R119";
   sheet.getCell(1, 1).font = { bold: true, color: { argb: "FFE5E7EB" } };
 
   let rn = 3;
@@ -809,39 +798,39 @@ function renderStagesSheet(sheet: any, apis: API[]): void {
     .slice()
     .sort((a, b) => a.id.localeCompare(b.id))
     .forEach((api) => {
+      const nameById = new Map(api.stages.map((s) => [s.id, s.stageName]));
       api.stages
         .slice()
         .sort((a, b) => a.stageNo - b.stageNo)
         .forEach((s) => {
-          const pool = s.reactorPool.length > 0 ? s.reactorPool : [""];
-          pool.forEach((reactorId, pi) => {
-            const row = sheet.getRow(rn++);
-            row.getCell(1).value = api.name; // API on every row (carry-safe)
-            row.getCell(2).value = s.stageName; // Stage on every row of stage
-            if (pi === 0) {
-              // Stage-level params captured by importer on the first row only.
-              if (typeof s.firstBatchStartMs === "number") {
-                row.getCell(3).value = new Date(s.firstBatchStartMs);
-                row.getCell(3).numFmt = "yyyy-mm-dd";
-              }
-              if (typeof s.existingStockKg === "number" && s.existingStockKg > 0)
-                row.getCell(4).value = s.existingStockKg;
-              row.getCell(5).value = s.inputKgPerBatch;
-              row.getCell(6).value = s.batchSizeKg;
-              row.getCell(7).value = s.bcfHours;
-              row.getCell(8).value = s.bctHours;
-              row.getCell(9).value = s.analysisHours;
-              row.getCell(10).value = s.pcoHours;
-              row.getCell(11).value = s.reactorPool.length;
-            }
-            if (reactorId) {
-              row.getCell(12).value = reactorId;
-              const subs = s.reactorSubstitutes?.[reactorId] ?? [];
-              subs.slice(0, 4).forEach((sub, si) => {
-                row.getCell(13 + si).value = sub;
-              });
-            }
-          });
+          const row = sheet.getRow(rn++);
+          row.getCell(1).value = api.name;
+          row.getCell(2).value = s.stageName;
+          if (typeof s.firstBatchStartMs === "number") {
+            row.getCell(3).value = new Date(s.firstBatchStartMs);
+            row.getCell(3).numFmt = "yyyy-mm-dd";
+          }
+          if (typeof s.existingStockKg === "number" && s.existingStockKg > 0)
+            row.getCell(4).value = s.existingStockKg;
+          row.getCell(5).value = s.inputKgPerBatch;
+          row.getCell(6).value = s.batchSizeKg;
+          row.getCell(7).value = s.bcfHours;
+          row.getCell(8).value = s.bctHours;
+          row.getCell(9).value = s.analysisHours;
+          row.getCell(10).value = s.pcoHours;
+          row.getCell(11).value = s.reactorPool.length;
+          row.getCell(12).value = formatEquipmentCell(
+            s.reactorPool,
+            s.reactorSubstitutes
+          );
+          row.getCell(13).value =
+            typeof s.processHours === "number" ? s.processHours : s.bctHours;
+          row.getCell(14).value = (s.inputStageIds ?? [])
+            .map((id) => nameById.get(id))
+            .filter((n): n is string => !!n)
+            .join(",");
+          if (s.stageKind) row.getCell(15).value = s.stageKind;
+          if (s.rightAlign) row.getCell(16).value = "Y";
         });
     });
 
@@ -849,6 +838,8 @@ function renderStagesSheet(sheet: any, apis: API[]): void {
   sheet.getColumn(2).width = 20;
   sheet.getColumn(3).width = 16;
   for (let c = 4; c <= 16; c++) sheet.getColumn(c).width = 12;
+  sheet.getColumn(12).width = 34;
+  sheet.getColumn(14).width = 22;
   sheet.views = [{ state: "frozen", ySplit: 2 }];
 }
 
@@ -865,6 +856,9 @@ function renderEquipmentSheet(sheet: any, reactors: Reactor[]): void {
     [7, "Agitator"],
     [8, "Cap.(L)"],
     [9, "PM First Date"],
+    [10, "PM Duration (days)"],
+    [11, "Building Maint. First Date"],
+    [12, "Display name"],
   ];
   cols.forEach(([col, lbl]) => {
     const cell = sheet.getRow(2).getCell(col);
@@ -892,11 +886,20 @@ function renderEquipmentSheet(sheet: any, reactors: Reactor[]): void {
       row.getCell(9).value = new Date(r.pmFirstDateMs);
       row.getCell(9).numFmt = "yyyy-mm-dd";
     }
+    if (typeof r.pmDurationDays === "number") row.getCell(10).value = r.pmDurationDays;
+    if (r.buildingMaintenanceFirstDateMs !== undefined) {
+      row.getCell(11).value = new Date(r.buildingMaintenanceFirstDateMs);
+      row.getCell(11).numFmt = "yyyy-mm-dd";
+    }
+    if (r.name && r.name !== r.id) row.getCell(12).value = r.name;
   });
 
   sheet.getColumn(5).width = 16;
   sheet.getColumn(7).width = 12;
   sheet.getColumn(9).width = 14;
+  sheet.getColumn(10).width = 12;
+  sheet.getColumn(11).width = 16;
+  sheet.getColumn(12).width = 16;
   sheet.views = [{ state: "frozen", ySplit: 2 }];
 }
 
