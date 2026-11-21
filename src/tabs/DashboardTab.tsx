@@ -13,6 +13,7 @@ import { useStore } from "../store";
 import { Card, SectionHeader } from "../components/Primitives";
 import CampaignPlanPanel from "../components/CampaignPlanPanel";
 import BlockOccupancyPanel from "../components/BlockOccupancyPanel";
+import MultiStageEquipmentPanel from "../components/MultiStageEquipmentPanel";
 import { computeWeeks, quarterIn } from "../utils/dates";
 
 /**
@@ -334,6 +335,13 @@ export default function DashboardTab() {
         reactors={reactors}
         schedule={schedule}
         planWindow={planWindow}
+      />
+
+      {/* ─── Top 50 multi-stage equipment ────────────────────────── */}
+      <MultiStageEquipmentPanel
+        apis={apisRaw}
+        reactors={reactors}
+        schedule={schedule}
       />
 
       {/* ─── Intermediate (n-1) shortfall flags ──────────────────── */}

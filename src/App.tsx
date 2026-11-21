@@ -324,7 +324,7 @@ export default function App() {
       </main>
 
       <footer className="mx-auto max-w-[1600px] px-6 py-8 text-center text-[11px] uppercase tracking-[0.25em] text-ink-400">
-        Built for pharmaceutical campaign planning · Reactive client-side scheduler · v0.1
+        Built by Ravirala Venkatagiri · Pharmaceutical campaign planning · v0.1
       </footer>
 
       <WelcomeGuide open={guideOpen} onClose={closeGuide} />
