@@ -1,168 +1,115 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Beaker, Check, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { clsx } from "clsx";
 import type { Reactor } from "../types";
+import { parseEquipmentCell } from "../utils/excelImport";
+import { formatEquipmentCell } from "../utils/exporters";
 
 interface Props {
-  value: string[];
+  pool: string[];
+  substitutes: Record<string, string[]>;
   reactors: Reactor[];
-  onChange: (next: string[]) => void;
+  onChange: (pool: string[], substitutes: Record<string, string[]>) => void;
   className?: string;
 }
 
+/**
+ * Reactor pool + optional substitutes typed in one box, same format as the
+ * Excel "Equipment (main , optional /)" column:
+ *
+ *   R105/R203/R118,R114,R119
+ *
+ *   ,  separates MAIN (pool) reactors
+ *   /  after a main reactor lists its optional substitutes, in priority order
+ *
+ * Reactor names are accepted as well as ids (case-insensitive). Unknown
+ * reactors are rejected and the previous value is kept.
+ */
 export default function ReactorPoolEditor({
-  value,
+  pool,
+  substitutes,
   reactors,
   onChange,
   className,
 }: Props) {
-  const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState<string[]>(value);
-  const ref = useRef<HTMLDivElement>(null);
+  const current = formatEquipmentCell(pool, substitutes);
+  const [text, setText] = useState(current);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (open) setDraft(value);
-  }, [open, value]);
+    setText(current);
+    setError(null);
+  }, [current]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+  const commit = () => {
+    if (text.trim() === current) {
+      setText(current);
+      setError(null);
+      return;
+    }
+    const lookup = new Map<string, string>();
+    reactors.forEach((r) => {
+      lookup.set(r.id.toUpperCase(), r.id);
+      lookup.set(r.name.replace(/\s+/g, "").toUpperCase(), r.id);
+    });
+    const parsed = parseEquipmentCell(text);
+    const unknown: string[] = [];
+    const resolve = (t: string) => {
+      const id = lookup.get(t.toUpperCase());
+      if (!id && !unknown.includes(t)) unknown.push(t);
+      return id ?? t;
     };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
-
-  const reactorsByClass = useMemo(
-    () => ({
-      SS: reactors.filter((r) => r.moc === "SS"),
-      GL: reactors.filter((r) => r.moc === "GL"),
-      Hastelloy: reactors.filter((r) => r.moc === "Hastelloy"),
-      "Halar lined": reactors.filter((r) => r.moc === "Halar lined"),
-    }),
-    [reactors]
-  );
-
-  const classLabel: Record<keyof typeof reactorsByClass, string> = {
-    SS: "SS",
-    GL: "GL",
-    Hastelloy: "Hastelloy",
-    "Halar lined": "Halar lined",
-  };
-
-  const toggle = (rid: string) => {
-    setDraft((p) => (p.includes(rid) ? p.filter((x) => x !== rid) : [...p, rid]));
-  };
-
-  const apply = () => {
-    if (draft.length === 0) return;
-    onChange(draft);
-    setOpen(false);
+    const nextPool: string[] = [];
+    const nextSubs: Record<string, string[]> = {};
+    parsed.pool.forEach((p) => {
+      const main = resolve(p);
+      if (!nextPool.includes(main)) nextPool.push(main);
+      const subs = (parsed.substitutes[p] ?? [])
+        .map(resolve)
+        .filter((s, i, a) => s !== main && a.indexOf(s) === i);
+      if (subs.length) nextSubs[main] = subs;
+    });
+    if (nextPool.length === 0) {
+      setError("Enter at least one main reactor");
+      return;
+    }
+    if (unknown.length) {
+      setError(`Unknown reactor${unknown.length > 1 ? "s" : ""}: ${unknown.join(", ")}`);
+      return;
+    }
+    setError(null);
+    onChange(nextPool, nextSubs);
   };
 
   return (
-    <div ref={ref} className={clsx("relative inline-block", className)}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="cell-yellow w-full max-w-[260px] rounded-md px-2 py-1 text-left font-mono text-[11px] tabular-nums transition hover:brightness-125"
-        title={`Click to edit reactor pool · ${value
-          .map((id) => {
-            const r = reactors.find((x) => x.id === id);
-            return r && r.name !== id ? `${r.name} (${id})` : id;
-          })
-          .join(", ") || "(empty)"}`}
-      >
-        <span className="line-clamp-1 text-amber-200">
-          {value
-            .map((id) => {
-              const r = reactors.find((x) => x.id === id);
-              return r ? r.name : id;
-            })
-            .join(", ") || "(empty)"}
-        </span>
-      </button>
-      {open && (
-        <div className="popover-surface absolute right-0 top-full z-50 mt-1 w-[360px] overflow-hidden rounded-xl p-3 shadow-2xl shadow-black/60 ring-1 ring-cyan-300/20">
-          <div className="mb-2 flex items-center justify-between">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">
-              Reactor Pool · {draft.length} selected
-            </span>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => setDraft(reactors.map((r) => r.id))}
-                type="button"
-                className="rounded-md bg-white/5 px-2 py-0.5 text-[10px] font-semibold text-ink-200 hover:bg-white/10"
-              >
-                All
-              </button>
-              <button
-                onClick={() => setDraft([])}
-                type="button"
-                className="rounded-md bg-white/5 px-2 py-0.5 text-[10px] font-semibold text-ink-200 hover:bg-white/10"
-              >
-                None
-              </button>
-            </div>
-          </div>
-          <div className="space-y-2">
-            {(["SS", "GL", "Hastelloy", "Halar lined"] as const).map((cls) => (
-              <div key={cls} className="flex flex-wrap items-center gap-1">
-                <span
-                  className="mr-1 inline-block w-14 text-[9px] font-bold uppercase tracking-wider text-ink-400"
-                  title={cls}
-                >
-                  {classLabel[cls]}
-                </span>
-                {reactorsByClass[cls].map((r) => {
-                  const on = draft.includes(r.id);
-                  return (
-                    <button
-                      key={r.id}
-                      type="button"
-                      onClick={() => toggle(r.id)}
-                      title={r.name === r.id ? r.id : `${r.name} (id: ${r.id})`}
-                      className={clsx(
-                        "rounded-md border px-1.5 py-0.5 font-mono text-[10px] font-semibold transition",
-                        on
-                          ? "border-cyan-300/60 bg-cyan-300/15 text-cyan-200 shadow-[0_0_6px_rgba(0,240,255,0.25)]"
-                          : "border-white/10 bg-white/5 text-ink-200 hover:bg-white/10"
-                      )}
-                    >
-                      <Beaker size={8} className="mr-0.5 inline opacity-70" />
-                      {r.name}
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
-          <div className="mt-3 flex items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
-              className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-ink-200 hover:bg-white/10"
-            >
-              <X size={11} /> Cancel
-            </button>
-            <button
-              type="button"
-              onClick={apply}
-              disabled={draft.length === 0}
-              className={clsx(
-                "inline-flex items-center gap-1 rounded-md border border-cyan-300/40 bg-gradient-to-r from-cyan-400/30 to-violet-400/30 px-2.5 py-1 text-[11px] font-bold text-white",
-                draft.length === 0
-                  ? "cursor-not-allowed opacity-50"
-                  : "hover:from-cyan-400/50 hover:to-violet-400/50"
-              )}
-            >
-              <Check size={11} /> Apply
-            </button>
-          </div>
-        </div>
-      )}
+    <div className={clsx("w-full max-w-[280px]", className)}>
+      <input
+        type="text"
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          if (error) setError(null);
+        }}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          if (e.key === "Escape") {
+            setText(current);
+            setError(null);
+            (e.target as HTMLInputElement).blur();
+          }
+        }}
+        spellCheck={false}
+        placeholder="R105/R203,R114"
+        title={
+          "Main reactors separated by commas; optional substitutes after a main reactor separated by slashes.\n" +
+          "e.g. R105/R203/R118,R114,R119 → main R105 (subs R203, R118), R114, R119"
+        }
+        className={clsx(
+          "cell-yellow w-full rounded-md px-2 py-1 font-mono text-[11px] text-amber-200 outline-none focus:ring-1",
+          error ? "ring-1 ring-rose-400 focus:ring-rose-400" : "focus:ring-cyan-300/60"
+        )}
+      />
+      {error && <div className="mt-0.5 text-[10px] text-rose-300">{error}</div>}
     </div>
   );
 }

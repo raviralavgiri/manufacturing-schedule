@@ -16,7 +16,6 @@ import { useStore } from "../store";
 import { Card, SectionHeader } from "../components/Primitives";
 import AddStageForm from "../components/AddStageForm";
 import ReactorPoolEditor from "../components/ReactorPoolEditor";
-import ReactorSubstitutesEditor from "../components/ReactorSubstitutesEditor";
 import StageInputsEditor from "../components/StageInputsEditor";
 import type { ApiTopology, StageMaster } from "../types";
 import { fmtIsoDate, parseIsoDate } from "../utils/dates";
@@ -568,15 +567,9 @@ function EquipmentFlowTab({
                 </Th>
                 <Th
                   yellow
-                  title="Reactors in the pool for this stage. The scheduler picks any free reactor from this list."
+                  title="Type main reactors separated by commas; optional substitutes after a main reactor separated by slashes (priority order). e.g. R105/R203/R118,R114,R119"
                 >
-                  Reactor Pool
-                </Th>
-                <Th
-                  yellow
-                  title="Optional substitute reactors per primary reactor (BMR-defined, user-authorised, tried in listed order)."
-                >
-                  Optional Substitutes
+                  Reactor Pool (main , optional /)
                 </Th>
                 <Th
                   yellow
@@ -672,17 +665,13 @@ function EquipmentFlowTab({
                     </td>
                     <td className="px-3 py-2 text-left">
                       <ReactorPoolEditor
-                        value={r.reactorPool}
-                        reactors={reactors}
-                        onChange={(pool) => setStageReactorPool(r.id, pool)}
-                      />
-                    </td>
-                    <td className="px-3 py-2 text-left">
-                      <ReactorSubstitutesEditor
                         pool={r.reactorPool}
-                        value={r.reactorSubstitutes ?? {}}
+                        substitutes={r.reactorSubstitutes ?? {}}
                         reactors={reactors}
-                        onChange={(subs) => setStageReactorSubstitutes(r.id, subs)}
+                        onChange={(pool, subs) => {
+                          setStageReactorPool(r.id, pool);
+                          setStageReactorSubstitutes(r.id, subs);
+                        }}
                       />
                     </td>
                     <td className="px-3 py-2 text-left">
@@ -726,7 +715,7 @@ function EquipmentFlowTab({
               })}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="py-12 text-center text-sm text-ink-300">
+                  <td colSpan={9} className="py-12 text-center text-sm text-ink-300">
                     No stages match. Click{" "}
                     <span className="font-bold text-cyan-300">+ Add Stage</span>{" "}
                     above to create one.
@@ -742,7 +731,7 @@ function EquipmentFlowTab({
         <span className="mr-1 font-bold">
           <Pencil size={12} className="inline" /> Editable here:
         </span>
-        Reactor Pool, Optional Substitutes, Inputs From, First Batch Start, Right-align.{" "}
+        Reactor Pool (main , optional /), Inputs From, First Batch Start, Right-align.{" "}
         <span className="mt-1 block text-amber-300/80">
           <GitBranch size={11} className="mr-0.5 inline" />{" "}
           <span className="font-mono">Inputs from</span> = DAG predecessor stages whose output feeds this stage.
