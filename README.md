@@ -117,11 +117,11 @@ The app recalculates everything whenever an input changes.
 | **Plan window** | A stage never starts before its API's window start, or before its own first-batch date if one is set. |
 
 **Tie-breakers:**
-- **Equal start times:** when two batches could start at the same moment, the API with the lower **Seq** goes first.
+- **Equal start times:** when two batches could start at the same moment, a final-API batch goes before an intermediate (finished API is what can be dispatched), then the API with the lower **Seq** goes first.
 - **Fewer changeovers:** the scheduler prefers to finish a product's run on a reactor before switching, to avoid extra PCO cleanings.
 
 **Where final stages are placed:**
-- **Default:** batches are packed toward the end of the plan window (right-aligned), and the stages that feed them follow, so material is made just in time.
+- **Default (ASAP, revenue first):** every stage runs forward from the plan-window start. Intermediates start as soon as reactors are free, and each final-API batch starts as soon as enough intermediate has cleared analysis, so finished API is ready to dispatch and invoice as early as possible. There is no left/right alignment and no per-quarter cap.
 - **Campaign mode:** an API with **Camp/yr** set is planned by quarter instead (see [section 7](#7-campaign-planning-by-quarter)).
 
 The result is clash-free by design; the **Clash Report** confirms it.
@@ -169,7 +169,7 @@ Use this when products run in campaigns spread over the year, often sharing a cl
 - **Campaign sequence** (Q-Plan tab): for each cleanroom and quarter, set the order APIs run in, e.g. Q3 = API3 → API2 → API4 → API1. A later API waits until the earlier ones' campaigns are booked. Blank = automatic order.
 - **Never silently changed:** the app never adds or drops a campaign. Anything it can't meet is listed on the Dashboard with the reason, such as too few batches, a quarter split that doesn't add up, an overloaded cleanroom, or a stage with no reactors.
 
-Leave **Camp/yr** blank to keep the default (right-aligned) scheduling.
+Leave **Camp/yr** blank to keep the default ASAP scheduling.
 
 ---
 
@@ -228,7 +228,7 @@ Leave **Camp/yr** blank to keep the default (right-aligned) scheduling.
 After those come Main stages, the stage-flow details (side chains, parallel branch lengths and factors, fork shape) and **Q sequence** (`r1,r2,r3,r4`, blank = automatic).
 
 **Stages sheet** (data from row 3, one row per stage):
-API · Stage · First batch start · Existing stock · Input/Batch · Output/Batch · BCF · BCT · Analysis · PCO · Nos · **Equipment** · Process (h) · Input from stages · Type (IM/API) · Right-align
+API · Stage · First batch start · Existing stock · Input/Batch · Output/Batch · BCF · BCT · Analysis · PCO · Nos · **Equipment** · Process (h) · Input from stages · Type (IM/API)
 
 The **Equipment** cell lists main reactors separated by **commas**. Each main reactor's optional substitutes follow it, separated by **slashes**, in priority order:
 

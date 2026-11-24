@@ -20,7 +20,7 @@
  *                            reactors separated by commas, each followed by its
  *                            optional substitutes separated by slashes
  *                          M=Process (h)  N=Input from stages (names, commas)
- *                          O=Type (IM/API)  P=Right-align (Y)
+ *                          O=Type (IM/API)
  *                        Legacy layout, one row per main reactor:
  *                          L=Main  M–P=Substitutes P1–P4
  *                        Stage numbers are assigned by encounter order per API,
@@ -153,8 +153,6 @@ interface ParsedStageData {
   existingStockKg: number | null;
   /** Current layout only: IM / API classification — col O. */
   stageKind?: "IM" | "API";
-  /** Current layout only: right-align flag — col P. */
-  rightAlign?: boolean;
   /** Current layout only: predecessor stage NAMES — col N (null = not given). */
   inputFromNames: string[] | null;
 }
@@ -356,8 +354,6 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
           : [];
         const kind = (cellStr(row.getCell(15)) ?? "").toUpperCase(); // col O
         if (kind === "IM" || kind === "API") d.stageKind = kind;
-        const ra = (cellStr(row.getCell(16)) ?? "").toUpperCase();   // col P
-        if (ra === "Y" || ra === "YES" || ra === "TRUE" || ra === "1") d.rightAlign = true;
       }
     }
 
@@ -627,7 +623,6 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
           ? { existingStockKg: data.existingStockKg }
           : {}),
         ...(data.stageKind ? { stageKind: data.stageKind } : {}),
-        ...(data.rightAlign ? { rightAlign: true } : {}),
       };
     });
 

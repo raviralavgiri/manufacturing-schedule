@@ -193,7 +193,7 @@ export default function ApisTab() {
                 <Th
                   align="right"
                   yellow
-                  title="Campaigns per year. Set a number to schedule this API campaign-wise: the final stage's batches are split into this many campaigns distributed over Q1–Q4 (4 = one per quarter) and intermediates run as early as feasible. Blank = legacy scheduling (final stage right-aligned to the window end)."
+                  title="Campaigns per year. Set a number to schedule this API campaign-wise: the final stage's batches are split into this many campaigns distributed over Q1–Q4 (4 = one per quarter) and intermediates run as early as feasible. Blank = ASAP scheduling (each API batch starts as soon as its intermediates are released)."
                 >
                   Camp/yr
                 </Th>

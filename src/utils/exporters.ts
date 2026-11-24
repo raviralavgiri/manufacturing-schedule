@@ -785,7 +785,6 @@ export const STAGES_SHEET_COLUMNS: [number, string][] = [
   [13, "Process (h)"],
   [14, "Input from stages"],
   [15, "Type (IM/API)"],
-  [16, "Right-align"],
 ];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -843,7 +842,6 @@ function renderStagesSheet(sheet: any, apis: API[]): void {
             .filter((n): n is string => !!n)
             .join(",");
           if (s.stageKind) row.getCell(15).value = s.stageKind;
-          if (s.rightAlign) row.getCell(16).value = "Y";
         });
     });
 

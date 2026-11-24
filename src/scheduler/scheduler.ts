@@ -312,99 +312,14 @@ export function runScheduler(
     })
   );
 
-  // ─ Right-align pre-pass ──────────────────────────────────────────────────
-  // DEFAULT behaviour: every API's sink stage(s) anchor back-to-back at the
-  // API window END — batches are packed with cycle-time (bctMs) spacing so
-  // analysis runs concurrently with the next batch and leaves no idle gaps:
-  //   firstStartMs = apiEnd − bctMs − (planned − 1) × bctMs  (back-to-back)
-  // That anchor back-propagates automatically to every upstream predecessor so
-  // their last batch completes analysis exactly when the downstream first batch
-  // needs it. The quarterly soft-cap is disabled for all right-aligned stages
-  // (which is now essentially all of them) so it never re-injects quarter gaps.
-  //
-  // Opt-outs: a stage with an explicit `firstBatchStartMs` stays pinned
-  // (left-aligned from that point) unless it ALSO carries an explicit
-  // `rightAlign` flag, which always wins.
+  // ─ ASAP / revenue-first scheduling ────────────────────────────────────────
+  // Every stage is scheduled FORWARD from its API window start (or its own
+  // First Batch Start date, if set). Intermediates start as soon as equipment
+  // allows, and each final-API batch starts the moment enough intermediate has
+  // cleared QC (the material gate below) — so finished API is released,
+  // dispatched and invoiced as early as possible. There is no window-end
+  // alignment.
 
-  const rightAlignStart = new Map<string, number>(); // stageId → firstStartMs
-
-  const hasFirstBatchPin = (s: StageMaster): boolean =>
-    typeof s.firstBatchStartMs === "number" &&
-    Number.isFinite(s.firstBatchStartMs);
-
-  // Step 1: Seed each API's sink stage(s) — and any explicitly `rightAlign`
-  // stage — with the window-end anchor. A sink is a stage no other stage in
-  // the API consumes. Non-sink stages are handled by back-propagation (Step 3).
-  for (const api of apisInOrder) {
-    const aEnd = apiEndMs(api);
-    const aStart = apiStartMs(api);
-    const consumed = new Set<string>();
-    api.stages.forEach((s) =>
-      (Array.isArray(s.inputStageIds) ? s.inputStageIds : []).forEach((id) =>
-        consumed.add(id)
-      )
-    );
-    for (const s of api.stages) {
-      if (s.plannedBatches <= 0) continue;
-      const isSink = !consumed.has(s.id);
-      if (!s.rightAlign && !isSink) continue; // back-prop handles interior stages
-      // Campaign mode: final stages are placed forward into their campaign's
-      // target quarter, so they are NOT right-aligned by default. An explicit
-      // per-stage `rightAlign` flag still wins.
-      if (!s.rightAlign && isCampaignMode(api)) continue;
-      if (hasFirstBatchPin(s) && !s.rightAlign) continue; // user-pinned start wins
-      const bctMs = hoursToMs(
-        typeof s.bctHours === "number" && s.bctHours > 0 ? s.bctHours : s.bcfHours
-      );
-      const derived =
-        aEnd - bctMs - (s.plannedBatches - 1) * hoursToMs(s.bcfHours);
-      rightAlignStart.set(s.id, Math.max(aStart, derived));
-    }
-  }
-
-  // Step 2: Build a successor map for back-propagation.
-  const raSuccessors = new Map<string, string[]>();
-  for (const api of apisInOrder)
-    for (const s of api.stages) raSuccessors.set(s.id, []);
-  for (const api of apisInOrder)
-    for (const s of api.stages)
-      for (const pid of (Array.isArray(s.inputStageIds) ? s.inputStageIds : []))
-        raSuccessors.get(pid)?.push(s.id);
-
-  // Step 3: Back-propagate to upstream predecessors (iterate to fixed point).
-  // A predecessor's LAST batch must complete analysis before its downstream
-  // right-aligned first batch starts, so:
-  //   lastBatchStart = downstreamFirstStart − bct(pred) − analysis(pred)
-  //   firstStartMs   = lastBatchStart − (planned − 1) × bcf(pred)
-  {
-    let raChanged = true;
-    while (raChanged) {
-      raChanged = false;
-      for (const api of apisInOrder) {
-        const aStart = apiStartMs(api);
-        for (const s of api.stages) {
-          if (rightAlignStart.has(s.id) || s.plannedBatches <= 0) continue;
-          if (hasFirstBatchPin(s)) continue; // keep pinned start; don't right-align
-          const succs = raSuccessors.get(s.id) ?? [];
-          let minSuccFirst = Infinity;
-          for (const sid of succs) {
-            const sf = rightAlignStart.get(sid);
-            if (sf !== undefined && sf < minSuccFirst) minSuccFirst = sf;
-          }
-          if (!Number.isFinite(minSuccFirst)) continue;
-          const bctMs = hoursToMs(
-            typeof s.bctHours === "number" && s.bctHours > 0 ? s.bctHours : s.bcfHours
-          );
-          const analysisMs = hoursToMs(s.analysisHours);
-          const lastStart = minSuccFirst - bctMs - analysisMs;
-          const derived =
-            lastStart - (s.plannedBatches - 1) * hoursToMs(s.bcfHours);
-          rightAlignStart.set(s.id, Math.max(aStart, derived));
-          raChanged = true;
-        }
-      }
-    }
-  }
   const NO_SEQUENCE = Number.MAX_SAFE_INTEGER;
   const sequenceOf = (api: API): number =>
     typeof api.productionSequence === "number" &&
@@ -790,14 +705,11 @@ export function runScheduler(
         trainPositions,
         apiStart,
         apiEnd,
-        firstStartMs: (() => {
-          const ras = rightAlignStart.get(stage.id);
-          if (ras !== undefined) return ras;
-          return typeof stage.firstBatchStartMs === "number" &&
-            Number.isFinite(stage.firstBatchStartMs)
+        firstStartMs:
+          typeof stage.firstBatchStartMs === "number" &&
+          Number.isFinite(stage.firstBatchStartMs)
             ? stage.firstBatchStartMs
-            : apiStart;
-        })(),
+            : apiStart,
         campaignMode,
         isSink: sinks.has(stage.id),
         campaignSizes: campaignMode ? campaignSizes(planned, nCampaigns) : [],
@@ -1035,9 +947,8 @@ export function runScheduler(
     rt.booked++;
   };
 
-  // Tie-break between two equally-early candidates: user priority first
-  // (lower = earlier), then API order, then topological order, then id. This
-  // is where the cleanroom Q-Plan priority and the legacy ordering apply.
+  // Ranking between two stages: user priority first (lower = earlier), then
+  // API order, then topological order, then id. Used by the deadlock fallback.
   const aWins = (a: StageRT, b: StageRT): boolean => {
     const sa = sequenceOf(a.api);
     const sb = sequenceOf(b.api);
@@ -1049,6 +960,12 @@ export function runScheduler(
     return a.stage.id < b.stage.id;
   };
 
+  // Tie-break between two equally-early candidates: a final-API batch beats an
+  // intermediate (finished API is what can be dispatched and invoiced), then
+  // the aWins ranking.
+  const tieWins = (a: StageRT, b: StageRT): boolean =>
+    a.isSink !== b.isSink ? a.isSink : aWins(a, b);
+
   const bcfGateOf = (rt: StageRT): number => {
     const prev = stageLastBatchStart.get(rt.stage.id);
     // BCF cadence: start_n >= start_(n-1) + BCF. Reactor occupancy (BCT) is
@@ -1057,31 +974,14 @@ export function runScheduler(
     return prev !== undefined ? prev + rt.bcfMs : -Infinity;
   };
 
-  // ─ Quarterly distribution (backward integration from API quantities) ───────
-  // Each stage's planned batches are spread roughly evenly across the API's
-  // four quarters (≈ planned/4 per quarter) so every API stays "live" in a
-  // shared cleanroom every quarter instead of one API monopolising a quarter.
-  //
-  // This is enforced as a SOFT CAP, not a hard floor: a batch may start as
-  // early as the reactor frees (right after the previous batch's PROCESS end
-  // + PCO — analysis runs in parallel off-reactor and never gates reactor
-  // reuse). A batch is deferred to a later quarter ONLY when its quarter has
-  // already taken its ≈ planned/4 share. This keeps the reactor busy and never
-  // idles it at a quarter boundary when there is still capacity in the current
-  // quarter.
-  //
-  //   perQuarterLimit = ⌈ planned / 4 ⌉
-  const perQuarterLimitOf = (rt: StageRT): number => {
-    // Right-aligned stages (explicit or back-propagated) pack into a condensed
-    // window — disabling the quarterly soft-cap prevents it from scattering
-    // their batches back into earlier quarters, which would undo the alignment.
-    if (rightAlignStart.has(rt.stage.id)) return rt.planned;
-    // Campaign mode replaces the soft cap: final stages are distributed by
-    // their campaign's target quarter (campaignFloorOf) and intermediates are
-    // never held back to spread the load.
-    if (rt.campaignMode) return rt.planned;
-    return Math.max(1, Math.ceil(rt.planned / 4));
-  };
+  // ─ Per-quarter cap (disabled: ASAP / revenue-first) ───────────────────────
+  // There is NO per-quarter cap: holding a batch back to a later quarter would
+  // delay finished API (and revenue) while intermediate and equipment are
+  // already available. Every stage takes all its batches as early as material,
+  // equipment and BCF allow. Campaign mode distributes final-stage batches by
+  // the campaign's target quarter instead (campaignFloorOf). The limit is kept
+  // as a function because the campaign-switch penalty reads it.
+  const perQuarterLimitOf = (rt: StageRT): number => rt.planned;
 
   const quarterLenOf = (rt: StageRT): number => {
     const span = rt.apiEnd - rt.apiStart;
@@ -1142,33 +1042,16 @@ export function runScheduler(
       cand.set(rt.stage.id, null); // waits for an earlier-sequenced campaign
       return;
     }
-    let earliest = Math.max(
+    // ASAP: the batch starts as soon as its material is QC-released, its BCF
+    // cadence allows and a reactor train is free — no quarter deferral.
+    const earliest = Math.max(
       matTime + bufferMs,
       rt.firstStartMs,
       bcfGateOf(rt),
       campaignFloorOf(rt),
       seqGate
     );
-    let slot = findBestSlot(rt, earliest);
-    // Soft per-quarter cap. If the chosen slot lands in a quarter that has
-    // already taken its ≈ planned/4 share for this stage, defer to the start
-    // of the earliest later quarter that still has room. While the current
-    // quarter has capacity the batch starts as soon as the reactor frees, so
-    // the reactor is never idled at a quarter boundary.
-    const limit = perQuarterLimitOf(rt);
-    const qBooked = stageQuarterlyBooked.get(rt.stage.id) ?? [0, 0, 0, 0];
-    for (let g = 0; g < 4; g++) {
-      const q = quarterOfTime(rt, slot.startMs);
-      if (qBooked[q] < limit) break; // room in this quarter
-      let nq = q + 1;
-      while (nq < 4 && qBooked[nq] >= limit) nq++;
-      if (nq > 3) break; // no later capacity — allow placement anyway
-      const nqStart = rt.apiStart + nq * quarterLenOf(rt);
-      if (nqStart <= earliest) break; // can't push further — avoid spinning
-      earliest = nqStart;
-      slot = findBestSlot(rt, earliest);
-    }
-    cand.set(rt.stage.id, slot);
+    cand.set(rt.stage.id, findBestSlot(rt, earliest));
   };
 
   // Commit a placement, then invalidate exactly the stages whose earliest
@@ -1276,7 +1159,7 @@ export function runScheduler(
       if (
         best === null ||
         cEff < bestEff ||
-        (cEff === bestEff && bestRt !== null && aWins(rt, bestRt))
+        (cEff === bestEff && bestRt !== null && tieWins(rt, bestRt))
       ) {
         best = c;
         bestRt = rt;
